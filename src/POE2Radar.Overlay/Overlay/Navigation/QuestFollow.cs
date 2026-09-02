@@ -82,22 +82,74 @@ public static class QuestFollow
     }
 
     /// <summary>
+    /// True when <paramref name="id"/> is still present in the live landmark or entity set.
+    /// </summary>
+    public static bool IsLiveTarget(
+        string? id,
+        IReadOnlyList<LandmarkHint> landmarks,
+        IReadOnlyList<EntityHint> entities)
+    {
+        if (string.IsNullOrEmpty(id)) return false;
+        if (landmarks is not null)
+            foreach (var lm in landmarks)
+                if (lm.Id == id) return true;
+        if (entities is not null)
+            foreach (var e in entities)
+                if (e.Id == id) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// Next nav-target id in nearest-first order, wrapping. Used by F6 while quest follow is
+    /// armed so each press replaces the previous pick instead of stacking routes.
+    /// </summary>
+    public static string? CycleTarget(
+        IReadOnlyList<(string Id, NumVec2 Grid)> targets,
+        NumVec2 player,
+        string? currentId)
+    {
+        if (targets is null || targets.Count == 0) return null;
+        var order = new (string Id, float D)[targets.Count];
+        for (var i = 0; i < targets.Count; i++)
+        {
+            var t = targets[i];
+            var dx = t.Grid.X - player.X;
+            var dy = t.Grid.Y - player.Y;
+            order[i] = (t.Id, dx * dx + dy * dy);
+        }
+        Array.Sort(order, (a, b) =>
+        {
+            var c = a.D.CompareTo(b.D);
+            return c != 0 ? c : string.CompareOrdinal(a.Id, b.Id);
+        });
+        if (currentId is null) return order[0].Id;
+        var idx = -1;
+        for (var i = 0; i < order.Length; i++)
+            if (order[i].Id == currentId) { idx = i; break; }
+        if (idx < 0) return order[0].Id;
+        return order[(idx + 1) % order.Length].Id;
+    }
+
+    /// <summary>
     /// Pick a nav-target id for this zone, or null when nothing matches.
-    /// Towns/hideouts return null. Matching order: live unique boss; note
-    /// <c>Exit/Checkpoint/Waypoint &gt; name</c> tokens against landmarks (transitions first)
-    /// then entity POIs; then any landmark/POI whose name appears in the notes; then a
-    /// Transition / waypoint / boss fallback.
+    /// Towns/hideouts return null. Matching order: live unique boss; a still-live
+    /// user pin (F6 / legend); note <c>Exit/Checkpoint/Waypoint &gt; name</c>
+    /// tokens against landmarks (transitions first) then entity POIs; then any
+    /// landmark/POI whose name appears in the notes; then a Transition / waypoint /
+    /// boss fallback.
     /// </summary>
     public static string? PickTarget(
         string areaCode,
         string notes,
         IReadOnlyList<LandmarkHint> landmarks,
         IReadOnlyList<EntityHint> entities,
-        NumVec2 player = default)
+        NumVec2 player = default,
+        string? pinnedId = null)
     {
         if (IsTownOrHideout(areaCode)) return null;
         var boss = PickBoss(entities, player);
         if (boss is not null) return boss;
+        if (IsLiveTarget(pinnedId, landmarks, entities)) return pinnedId;
         notes ??= "";
         var directed = ExtractDirected(notes);
 

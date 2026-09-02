@@ -641,7 +641,7 @@ internal static class DashboardHtml
           </div>
           <div class="card">
             <h3>Combat / Bot</h3>
-            <div class="row"><div class="rl hint-row">F3 toggles the bot master in-game (quest follow + path move + combat). F2 toggles map-clear (walk the zone; unique bosses first). F4 toggles combat assist independently. F5 toggles path move. Arm bits cannot be armed from this page. Bot: <span id="botState">&mdash;</span></div></div>
+            <div class="row"><div class="rl hint-row">F3 toggles the bot master in-game (quest follow + path move + combat). F6 while the bot is on picks one quest (last press wins). F2 toggles map-clear. F4 toggles combat assist independently. F5 toggles path move. Arm bits cannot be armed from this page. Bot: <span id="botState">&mdash;</span></div></div>
             <div class="row"><div class="rl">Attack range<small>grid units; tap only if a hostile monster is this close</small></div>
               <input class="numin" type="number" step="1" min="1" max="200" data-set="combatRange"></div>
             <div class="row"><div class="rl">Skill rotation<small>ordered keys (QWER); skip a skill while its cooldown is running; wraps. Optional range of 0 uses the attack range above</small></div></div>
@@ -649,7 +649,7 @@ internal static class DashboardHtml
             <div id="combatSkills"></div>
             <div class="row"><button type="button" class="addbtn" id="combatSkillAdd">Add skill</button></div>
             <div class="row"><div class="rl hint-row">F4 toggles combat assist in-game. It cannot be armed from this page. Status: <span id="combatState">&mdash;</span></div></div>
-            <div class="row"><div class="rl hint-row">When armed, each zone auto-selects a nav target from the area's zone notes (or a Transition / waypoint / boss landmark) and reuses the existing A* route. A unique monster (boss) that spawns is targeted immediately. On arrival, taps interact/use. F3 toggles quest follow in-game. It cannot be armed from this page. Status: <span id="questFollowState">&mdash;</span></div></div>
+            <div class="row"><div class="rl hint-row">When armed, each zone auto-selects a nav target from the area's zone notes (or a Transition / waypoint / boss landmark) and reuses the existing A* route. F6 cycles a single quest target (last press is the one the bot follows; it will not jump to the other F6 picks). Click a legend row to pin that one. F7 clears the pin and returns to auto-pick. A unique monster (boss) that spawns is targeted immediately. On arrival, taps interact/use. F3 toggles quest follow in-game. It cannot be armed from this page. Status: <span id="questFollowState">&mdash;</span></div></div>
             <div class="row"><div class="rl">Use / interact<small>key or mouse button tapped on arrival at the quest target</small></div>
               <select class="numin selin" data-set="questUseKey">
                 <option value="1">Left mouse</option>

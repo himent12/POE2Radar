@@ -140,6 +140,64 @@ public sealed class QuestFollowTests
     }
 
     [Fact]
+    public void Pinned_target_beats_directed_exit()
+    {
+        var id = QuestFollow.PickTarget(
+            "G1_2",
+            "Exit > The Grelwood",
+            [MudBurrow, GrelwoodExit],
+            [],
+            pinnedId: MudBurrow.Id);
+        Assert.Equal(MudBurrow.Id, id);
+    }
+
+    [Fact]
+    public void Unique_monster_beats_pinned_target()
+    {
+        var boss = Ent("e:7", "Beira", "Metadata/Monsters/Beira", unique: true, gx: 8, gy: 0);
+        var id = QuestFollow.PickTarget(
+            "G1_2",
+            "Exit > The Grelwood",
+            [MudBurrow, GrelwoodExit],
+            [boss],
+            new NumVec2(0, 0),
+            MudBurrow.Id);
+        Assert.Equal("e:7", id);
+    }
+
+    [Fact]
+    public void Dead_pin_falls_through_to_notes()
+    {
+        var id = QuestFollow.PickTarget(
+            "G1_2",
+            "Exit > The Grelwood",
+            [MudBurrow, GrelwoodExit],
+            [],
+            pinnedId: "t:gone@0,0");
+        Assert.Equal(GrelwoodExit.Id, id);
+    }
+
+    [Fact]
+    public void CycleTarget_nearest_then_next_then_wrap()
+    {
+        (string Id, NumVec2 Grid)[] targets =
+        [
+            ("far", new NumVec2(20, 0)),
+            ("near", new NumVec2(2, 0)),
+            ("mid", new NumVec2(8, 0)),
+        ];
+        var player = NumVec2.Zero;
+        Assert.Equal("near", QuestFollow.CycleTarget(targets, player, null));
+        Assert.Equal("mid", QuestFollow.CycleTarget(targets, player, "near"));
+        Assert.Equal("far", QuestFollow.CycleTarget(targets, player, "mid"));
+        Assert.Equal("near", QuestFollow.CycleTarget(targets, player, "far"));
+    }
+
+    [Fact]
+    public void CycleTarget_empty_returns_none()
+        => Assert.Null(QuestFollow.CycleTarget([], NumVec2.Zero, null));
+
+    [Fact]
     public void Unique_monster_beats_directed_exit()
     {
         var boss = Ent("e:7", "Beira", "Metadata/Monsters/Beira", unique: true, gx: 8, gy: 0);

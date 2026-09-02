@@ -236,6 +236,9 @@ public sealed class RadarApp : IDisposable
     private DateTime _nextQuestToggleAt = DateTime.MinValue;
     private volatile string _questFollowNote = "OFF (F3)";
     private volatile string? _questFollowId; // last auto-selected quest/clear target id
+    // User pin from F6 / legend while quest follow is on. Last press wins; auto-pick
+    // from zone notes is skipped until F7 or the pin despawns. Unique bosses still interrupt.
+    private volatile string? _questPinId;
     private volatile bool _questFollowHasGrid;
     private volatile float _questFollowGx, _questFollowGy;
     private DateTime _questUseFiredAt = DateTime.MinValue;
@@ -600,7 +603,7 @@ public sealed class RadarApp : IDisposable
                              SetAtlasHighlight, VersionJson, _settings.ApiPort);
         try { _api.Start(); Console.WriteLine($"API on http://localhost:{_settings.ApiPort} (dashboard at /)"); }
         catch (Exception ex) { Console.Error.WriteLine($"API server disabled: {ex.Message}"); }
-        Console.WriteLine("Hotkeys: F6=add nearest path target  F7=clear path targets  "
+        Console.WriteLine("Hotkeys: F6=next quest target (bot on) / add nearest  F7=clear path targets  "
                           + "F8=auto-flask  F4=combat assist  F3=bot (quest+move+combat)  F2=map clear  F5=path move  F9=quit  F12=open dashboard");
         Console.WriteLine("         F10 (Atlas open) = inspect hovered tile (dumps map name + code + content"
                           + " to console for web-UI filters) and set route START->END (3rd press resets)");
@@ -1970,7 +1973,12 @@ public sealed class RadarApp : IDisposable
             _settings.Save();
             _botNote = _botEnabled ? "armed" : "OFF (F3)";
             _questFollowNote = _questFollow ? "armed" : (_botEnabled ? "paused (clear)" : "OFF (F3)");
-            if (!_questFollow && !_mapClear) { _questFollowId = null; _questFollowHasGrid = false; }
+            if (_questFollow) PinLastSelection();
+            else
+            {
+                _questPinId = null;
+                if (!_mapClear) { _questFollowId = null; _questFollowHasGrid = false; }
+            }
             _moveNote = MoveArmed ? "armed" : "OFF (F5)";
             Console.WriteLine($"\nBot (quest follow): {(_botEnabled ? "ON" : "OFF")}");
         }
@@ -1987,6 +1995,8 @@ public sealed class RadarApp : IDisposable
             _questFollowNote = _questFollow ? "armed" : (_botEnabled ? "paused (clear)" : "OFF (F3)");
             _questFollowId = null;
             _questFollowHasGrid = false;
+            if (_questFollow) PinLastSelection();
+            else _questPinId = null;
             _moveNote = MoveArmed ? "armed" : "OFF (F5)";
             Console.WriteLine($"\nMap clear: {(_mapClear ? "ON" : "OFF")}");
         }
@@ -2012,8 +2022,8 @@ public sealed class RadarApp : IDisposable
             OpenDashboard();
         }
 
-        // F6 adds the nearest not-yet-selected landmark to the path selection; F7 clears it.
-        // Both debounced.
+        // F6: while quest follow is on, cycle a SINGLE pinned quest target (last press wins).
+        // Otherwise add the nearest not-yet-selected landmark. F7 clears selection + pin.
         if (DateTime.UtcNow >= _nextPathKeyAt)
         {
             if (Down(AddNearestVk))
@@ -2172,6 +2182,7 @@ public sealed class RadarApp : IDisposable
         int count; bool restored;
         var follow = _questFollow || _mapClear;
         _questFollowId = null;
+        _questPinId = null;
         _mapClearVisited.Clear();
         lock (_navLock)
         {
@@ -2254,8 +2265,14 @@ public sealed class RadarApp : IDisposable
                 e.Category, e.Grid));
         }
 
-        var id = QuestFollow.PickTarget(areaCode, notes, _questLm, _questEnt, player);
-        _questFollowNote = SetAutoNavTarget(id, "armed (no target)", "Quest follow");
+        if (_questPinId is { } pin && !QuestFollow.IsLiveTarget(pin, _questLm, _questEnt))
+            _questPinId = null;
+
+        var id = QuestFollow.PickTarget(areaCode, notes, _questLm, _questEnt, player, _questPinId);
+        var note = SetAutoNavTarget(id, "armed (no target)", "Quest follow");
+        if (_questPinId is not null && id == _questPinId && note.StartsWith("→ ", StringComparison.Ordinal))
+            note += " (F6)";
+        _questFollowNote = note;
     }
 
     /// <summary>
@@ -2401,10 +2418,13 @@ public sealed class RadarApp : IDisposable
         => _areaInstanceForApi != 0 ? _liveApi.TilePaths(_areaInstanceForApi) : Array.Empty<string>();
 
 
-    /// <summary>F6 (render thread): add the nearest navigation target not already selected into the
-    /// selection.</summary>
+    /// <summary>F6 (render thread): while quest follow is on, cycle a single pinned quest
+    /// target (last press is the one the bot follows). Otherwise add the nearest unselected
+    /// navigation target.</summary>
     private void AddNearestPathTarget()
     {
+        if (_questFollow) { CycleQuestTarget(); return; }
+
         var targets = _navTargets;   // one volatile read — work off this fully-built list
         if (targets.Count == 0) return;
         var player = _state.Player;
@@ -2423,17 +2443,60 @@ public sealed class RadarApp : IDisposable
         if (bestId is not null) ToggleSelectionCore(bestId); // shares the cap check + locked mutate + log
     }
 
-    /// <summary>F7: clear the entire path selection. Only edits _selectedIds (under the lock); the
-    /// per-tick reconciliation removes the now-orphaned trackers.</summary>
+    /// <summary>
+    /// F6 while quest follow is armed: replace the selection with the next-nearest nav target
+    /// and pin it so zone-note auto-pick cannot steal it. Wraps. Unique bosses still interrupt.
+    /// </summary>
+    private void CycleQuestTarget()
+    {
+        var targets = _navTargets;
+        if (targets.Count == 0) return;
+        var pts = new (string Id, NumVec2 Grid)[targets.Count];
+        for (var i = 0; i < targets.Count; i++)
+            pts[i] = (targets[i].Id, targets[i].Grid);
+        var next = QuestFollow.CycleTarget(pts, _state.Player, _questPinId ?? _questFollowId);
+        if (next is null) return;
+        lock (_navLock)
+        {
+            _selectedIds.Clear();
+            _selectedIds.Add(next);
+            _selectionCapWarned = false;
+        }
+        _questPinId = next;
+        Console.WriteLine($"\nQuest follow (F6): {TargetLabel(next)}");
+    }
+
+    /// <summary>
+    /// F3 just armed onto an existing F6 stack: keep only the last selected target (the one
+    /// the user finished on) and pin it so the bot does not jump to a different zone-note quest.
+    /// </summary>
+    private void PinLastSelection()
+    {
+        string? last;
+        lock (_navLock)
+        {
+            if (_selectedIds.Count < 2) return;
+            last = _selectedIds[^1];
+            if (last.StartsWith("c:", StringComparison.Ordinal)) return;
+            _selectedIds.Clear();
+            _selectedIds.Add(last);
+            _questPinId = last;
+        }
+        Console.WriteLine($"\nQuest follow: pinned {TargetLabel(last)} (last F6)");
+    }
+
+    /// <summary>F7: clear the entire path selection and any quest pin. Only edits _selectedIds
+    /// (under the lock); the per-tick reconciliation removes the now-orphaned trackers.</summary>
     private void ClearPathTargets()
     {
         bool wasEmpty;
         lock (_navLock)
         {
-            wasEmpty = _selectedIds.Count == 0;
+            wasEmpty = _selectedIds.Count == 0 && _questPinId is null;
             _selectedIds.Clear();
             _selectionCapWarned = false;
         }
+        _questPinId = null;
         if (!wasEmpty) Console.WriteLine("\nPath targets: cleared");
     }
 
@@ -2457,10 +2520,33 @@ public sealed class RadarApp : IDisposable
         string labels;
         lock (_navLock)
         {
-            if (_selectedIds.Remove(id))
+            if (_questFollow)
+            {
+                // Legend / dashboard click while the bot is on: pin THIS target alone, or
+                // unpin if it was already the pin (auto-pick resumes next world tick).
+                if (_questPinId == id && _selectedIds.Count == 1 && _selectedIds[0] == id)
+                {
+                    _selectedIds.Clear();
+                    _questPinId = null;
+                    _selectionCapWarned = false;
+                    changed = true;
+                    labels = "auto";
+                }
+                else
+                {
+                    _selectedIds.Clear();
+                    _selectedIds.Add(id);
+                    _questPinId = id;
+                    _selectionCapWarned = false;
+                    changed = true;
+                    labels = TargetLabel(id);
+                }
+            }
+            else if (_selectedIds.Remove(id))
             {
                 _selectionCapWarned = false;
                 changed = true;
+                labels = _selectedIds.Count == 0 ? "none" : string.Join(", ", _selectedIds.Select(TargetLabel));
             }
             else if (_selectedIds.Count >= MaxSelectedTargets)
             {
@@ -2475,9 +2561,8 @@ public sealed class RadarApp : IDisposable
             {
                 _selectedIds.Add(id);
                 changed = true;
+                labels = string.Join(", ", _selectedIds.Select(TargetLabel));
             }
-
-            labels = _selectedIds.Count == 0 ? "none" : string.Join(", ", _selectedIds.Select(TargetLabel));
         }
 
         if (changed) Console.WriteLine($"\nPath targets: {labels}");
