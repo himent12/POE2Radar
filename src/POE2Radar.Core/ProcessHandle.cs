@@ -94,14 +94,21 @@ public sealed class ProcessHandle : IDisposable
 
     private static ProcessHandle? AttachToPoELinux(IReadOnlyList<string> candidateNames)
     {
+        UnauthorizedAccessException? denied = null;
         foreach (var pid in FindLinuxPoePids(candidateNames))
         {
             try { return AttachToProcessLinux(pid, null); }
+            catch (UnauthorizedAccessException ex)
+            {
+                denied = ex;
+                Console.Error.WriteLine($"Attach PID {pid} failed: {ex.Message}");
+            }
             catch (Exception ex)
             {
                 Console.Error.WriteLine($"Attach PID {pid} failed: {ex.Message}");
             }
         }
+        if (denied is not null) throw denied;
         return null;
     }
 
@@ -157,8 +164,13 @@ public sealed class ProcessHandle : IDisposable
         }
 
         // Prefer the process that actually maps the game EXE (skip wineserver / steam helpers).
-        foreach (var (pid, _) in found.OrderByDescending(t => t.ExeBytes))
+        var ordered = found.OrderByDescending(t => t.ExeBytes).ToList();
+        var hasExe = ordered.Any(t => t.ExeBytes > 0);
+        foreach (var (pid, exeBytes) in ordered)
+        {
+            if (hasExe && exeBytes == 0) continue;
             yield return pid;
+        }
     }
 
     private static ProcessHandle AttachToProcessLinux(int processId, string? expectedProcessName)

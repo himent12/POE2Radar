@@ -15,12 +15,11 @@ fi
 
 scope="$(cat /proc/sys/kernel/yama/ptrace_scope 2>/dev/null || echo unknown)"
 if [[ "$scope" != "0" ]]; then
-  echo "kernel.yama.ptrace_scope=$scope — reading PoE2 (Proton) memory will likely fail with EPERM."
-  echo "Fix once:"
-  echo "  sudo sysctl kernel.yama.ptrace_scope=0"
+  echo "PoE2 (Proton) memory reads need ptrace. yama.ptrace_scope=$scope (Arch default is 1)."
+  echo "Lowering it for this boot (sudo password once) — nothing is persisted."
+  sudo sysctl -w kernel.yama.ptrace_scope=0
+  echo "To keep this after reboot:"
   echo "  echo 'kernel.yama.ptrace_scope = 0' | sudo tee /etc/sysctl.d/10-ptrace.conf"
-  echo "Or after a self-contained publish:"
-  echo "  sudo setcap cap_sys_ptrace=ep ./POE2Radar.Overlay"
   echo
 fi
 
