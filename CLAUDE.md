@@ -69,7 +69,7 @@ clearly gated — a personal QoL tool, not a headless bot.
     cache. The render thread gates drawing of snapshot data on `snap.AreaHash == liveAreaHash` (zone-load
     guard). `/state` exposes `worldMs`/`renderMs` timers. Auto-flask STAYS on the render thread.
 - `Overlay/OverlayWindow.cs` — per-pixel-alpha layered window (`UpdateLayeredWindow`), tracks the
-  game window. `Overlay/OverlayRenderer.cs` — Direct2D: terrain bitmap + entity dots + landmark
+  game window. `Overlay/OverlayRenderer.cs` — Skia: terrain bitmap + entity dots + landmark
   markers + world-space HP bars + player blip + HUD. Drawn only when PoE2 is focused. Icon
   shape/color/opacity/size per item, metadata-matched "mechanic" overrides, and HP-bar geometry are
   config-driven via `RadarSettings.Styles` / `.HpBars` (defaults mirror the old hardcoded look) and
@@ -147,4 +147,4 @@ The workflow publishes a self-contained single-file win-x64 exe, zips it, and cr
 GitHub Release. **Don't push a release tag unless asked** — tagging is what ships a build to users.
 
 ## Dependencies
-- `Vortice.Direct2D1` (overlay rendering). Targets `net10.0-windows`, x64.
+- `SkiaSharp` (overlay rendering). Targets `net10.0`, x64, Windows + Linux.
