@@ -54,6 +54,12 @@ public static partial class GameHost
         else Win32.TapKey(vk);
     }
 
+    public static void SetCursorPos(int x, int y)
+    {
+        if (OperatingSystem.IsLinux()) LinuxX11.SetCursorPos(x, y);
+        else Win32.SetCursorPos(x, y);
+    }
+
     public static void BeginHighResTimer()
     {
         if (OperatingSystem.IsWindows()) Win32.timeBeginPeriod(1);
@@ -109,6 +115,7 @@ public static partial class GameHost
         [DllImport("winmm.dll")] public static extern uint timeBeginPeriod(uint uPeriod);
         [DllImport("winmm.dll")] public static extern uint timeEndPeriod(uint uPeriod);
 
+        [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
         [DllImport("user32.dll")] private static extern nint MonitorFromWindow(nint hwnd, uint dwFlags);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern bool GetMonitorInfoW(nint hMonitor, ref MonitorInfoEx lpmi);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern bool EnumDisplaySettingsW(string? lpszDeviceName, int iModeNum, ref DevMode lpDevMode);
@@ -134,10 +141,19 @@ public static partial class GameHost
         public static bool GetCursorPos(out Point pt) => GetCursorPosNative(out pt);
         public static bool ScreenToClient(nint hwnd, ref Point pt) => ScreenToClientNative(hwnd, ref pt);
 
+        private const uint INPUT_MOUSE = 0;
         private const uint INPUT_KEYBOARD = 1;
         private const uint KEYEVENTF_KEYUP = 0x0002;
         private const uint KEYEVENTF_SCANCODE = 0x0008;
         private const uint MAPVK_VK_TO_VSC = 0;
+        private const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
+        private const uint MOUSEEVENTF_LEFTUP = 0x0004;
+        private const uint MOUSEEVENTF_RIGHTDOWN = 0x0008;
+        private const uint MOUSEEVENTF_RIGHTUP = 0x0010;
+        private const uint MOUSEEVENTF_MIDDLEDOWN = 0x0020;
+        private const uint MOUSEEVENTF_MIDDLEUP = 0x0040;
+        private const uint MOUSEEVENTF_XDOWN = 0x0080;
+        private const uint MOUSEEVENTF_XUP = 0x0100;
 
         [StructLayout(LayoutKind.Sequential)]
         private struct KEYBDINPUT
@@ -146,8 +162,19 @@ public static partial class GameHost
             public uint dwFlags, time;
             public nint dwExtraInfo;
         }
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MOUSEINPUT
+        {
+            public int dx, dy;
+            public uint mouseData, dwFlags, time;
+            public nint dwExtraInfo;
+        }
         [StructLayout(LayoutKind.Explicit, Size = 32)]
-        private struct InputUnion { [FieldOffset(0)] public KEYBDINPUT ki; }
+        private struct InputUnion
+        {
+            [FieldOffset(0)] public KEYBDINPUT ki;
+            [FieldOffset(0)] public MOUSEINPUT mi;
+        }
         [StructLayout(LayoutKind.Sequential)]
         private struct INPUT { public uint type; public InputUnion U; }
 
@@ -158,14 +185,38 @@ public static partial class GameHost
 
         public static void TapKey(ushort vk)
         {
+            if (TryMouseFlags(vk, out var down, out var up, out var data))
+            {
+                var inputs = new INPUT[2];
+                inputs[0].type = INPUT_MOUSE;
+                inputs[0].U.mi = new MOUSEINPUT { dwFlags = down, mouseData = data };
+                inputs[1].type = INPUT_MOUSE;
+                inputs[1].U.mi = new MOUSEINPUT { dwFlags = up, mouseData = data };
+                SendInput(2, inputs, Marshal.SizeOf<INPUT>());
+                return;
+            }
             var scan = (ushort)MapVirtualKey(vk, MAPVK_VK_TO_VSC);
             if (scan == 0) return;
-            var inputs = new INPUT[2];
-            inputs[0].type = INPUT_KEYBOARD;
-            inputs[0].U.ki = new KEYBDINPUT { wScan = scan, dwFlags = KEYEVENTF_SCANCODE };
-            inputs[1].type = INPUT_KEYBOARD;
-            inputs[1].U.ki = new KEYBDINPUT { wScan = scan, dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP };
-            SendInput(2, inputs, Marshal.SizeOf<INPUT>());
+            var inputsK = new INPUT[2];
+            inputsK[0].type = INPUT_KEYBOARD;
+            inputsK[0].U.ki = new KEYBDINPUT { wScan = scan, dwFlags = KEYEVENTF_SCANCODE };
+            inputsK[1].type = INPUT_KEYBOARD;
+            inputsK[1].U.ki = new KEYBDINPUT { wScan = scan, dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP };
+            SendInput(2, inputsK, Marshal.SizeOf<INPUT>());
+        }
+
+        private static bool TryMouseFlags(ushort vk, out uint down, out uint up, out uint data)
+        {
+            down = up = data = 0;
+            switch (vk)
+            {
+                case 0x01: down = MOUSEEVENTF_LEFTDOWN; up = MOUSEEVENTF_LEFTUP; return true;
+                case 0x02: down = MOUSEEVENTF_RIGHTDOWN; up = MOUSEEVENTF_RIGHTUP; return true;
+                case 0x04: down = MOUSEEVENTF_MIDDLEDOWN; up = MOUSEEVENTF_MIDDLEUP; return true;
+                case 0x05: down = MOUSEEVENTF_XDOWN; up = MOUSEEVENTF_XUP; data = 1; return true;
+                case 0x06: down = MOUSEEVENTF_XDOWN; up = MOUSEEVENTF_XUP; data = 2; return true;
+                default: return false;
+            }
         }
 
         [StructLayout(LayoutKind.Sequential)] private struct DisplayRect { public int Left, Top, Right, Bottom; }

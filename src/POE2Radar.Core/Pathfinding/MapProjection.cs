@@ -46,4 +46,23 @@ public static class MapProjection
         var md = GridDeltaToMapDelta(d, mapScale, deltaWorldZ);
         return new Vector2 { X = mapCenter.X + md.X, Y = mapCenter.Y + md.Y };
     }
+
+    /// <summary>
+    /// Project a world-space point through the camera WorldToScreen matrix (16 floats, row-major)
+    /// into window-relative pixels. Returns false when the point is behind the camera or the
+    /// matrix is missing.
+    /// </summary>
+    public static bool TryWorldToScreen(ReadOnlySpan<float> m, float wx, float wy, float wz,
+        float width, float height, out float screenX, out float screenY)
+    {
+        screenX = screenY = 0;
+        if (m.Length < 16) return false;
+        var cw = wx * m[3] + wy * m[7] + wz * m[11] + m[15];
+        if (cw <= 0.0001f) return false;
+        var cxp = wx * m[0] + wy * m[4] + wz * m[8] + m[12];
+        var cyp = wx * m[1] + wy * m[5] + wz * m[9] + m[13];
+        screenX = (cxp / cw / 2f + 0.5f) * width;
+        screenY = (0.5f - cyp / cw / 2f) * height;
+        return true;
+    }
 }

@@ -153,6 +153,9 @@ public sealed class ApiServer : IDisposable
                     mapVisible = s.MapVisible, zoom = s.Zoom,
                     hpPct = s.HpPct, manaPct = s.ManaPct, esPct = s.EsPct, autoFlask = s.AutoFlask, flask = s.FlaskNote,
                     combatAssist = s.CombatAssist, combat = s.CombatNote,
+                    questFollow = s.QuestFollow, quest = s.QuestFollowNote,
+                    pathMove = s.PathMove, move = s.PathMoveNote,
+                    bot = s.Bot, botNote = s.BotNote,
                     player = new { x = s.Player.X, y = s.Player.Y },
                     entityCount = s.Entities.Count,
                     poiCount = s.Entities.Count(e => e.Poi),
@@ -468,9 +471,10 @@ public sealed class ApiServer : IDisposable
 
     /// <summary>
     /// The settings the dashboard may read AND write. Covers radar/visual options plus auto-flask
-    /// tuning (thresholds, cooldowns, keys). All writes are loopback-Host-gated (see Handle), so a
-    /// cross-origin site can't reach them. The API port is read-only here (changing it needs a
-    /// restart). This object also doubles as the GET payload.
+    /// tuning (thresholds, cooldowns, keys) and bot-profile tunables (combat range/skills, move
+    /// keys/CDs). Arm flags (autoFlaskEnabled, combatAssistEnabled, questFollowEnabled, moveEnabled,
+    /// botEnabled) are omitted — F-keys only. All writes are loopback-Host-gated (see Handle). The
+    /// API port is read-only here (changing it needs a restart). This object also doubles as the GET payload.
     /// </summary>
     private object ReadSettings() => new
     {
@@ -499,8 +503,18 @@ public sealed class ApiServer : IDisposable
         lifeKey = _settings.LifeKey,
         manaKey = _settings.ManaKey,
         combatRange = _settings.CombatRange,
-        combatCooldownMs = _settings.CombatCooldownMs,
-        combatAttackKey = _settings.CombatAttackKey,
+        combatSkills = _settings.CombatSkills,
+        questUseKey = _settings.QuestUseKey,
+        questUseRadius = _settings.QuestUseRadius,
+        questUseCooldownMs = _settings.QuestUseCooldownMs,
+        moveMethod = _settings.MoveMethod,
+        moveArriveRadius = _settings.MoveArriveRadius,
+        moveCooldownMs = _settings.MoveCooldownMs,
+        moveKeyW = _settings.MoveKeyW,
+        moveKeyA = _settings.MoveKeyA,
+        moveKeyS = _settings.MoveKeyS,
+        moveKeyD = _settings.MoveKeyD,
+        moveClickKey = _settings.MoveClickKey,
         apiPort = _settings.ApiPort, // display only — changing it needs a restart
         styles = _settings.Styles,   // per-item icon shapes/colors/sizes + mechanic overrides
         hpBars = _settings.HpBars,   // monster HP-bar geometry (width/height/offset)
@@ -558,9 +572,25 @@ public sealed class ApiServer : IDisposable
                 case "lifeKey" when TryInt(p.Value, out var n): _settings.LifeKey = Math.Clamp(n, 1, 255); applied.Add(p.Name); break;
                 case "manaKey" when TryInt(p.Value, out var n): _settings.ManaKey = Math.Clamp(n, 1, 255); applied.Add(p.Name); break;
                 // Combat assist ARM (CombatAssistEnabled) is F4-only — never a settings POST key.
+                // Quest follow ARM (QuestFollowEnabled) is F3-only — never a settings POST key.
+                // Path move ARM (MoveEnabled) is F5-only (also armed by F3 bot master) — never a settings POST key.
+                // Bot master ARM (BotEnabled) is F3-only — never a settings POST key, never nested.
                 case "combatRange" when TryFloat(p.Value, out var f): _settings.CombatRange = Math.Clamp(f, 1f, 200f); applied.Add(p.Name); break;
-                case "combatCooldownMs" when TryInt(p.Value, out var n): _settings.CombatCooldownMs = Math.Clamp(n, 0, 60000); applied.Add(p.Name); break;
-                case "combatAttackKey" when TryInt(p.Value, out var n): _settings.CombatAttackKey = Math.Clamp(n, 1, 255); applied.Add(p.Name); break;
+                case "combatSkills" when p.Value.ValueKind == JsonValueKind.Array:
+                    if (TryParseCombatSkills(p.Value, out var csk)) { _settings.CombatSkills = csk; applied.Add(p.Name); }
+                    break;
+                case "questUseKey" when TryInt(p.Value, out var n): _settings.QuestUseKey = Math.Clamp(n, 1, 255); applied.Add(p.Name); break;
+                case "questUseRadius" when TryFloat(p.Value, out var f): _settings.QuestUseRadius = Math.Clamp(f, 0f, 64f); applied.Add(p.Name); break;
+                case "questUseCooldownMs" when TryInt(p.Value, out var n): _settings.QuestUseCooldownMs = Math.Clamp(n, 0, 60000); applied.Add(p.Name); break;
+                case "moveMethod" when p.Value.ValueKind == JsonValueKind.String && p.Value.GetString() is { } mm
+                    && (mm is "WASD" or "Click" or "ClickToMove"): _settings.MoveMethod = mm; applied.Add(p.Name); break;
+                case "moveArriveRadius" when TryFloat(p.Value, out var f): _settings.MoveArriveRadius = Math.Clamp(f, 0f, 64f); applied.Add(p.Name); break;
+                case "moveCooldownMs" when TryInt(p.Value, out var n): _settings.MoveCooldownMs = Math.Clamp(n, 0, 60000); applied.Add(p.Name); break;
+                case "moveKeyW" when TryInt(p.Value, out var n): _settings.MoveKeyW = Math.Clamp(n, 1, 255); applied.Add(p.Name); break;
+                case "moveKeyA" when TryInt(p.Value, out var n): _settings.MoveKeyA = Math.Clamp(n, 1, 255); applied.Add(p.Name); break;
+                case "moveKeyS" when TryInt(p.Value, out var n): _settings.MoveKeyS = Math.Clamp(n, 1, 255); applied.Add(p.Name); break;
+                case "moveKeyD" when TryInt(p.Value, out var n): _settings.MoveKeyD = Math.Clamp(n, 1, 255); applied.Add(p.Name); break;
+                case "moveClickKey" when TryInt(p.Value, out var n): _settings.MoveClickKey = Math.Clamp(n, 1, 255); applied.Add(p.Name); break;
                 // Atlas declutter + content-icon + route-chevron options (#3/#4/#5).
                 case "atlasHideCompleted" when TryBool(p.Value, out var b): _settings.AtlasHideCompleted = b; applied.Add(p.Name); break;
                 case "atlasHideAccessible" when TryBool(p.Value, out var b): _settings.AtlasHideAccessible = b; applied.Add(p.Name); break;
@@ -960,6 +990,35 @@ public sealed class ApiServer : IDisposable
         }
     }
 
+    /// <summary>Parse the combat-assist rotation the dashboard re-POSTs on edit: each entry is
+    /// <c>{ key|vk, cooldownMs, range? }</c>. Sanitized + capped at 8; a malformed entry is skipped.
+    /// An empty array is accepted (Decide no-ops until the user adds a skill).</summary>
+    private static bool TryParseCombatSkills(JsonElement el, out List<CombatSkill> skills)
+    {
+        skills = new List<CombatSkill>();
+        try
+        {
+            foreach (var s in el.EnumerateArray())
+            {
+                if (s.ValueKind != JsonValueKind.Object) continue;
+                var key = 0;
+                if (s.TryGetProperty("key", out var kv) && TryInt(kv, out var k)) key = k;
+                else if (s.TryGetProperty("vk", out var vv) && TryInt(vv, out var vk)) key = vk;
+                if (key is < 1 or > 255) continue;
+                var cd = 400;
+                if (s.TryGetProperty("cooldownMs", out var cv) && TryInt(cv, out var c)) cd = c;
+                cd = Math.Clamp(cd, 0, 60000);
+                var range = 0f;
+                if (s.TryGetProperty("range", out var rv) && TryFloat(rv, out var r)) range = r;
+                range = Math.Clamp(range, 0f, 200f);
+                skills.Add(new CombatSkill { Key = key, CooldownMs = cd, Range = range });
+                if (skills.Count >= 8) break;
+            }
+            return true;
+        }
+        catch { return false; }
+    }
+
     private static bool TryBool(JsonElement e, out bool v)
     {
         if (e.ValueKind == JsonValueKind.True) { v = true; return true; }
@@ -976,6 +1035,7 @@ public sealed class ApiServer : IDisposable
     private static bool TryInt(JsonElement e, out int v)
     {
         if (e.ValueKind == JsonValueKind.Number && e.TryGetInt32(out v)) return true;
+        if (e.ValueKind == JsonValueKind.String && int.TryParse(e.GetString(), out v)) return true;
         v = 0; return false;
     }
 
@@ -1069,7 +1129,13 @@ public sealed record RadarState(
     int ExchangeHaveQty = 0,
     string ExchangeFillNote = "",
     bool CombatAssist = false,
-    string CombatNote = "")
+    string CombatNote = "",
+    bool QuestFollow = false,
+    string QuestFollowNote = "",
+    bool PathMove = false,
+    string PathMoveNote = "",
+    bool Bot = false,
+    string BotNote = "")
 {
     public static readonly RadarState Empty =
         new(false, 0, 0, false, 0, System.Numerics.Vector2.Zero,

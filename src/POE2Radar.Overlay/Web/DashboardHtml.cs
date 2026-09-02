@@ -329,6 +329,17 @@ internal static class DashboardHtml
   .delbtn:hover{border-color:var(--blood-bright)}
   .addbtn{font-family:"Cinzel","Georgia",serif; font-size:11px; letter-spacing:.1em; color:var(--gold-bright); background:transparent; border:1px dashed var(--gold-deep); border-radius:3px; padding:8px 14px; cursor:pointer; width:100%; margin-top:4px}
   .addbtn:hover{background:rgba(200,160,73,.07)}
+  .skrow{display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px dotted var(--line-soft)}
+  .skrow:last-child{border-bottom:none}
+  .skrow .skn{color:var(--ink-faint);font-size:10px;width:16px;flex:none}
+  .skrow .sk-key{width:44px;text-align:center}
+  .skrow .sk-cd{width:80px}
+  .skrow .sk-rg{width:72px}
+  .skhead{display:flex;align-items:center;gap:8px;padding:4px 0 2px;color:var(--ink-faint);font-size:10px;letter-spacing:.06em;text-transform:uppercase}
+  .skhead span:nth-child(1){width:16px;flex:none}
+  .skhead span:nth-child(2){width:44px;flex:none}
+  .skhead span:nth-child(3){width:80px;flex:none}
+  .skhead span:nth-child(4){width:72px;flex:none}
 
   /* ── dashboard nav list ── */
   .navrow{display:flex; align-items:center; gap:12px; padding:9px 12px; border:1px solid var(--line-soft); border-radius:3px; margin-bottom:6px; background:var(--panel); cursor:pointer}
@@ -378,7 +389,10 @@ internal static class DashboardHtml
       <div class="kv"><span>Act / Level</span><span id="kAlvl">—</span></div>
       <div class="kv"><span>Map open</span><span id="kMap">—</span></div>
       <div class="kv"><span>Auto-flask</span><span id="kFlask">—</span></div>
+      <div class="kv"><span>Bot</span><span id="kBot">—</span></div>
       <div class="kv"><span>Combat assist</span><span id="kCombat">—</span></div>
+      <div class="kv"><span>Quest follow</span><span id="kQuest">—</span></div>
+      <div class="kv"><span>Path move</span><span id="kMove">—</span></div>
       <div id="zoneNotes" class="znotes" hidden></div>
 
       <div class="sect">Census</div>
@@ -625,14 +639,51 @@ internal static class DashboardHtml
             <div class="row"><div class="rl hint-row">F8 toggles auto-flask in-game. Status: <span id="flaskState">&mdash;</span></div></div>
           </div>
           <div class="card">
-            <h3>Combat Assist</h3>
+            <h3>Combat / Bot</h3>
+            <div class="row"><div class="rl hint-row">F3 toggles the bot master in-game (quest follow + path move + combat). F4 toggles combat assist independently. F5 toggles path move. Arm bits cannot be armed from this page. Bot: <span id="botState">&mdash;</span></div></div>
             <div class="row"><div class="rl">Attack range<small>grid units; tap only if a hostile monster is this close</small></div>
               <input class="numin" type="number" step="1" min="1" max="200" data-set="combatRange"></div>
-            <div class="row"><div class="rl">Attack key</div>
-              <input class="numin keyin" type="text" maxlength="1" data-set="combatAttackKey"></div>
-            <div class="row"><div class="rl">Cooldown<small>min ms between taps</small></div>
-              <input class="numin" type="number" step="50" min="0" data-set="combatCooldownMs"></div>
+            <div class="row"><div class="rl">Skill rotation<small>ordered keys (QWER); skip a skill while its cooldown is running; wraps. Optional range of 0 uses the attack range above</small></div></div>
+            <div class="skhead"><span></span><span>Key</span><span>CD ms</span><span>Range</span></div>
+            <div id="combatSkills"></div>
+            <div class="row"><button type="button" class="addbtn" id="combatSkillAdd">Add skill</button></div>
             <div class="row"><div class="rl hint-row">F4 toggles combat assist in-game. It cannot be armed from this page. Status: <span id="combatState">&mdash;</span></div></div>
+            <div class="row"><div class="rl hint-row">When armed, each zone auto-selects a nav target from the area's zone notes (or a Transition / waypoint / boss landmark) and reuses the existing A* route. On arrival, taps interact/use. F3 toggles quest follow in-game. It cannot be armed from this page. Status: <span id="questFollowState">&mdash;</span></div></div>
+            <div class="row"><div class="rl">Use / interact<small>key or mouse button tapped on arrival at the quest target</small></div>
+              <select class="numin selin" data-set="questUseKey">
+                <option value="1">Left mouse</option>
+                <option value="2">Right mouse</option>
+                <option value="70">F</option>
+                <option value="84">T</option>
+              </select></div>
+            <div class="row"><div class="rl">Use radius<small>grid cells; tap interact when this close to the quest target</small></div>
+              <input class="numin" type="number" step="0.5" min="0" max="64" data-set="questUseRadius"></div>
+            <div class="row"><div class="rl">Use cooldown<small>min ms between interact taps</small></div>
+              <input class="numin" type="number" step="10" min="0" data-set="questUseCooldownMs"></div>
+            <div class="row"><div class="rl">Move method<small>WASD taps, or click-to-move toward the next waypoint of the first selected path</small></div>
+              <select class="numin selin" data-set="moveMethod">
+                <option value="WASD">WASD</option>
+                <option value="Click">Click-to-move</option>
+              </select></div>
+            <div class="row"><div class="rl">Click button<small>mouse button used when method is Click</small></div>
+              <select class="numin selin" data-set="moveClickKey">
+                <option value="1">Left mouse</option>
+                <option value="2">Right mouse</option>
+                <option value="4">Middle mouse</option>
+              </select></div>
+            <div class="row"><div class="rl">Arrive radius<small>grid cells; stop when this close to the remaining waypoints</small></div>
+              <input class="numin" type="number" step="0.5" min="0" max="64" data-set="moveArriveRadius"></div>
+            <div class="row"><div class="rl">Cooldown<small>min ms between WASD/click taps</small></div>
+              <input class="numin" type="number" step="10" min="0" data-set="moveCooldownMs"></div>
+            <div class="row"><div class="rl">Move key W<small>grid +Y</small></div>
+              <input class="numin keyin" type="text" maxlength="1" data-set="moveKeyW"></div>
+            <div class="row"><div class="rl">Move key A<small>grid −X</small></div>
+              <input class="numin keyin" type="text" maxlength="1" data-set="moveKeyA"></div>
+            <div class="row"><div class="rl">Move key S<small>grid −Y</small></div>
+              <input class="numin keyin" type="text" maxlength="1" data-set="moveKeyS"></div>
+            <div class="row"><div class="rl">Move key D<small>grid +X</small></div>
+              <input class="numin keyin" type="text" maxlength="1" data-set="moveKeyD"></div>
+            <div class="row"><div class="rl hint-row">F5 toggles path move in-game (F3 quest follow also arms it). It cannot be armed from this page. Status: <span id="pathMoveState">&mdash;</span></div></div>
           </div>
         </div>
         <div style="margin-top:18px; height:14px"><span class="saved" id="savedMsg">&#10003; saved to config</span></div>
@@ -778,7 +829,10 @@ async function loadSettings(){
     hover = s.hoverPrice || {};
     mono = s.monoliths || {};
     ce = s.currencyExchange || {};
-    renderHpBars(); renderTerrain(); renderGround(); renderHover(); renderMono(); renderExchange();
+    combatSkillsData = Array.isArray(s.combatSkills)
+      ? s.combatSkills.map(sk=>({key:sk.key||sk.vk||0x51, cooldownMs:sk.cooldownMs??400, range:sk.range||0}))
+      : [];
+    renderHpBars(); renderTerrain(); renderGround(); renderHover(); renderMono(); renderExchange(); renderCombatSkills();
   }catch(e){}
 }
 
@@ -890,13 +944,44 @@ function wireSettings(){
     const k=el.dataset.set;
     if(el.type==='checkbox') el.onchange=()=>saveSetting(k,el.checked);
     else if(el.classList.contains('keyin')) el.onchange=()=>{ const vk=charToVk(el.value); if(vk) saveSetting(k,vk); el.value=vkToChar(vk); };
-    else if(el.tagName==='SELECT') el.onchange=()=>saveSetting(k,el.value); // string value (e.g. flask mode)
+    else if(el.tagName==='SELECT') el.onchange=()=>{ const n=parseInt(el.value,10); saveSetting(k, (!isNaN(n) && String(n)===el.value) ? n : el.value); };
     else el.onchange=()=>{ const v=parseFloat(el.value); if(!isNaN(v)) saveSetting(k,v); };
   });
 }
 // Flask key inputs accept a single character ('1'-'9', letters) → Win32 VK (== ASCII of uppercase).
 const charToVk = s => { const c=(s||'').trim().toUpperCase().charCodeAt(0); return isNaN(c)?0:c; };
 const vkToChar = v => v ? String.fromCharCode(v) : '';
+
+/* ── combat-assist rotation (ordered {key, cooldownMs, range}; cannot arm from this page) ── */
+let combatSkillsData=[];
+const QWER=[0x51,0x57,0x45,0x52];
+function saveCombatSkills(){ saveSetting('combatSkills', combatSkillsData); }
+function nextQwer(){
+  const used=new Set(combatSkillsData.map(s=>s.key));
+  return QWER.find(k=>!used.has(k)) || 0x51;
+}
+function renderCombatSkills(){
+  const box=$('#combatSkills'); if(!box) return;
+  if(!combatSkillsData.length){
+    box.innerHTML='<span class="hint-row" style="opacity:.6">No skills. Add a key (QWER) to rotate through.</span>';
+    return;
+  }
+  box.innerHTML=combatSkillsData.map((sk,i)=>
+    '<div class="skrow" data-i="'+i+'">'
+    +'<span class="skn">'+(i+1)+'</span>'
+    +'<input class="numin keyin sk-key" type="text" maxlength="1" value="'+esc(vkToChar(sk.key))+'" title="skill key">'
+    +'<input class="numin sk-cd" type="number" step="50" min="0" value="'+(sk.cooldownMs??400)+'" title="cooldown ms">'
+    +'<input class="numin sk-rg" type="number" step="1" min="0" max="200" value="'+(sk.range||0)+'" title="optional range (0 = global)">'
+    +'<button type="button" class="delbtn sk-del">Remove</button></div>'
+  ).join('');
+  $$('#combatSkills .skrow').forEach(row=>{
+    const i=+row.dataset.i, sk=combatSkillsData[i]; if(!sk) return;
+    row.querySelector('.sk-key').onchange=e=>{ const vk=charToVk(e.target.value); if(vk){ sk.key=vk; saveCombatSkills(); } e.target.value=vkToChar(sk.key); };
+    row.querySelector('.sk-cd').onchange=e=>{ const v=parseFloat(e.target.value); if(!isNaN(v)){ sk.cooldownMs=Math.max(0,v); saveCombatSkills(); } };
+    row.querySelector('.sk-rg').onchange=e=>{ const v=parseFloat(e.target.value); if(!isNaN(v)){ sk.range=Math.max(0,v); saveCombatSkills(); } };
+    row.querySelector('.sk-del').onclick=()=>{ combatSkillsData.splice(i,1); renderCombatSkills(); saveCombatSkills(); };
+  });
+}
 
 /* ── icon / HP-bar / mechanics editors (nested objects: POST the whole {styles}/{hpBars}) ── */
 let styles=null, hpBars=null, terrain=null;
@@ -1546,8 +1631,14 @@ function renderState(){
   $('#kMap').textContent=s.mapVisible?'yes':'no';
   $('#kFlask').textContent=(s.autoFlask?'on':'off')+(s.flask?' · '+s.flask:'');
   const fs=$('#flaskState'); if(fs) fs.textContent=(s.autoFlask?'ON':'OFF')+(s.flask?' · '+s.flask:'');
+  $('#kBot').textContent=(s.bot?'on':'off')+(s.botNote?' · '+s.botNote:'');
+  const bs=$('#botState'); if(bs) bs.textContent=(s.bot?'ON':'OFF')+(s.botNote?' · '+s.botNote:'');
   $('#kCombat').textContent=(s.combatAssist?'on':'off')+(s.combat?' · '+s.combat:'');
   const cs=$('#combatState'); if(cs) cs.textContent=(s.combatAssist?'ON':'OFF')+(s.combat?' · '+s.combat:'');
+  $('#kQuest').textContent=(s.questFollow?'on':'off')+(s.quest?' · '+s.quest:'');
+  const qs=$('#questFollowState'); if(qs) qs.textContent=(s.questFollow?'ON':'OFF')+(s.quest?' · '+s.quest:'');
+  $('#kMove').textContent=(s.pathMove?'on':'off')+(s.move?' · '+s.move:'');
+  const ms=$('#pathMoveState'); if(ms) ms.textContent=(s.pathMove?'ON':'OFF')+(s.move?' · '+s.move:'');
   $('#cEnt').textContent=s.entityCount||0;
   $('#cPoi').textContent=s.poiCount||0;
   $('#cMon').textContent=(s.counts&&s.counts.Monster)||0;
@@ -1592,6 +1683,11 @@ async function checkVersion(){
 }
 
 wireSettings(); wireHpBars(); wireTerrain(); wireGround(); wireHover(); wireMono(); wireExchange();
+document.querySelector('#combatSkillAdd')?.addEventListener('click',()=>{
+  if(combatSkillsData.length>=8) return;
+  combatSkillsData.push({key:nextQwer(), cooldownMs:400, range:0});
+  renderCombatSkills(); saveCombatSkills();
+});
 loadIcons().then(()=>{ loadSettings(); loadFilters(); }); // Rules is the default tab
 tick(); setInterval(tick, 1000);
 checkVersion();

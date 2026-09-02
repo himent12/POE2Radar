@@ -215,6 +215,13 @@ public static partial class LinuxX11
     [LibraryImport(Xtst, EntryPoint = "XTestFakeKeyEvent")]
     public static partial int XTestFakeKeyEvent(nint display, uint keycode, int isPress, nuint delay);
 
+    [LibraryImport(Xtst, EntryPoint = "XTestFakeButtonEvent")]
+    public static partial int XTestFakeButtonEvent(nint display, uint button, int isPress, nuint delay);
+
+    [LibraryImport(X11, EntryPoint = "XWarpPointer")]
+    public static partial int XWarpPointer(nint display, nuint srcW, nuint destW,
+        int srcX, int srcY, uint srcWidth, uint srcHeight, int destX, int destY);
+
     [LibraryImport(Xfixes, EntryPoint = "XFixesCreateRegion")]
     public static partial nint XFixesCreateRegion(nint display, nint rectangles, int nRectangles);
 
@@ -354,6 +361,13 @@ public static partial class LinuxX11
     {
         EnsureDisplay();
         if (_display == 0) return;
+        if (TryMouseButton(vk, out var button))
+        {
+            XTestFakeButtonEvent(_display, button, 1, 0);
+            XTestFakeButtonEvent(_display, button, 0, 0);
+            XFlush(_display);
+            return;
+        }
         var keysym = VkToKeysym(vk);
         if (keysym == 0) return;
         var code = XKeysymToKeycode(_display, keysym);
@@ -361,6 +375,29 @@ public static partial class LinuxX11
         XTestFakeKeyEvent(_display, code, 1, 0);
         XTestFakeKeyEvent(_display, code, 0, 0);
         XFlush(_display);
+    }
+
+    public static void SetCursorPos(int x, int y)
+    {
+        EnsureDisplay();
+        if (_display == 0) return;
+        var root = XDefaultRootWindow(_display);
+        XWarpPointer(_display, 0, root, 0, 0, 0, 0, x, y);
+        XFlush(_display);
+    }
+
+    private static bool TryMouseButton(ushort vk, out uint button)
+    {
+        button = vk switch
+        {
+            0x01 => 1u, // VK_LBUTTON
+            0x02 => 3u, // VK_RBUTTON
+            0x04 => 2u, // VK_MBUTTON
+            0x05 => 8u, // VK_XBUTTON1
+            0x06 => 9u, // VK_XBUTTON2
+            _ => 0u,
+        };
+        return button != 0;
     }
 
     public static int ScreenWidth()

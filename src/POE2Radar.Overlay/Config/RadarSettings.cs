@@ -176,12 +176,44 @@ public sealed class RadarSettings
     public int LifeKey { get; set; } = 0x31;
     public int ManaKey { get; set; } = 0x32;
 
+    // ── Bot master arm (F3 in-game kill-switch). Default OFF. Top-level so it is never inside a
+    //    nested object the dashboard re-POSTs. BotEnabled is NOT writable via the HTTP API — same
+    //    as AutoFlaskEnabled / CombatAssistEnabled. When on, quest follow runs, path move is
+    //    armed, and the combat rotation is armed. F4 combat stays independently toggleable. ──
+    public bool BotEnabled { get; set; }
+
     // ── Combat assist (F4 in-game kill-switch). Default OFF. CombatAssistEnabled is NOT writable
-    //    via the HTTP API — same as AutoFlaskEnabled. Range is grid units; attack key is VK. ──
+    //    via the HTTP API — same as AutoFlaskEnabled. Range is grid units; rotation is an ordered
+    //    list of skills (VK + per-skill cooldown). CombatAttackKey / CombatCooldownMs are the
+    //    legacy one-key fields used only to seed CombatSkills when the list is empty. ──
     public bool CombatAssistEnabled { get; set; }
     public float CombatRange { get; set; } = 35f;
     public int CombatCooldownMs { get; set; } = 400;
     public int CombatAttackKey { get; set; } = 0x51; // Q
+    public List<CombatSkill> CombatSkills { get; set; } = new();
+
+    // ── Quest follow (F3 bot-master also arms this). Default OFF. QuestFollowEnabled is NOT writable
+    //    via the HTTP API — same as CombatAssistEnabled / AutoFlaskEnabled / BotEnabled. When armed,
+    //    each zone auto-selects one nav target from zone notes (or a Transition/waypoint/boss fallback)
+    //    and taps interact/use on arrival. ──
+    public bool QuestFollowEnabled { get; set; }
+    public int QuestUseKey { get; set; } = 0x01; // VK_LBUTTON (PoE2 default interact is click)
+    public float QuestUseRadius { get; set; } = 6f;
+    public int QuestUseCooldownMs { get; set; } = 400;
+
+    // ── Path move (F5 in-game kill-switch). Default OFF. MoveEnabled is NOT writable
+    //    via the HTTP API — same as CombatAssistEnabled / QuestFollowEnabled / BotEnabled. When armed
+    //    (F5 or F3 bot master), taps WASD (or the configured method) toward the next waypoint of the
+    //    first selected path. Arrive radius is grid cells; keys are Win32 VKs. ──
+    public bool MoveEnabled { get; set; }
+    public string MoveMethod { get; set; } = "WASD";
+    public float MoveArriveRadius { get; set; } = 3f;
+    public int MoveCooldownMs { get; set; } = 80;
+    public int MoveKeyW { get; set; } = 0x57; // W
+    public int MoveKeyA { get; set; } = 0x41; // A
+    public int MoveKeyS { get; set; } = 0x53; // S
+    public int MoveKeyD { get; set; } = 0x44; // D
+    public int MoveClickKey { get; set; } = 0x01; // VK_LBUTTON
 
     // ── HTTP API. ──
     public int ApiPort { get; set; } = 7777;
@@ -232,6 +264,7 @@ public sealed class RadarSettings
             if (!File.Exists(FilePath))
             {
                 var fresh = new RadarSettings();
+                fresh.EnsureCombatSkills();
                 fresh.Save();
                 return fresh;
             }
@@ -250,7 +283,9 @@ public sealed class RadarSettings
         catch (Exception ex)
         {
             Console.Error.WriteLine($"Settings load failed ({ex.Message}); using defaults.");
-            return new RadarSettings();
+            var fallback = new RadarSettings();
+            fallback.EnsureCombatSkills();
+            return fallback;
         }
     }
 
@@ -273,6 +308,13 @@ public sealed class RadarSettings
             string.Equals(p, "ExpeditionEncounter", StringComparison.OrdinalIgnoreCase);
 
         var changed = false;
+
+        // Combat rotation: empty list (fresh config / pre-rotation JSON) seeds QWER (or a custom
+        // CombatAttackKey) so a one-key upgrade survives.
+        if (EnsureCombatSkills()) changed = true;
+
+        // Pre-BotEnabled configs that had quest follow on: promote to the master bot arm.
+        if (QuestFollowEnabled && !BotEnabled) { BotEnabled = true; changed = true; }
 
         static bool IsBroadStrongbox(string p) => string.Equals(p, "Strongbox", StringComparison.OrdinalIgnoreCase);
 
@@ -313,6 +355,30 @@ public sealed class RadarSettings
         return changed;
     }
 
+    /// <summary>
+    /// Seed <see cref="CombatSkills"/> when the list is empty. Default rotation is QWER at
+    /// <see cref="CombatCooldownMs"/>. A custom <see cref="CombatAttackKey"/> (not Q) seeds that
+    /// one skill so a pre-rotation key survives the upgrade.
+    /// Returns true if the list was created/seeded.
+    /// </summary>
+    public bool EnsureCombatSkills()
+    {
+        CombatSkills ??= new List<CombatSkill>();
+        if (CombatSkills.Count > 0) return false;
+        var cd = Math.Clamp(CombatCooldownMs, 0, 60000);
+        var custom = CombatAttackKey is >= 1 and <= 255 && CombatAttackKey != 0x51;
+        if (custom)
+        {
+            CombatSkills.Add(new CombatSkill { Key = CombatAttackKey, CooldownMs = cd });
+        }
+        else
+        {
+            foreach (var key in new[] { 0x51, 0x57, 0x45, 0x52 }) // Q W E R
+                CombatSkills.Add(new CombatSkill { Key = key, CooldownMs = cd });
+        }
+        return true;
+    }
+
     /// <summary>Persist current settings to disk. Never throws on IO error — logs and continues.</summary>
     public void Save()
     {
@@ -327,6 +393,17 @@ public sealed class RadarSettings
             Console.Error.WriteLine($"Settings save failed: {ex.Message}");
         }
     }
+}
+
+/// <summary>
+/// One combat-assist rotation slot: a Win32 virtual-key, a per-skill cooldown, and an optional
+/// tighter grid range (0 = use <see cref="RadarSettings.CombatRange"/>).
+/// </summary>
+public sealed class CombatSkill
+{
+    public int Key { get; set; } = 0x51; // Q
+    public int CooldownMs { get; set; } = 400;
+    public float Range { get; set; }
 }
 
 /// <summary>

@@ -5,6 +5,7 @@ namespace POE2Radar.Tests;
 
 /// <summary>
 /// Combat assist must not be armable over HTTP. Armed state is F4 + /state read-only.
+/// The dashboard may edit range + the skill rotation, never CombatAssistEnabled.
 /// </summary>
 public sealed class CombatSettingsGuardTests
 {
@@ -24,7 +25,9 @@ public sealed class CombatSettingsGuardTests
         Assert.DoesNotContain("data-set=\"combatAssist\"", page, StringComparison.Ordinal);
         Assert.Contains("cannot be armed from this page", page, StringComparison.Ordinal);
         Assert.Contains("data-set=\"combatRange\"", page, StringComparison.Ordinal);
-        Assert.Contains("data-set=\"combatAttackKey\"", page, StringComparison.Ordinal);
-        Assert.Contains("data-set=\"combatCooldownMs\"", page, StringComparison.Ordinal);
+        Assert.Contains("id=\"combatSkills\"", page, StringComparison.Ordinal);
+        Assert.Contains("id=\"combatSkillAdd\"", page, StringComparison.Ordinal);
+        Assert.DoesNotContain("data-set=\"combatAttackKey\"", page, StringComparison.Ordinal);
+        Assert.DoesNotContain("data-set=\"combatCooldownMs\"", page, StringComparison.Ordinal);
     }
 }
