@@ -1,16 +1,11 @@
-using System.Runtime.InteropServices;
-using Vortice.DCommon;
-using Vortice.Direct2D1;
-using Vortice.DXGI;
-using Vortice.Mathematics;
+using POE2Radar.Overlay.Draw;
 
 namespace POE2Radar.Overlay;
 
 /// <summary>
-/// Direct2D bitmap of the walkable terrain mask, built once per area. One pixel per grid
-/// cell — alpha = walkability. Cache key is (width, height, areaHash) — two maps can
-/// share dimensions, so dimension-only keying would silently keep the previous map's
-/// terrain after a transition.
+/// Walkable-terrain mask bitmap, built once per area. One pixel per grid cell — alpha = walkability.
+/// Cache key is (width, height, areaHash) — two maps can share dimensions, so dimension-only keying
+/// would silently keep the previous map's terrain after a transition.
 /// </summary>
 public sealed class TerrainBitmap : IDisposable
 {
@@ -18,19 +13,15 @@ public sealed class TerrainBitmap : IDisposable
     /// record so a live color/opacity tweak invalidates the cached bitmap and forces a rebuild.</summary>
     public readonly record struct TerrainStyle(byte IB, byte IG, byte IR, byte IA, byte EB, byte EG, byte ER, byte EA);
 
-    private readonly ID2D1RenderTarget _renderTarget;
-    private ID2D1Bitmap? _bitmap;
+    private DrawBitmap? _bitmap;
     private int _builtForWidth;
     private int _builtForHeight;
     private uint _builtForAreaHash;
     private TerrainStyle _builtForStyle;
 
-    public TerrainBitmap(ID2D1RenderTarget renderTarget)
-    {
-        _renderTarget = renderTarget;
-    }
+    public TerrainBitmap(DrawTarget _) { }
 
-    public ID2D1Bitmap? Bitmap => _bitmap;
+    public DrawBitmap? Bitmap => _bitmap;
     public int Width  => _builtForWidth;
     public int Height => _builtForHeight;
     public uint AreaHash => _builtForAreaHash;
@@ -101,8 +92,7 @@ public sealed class TerrainBitmap : IDisposable
         }
 
         _bitmap?.Dispose();
-        var props = new BitmapProperties(new PixelFormat(Format.B8G8R8A8_UNorm, Vortice.DCommon.AlphaMode.Premultiplied));
-        // Premultiply alpha so D2D blends correctly.
+        // Premultiply alpha so the overlay blends correctly.
         for (var i = 0; i < pixels.Length; i += 4)
         {
             var a = pixels[i + 3];
@@ -113,16 +103,7 @@ public sealed class TerrainBitmap : IDisposable
             pixels[i + 2] = (byte)(pixels[i + 2] * af);
         }
 
-        var size = new SizeI(w, h);
-        var pinned = GCHandle.Alloc(pixels, GCHandleType.Pinned);
-        try
-        {
-            _bitmap = _renderTarget.CreateBitmap(size, pinned.AddrOfPinnedObject(), (uint)(w * 4), props);
-        }
-        finally
-        {
-            pinned.Free();
-        }
+        _bitmap = DrawTarget.CreateBitmap(w, h, pixels);
         _builtForWidth     = w;
         _builtForHeight    = h;
         _builtForAreaHash  = areaHash;

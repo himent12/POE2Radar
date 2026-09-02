@@ -179,9 +179,18 @@ public sealed class MemoryReader
             return false;
         }
 
-        var status = NativeMethods.NtReadVirtualMemory(_process.Handle, address, buffer, size, out bytesRead);
+        bool ok;
+        if (OperatingSystem.IsLinux())
+        {
+            ok = LinuxMemory.TryRead(_process.ProcessId, address, buffer, size, out bytesRead) && bytesRead == size;
+        }
+        else
+        {
+            var status = NativeMethods.NtReadVirtualMemory(_process.Handle, address, buffer, size, out bytesRead);
+            ok = status == 0 && bytesRead == size;
+        }
         Interlocked.Increment(ref _readCount);
-        if (status == 0 && bytesRead == size)
+        if (ok)
         {
             Interlocked.Add(ref _readBytes, (long)bytesRead);
             return true;
@@ -192,5 +201,5 @@ public sealed class MemoryReader
     }
 
     private static InvalidOperationException NewReadException(nint address, long size, string description)
-        => new($"Memory read failed: address=0x{address:X}, size={size}, type={description}, lastError={Marshal.GetLastWin32Error()}");
+        => new($"Memory read failed: address=0x{address:X}, size={size}, type={description}, lastError={Marshal.GetLastPInvokeError()}");
 }

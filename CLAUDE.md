@@ -1,6 +1,7 @@
 # POE2Radar — Contributor Guide
 
-External memory-reading **map/radar overlay for Path of Exile 2**. .NET 10, Windows, x64 only.
+External memory-reading **map/radar overlay for Path of Exile 2**. .NET 10, Windows and Linux x64
+(Proton/Wine on Linux). Overlay renders with SkiaSharp.
 Reads game state out of process (no injection) and draws an overlay; an opt-in auto-flask feature
 sends keystrokes. Forked from a PoE1 framework, since rewritten around the live PoE2 layout.
 
@@ -9,7 +10,8 @@ sends keystrokes. Forked from a PoE1 framework, since rewritten around the live 
 **PoE2, not PoE1.** Offsets are PoE2-specific and drift with patches. Validated values live in
 `Game/Poe2Offsets.cs` (marked `✓` when confirmed live); re-discover via the `POE2Radar.Research` probes.
 
-**Stay external.** Memory access via `OpenProcess` + `ReadProcessMemory`. **Never** inject into the
+**Stay external.** Memory access via `OpenProcess` + `ReadProcessMemory` (Windows) or
+`process_vm_readv` (Linux/Proton). **Never** inject into the
 PoE2 process — no DLL injection, no function hooking, no packet manipulation.
 
 **Input/automation (opt-in).** The overlay may send keystrokes via `SendInput`
@@ -22,7 +24,7 @@ clearly gated — a personal QoL tool, not a headless bot.
 
 **Three-pillar layout.** Exactly three projects:
 - `src/POE2Radar.Core` — memory plumbing + the PoE2 offset table + the live read layer. Read-side.
-- `src/POE2Radar.Overlay` — tick loop, Direct2D overlay, HTTP API, opt-in input. The deliverable `.exe`.
+- `src/POE2Radar.Overlay` — tick loop, Skia overlay, HTTP API, opt-in input. The deliverable.
 - `src/POE2Radar.Research` — dev-time discovery/validation tooling. Never linked into the overlay.
 
 ## Architecture

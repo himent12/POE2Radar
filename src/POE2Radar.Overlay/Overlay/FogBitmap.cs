@@ -1,32 +1,23 @@
-using System.Runtime.InteropServices;
-using Vortice.DCommon;
-using Vortice.Direct2D1;
-using Vortice.DXGI;
-using Vortice.Mathematics;
+using POE2Radar.Overlay.Draw;
 
 namespace POE2Radar.Overlay;
 
 /// <summary>
-/// Direct2D "fog of war" overlay: one pixel per grid cell, dimming the UNexplored portion of the
-/// walkable map. Walkable cells the player has not yet visited get a subtle translucent-dark pixel;
-/// explored cells and walls stay fully transparent so the terrain/PoE map shows through.
-///
-/// <para>Pure visual bookkeeping (draw-only). Rebuilt only when the cheap (areaHash, exploredCount)
-/// key changes — i.e. on a zone swap or when the player reveals new ground on a world tick — so the
-/// per-frame cost is a single textured-quad draw, not a per-cell loop or allocation.</para>
+/// Fog-of-war overlay: one pixel per grid cell, dimming the UNexplored portion of the walkable map.
+/// Walkable cells the player has not yet visited get a subtle translucent-dark pixel; explored cells
+/// and walls stay fully transparent so the terrain/PoE map shows through.
 /// </summary>
 public sealed class FogBitmap : IDisposable
 {
-    private readonly ID2D1RenderTarget _renderTarget;
-    private ID2D1Bitmap? _bitmap;
+    private DrawBitmap? _bitmap;
     private int _builtForWidth;
     private int _builtForHeight;
     private uint _builtForAreaHash;
     private int _builtForExplored = -1;
 
-    public FogBitmap(ID2D1RenderTarget renderTarget) { _renderTarget = renderTarget; }
+    public FogBitmap(DrawTarget _) { }
 
-    public ID2D1Bitmap? Bitmap => _bitmap;
+    public DrawBitmap? Bitmap => _bitmap;
 
     /// <summary>Rebuild only when dimensions, area, or the explored count have changed.</summary>
     public void EnsureBuilt(byte[] walkable, int width, int height, uint areaHash, int exploredCount, Func<int, int, bool> isExplored)
@@ -60,11 +51,7 @@ public sealed class FogBitmap : IDisposable
         }
 
         _bitmap?.Dispose();
-        var props = new BitmapProperties(new PixelFormat(Format.B8G8R8A8_UNorm, Vortice.DCommon.AlphaMode.Premultiplied));
-        var size = new SizeI(w, h);
-        var pinned = GCHandle.Alloc(pixels, GCHandleType.Pinned);
-        try { _bitmap = _renderTarget.CreateBitmap(size, pinned.AddrOfPinnedObject(), (uint)(w * 4), props); }
-        finally { pinned.Free(); }
+        _bitmap = DrawTarget.CreateBitmap(w, h, pixels);
 
         _builtForWidth = w;
         _builtForHeight = h;

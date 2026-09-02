@@ -1,11 +1,9 @@
 using System.Linq;
-using System.Runtime.InteropServices;
 using NumVec2 = System.Numerics.Vector2;
 using POE2Radar.Core;
 using POE2Radar.Core.Game;
 using POE2Radar.Overlay.Config;
-using POE2Radar.Overlay.Input;
-using POE2Radar.Overlay.Native;
+using POE2Radar.Core.Native;
 using POE2Radar.Overlay.Navigation;
 using POE2Radar.Overlay.Web;
 
@@ -599,12 +597,12 @@ public sealed class RadarApp : IDisposable
 
     public void Run()
     {
-        _gameHwnd = OverlayNative.FindWindowForProcess(_process.ProcessId);
+        _gameHwnd = GameHost.FindWindowForProcess(_process.ProcessId);
         // The heavy world-rate walk runs on its OWN thread (Phase 3); the render loop below only does
         // fast per-frame reads + draw, so a slow world pass (big pack, zone load) never hitches frames.
         _worldThread = new Thread(WorldLoop) { IsBackground = true, Name = "POE2Radar.World" };
         _worldThread.Start();
-        timeBeginPeriod(1);   // 1 ms timer resolution → the frame pacer below can actually hit FpsCap
+        GameHost.BeginHighResTimer();   // 1 ms timer resolution on Windows so the frame pacer can hit FpsCap
         try
         {
             var frameSw = System.Diagnostics.Stopwatch.StartNew();
@@ -613,7 +611,7 @@ public sealed class RadarApp : IDisposable
             while (!_shutdown)
             {
                 frameSw.Restart();
-                if (_gameHwnd == 0) _gameHwnd = OverlayNative.FindWindowForProcess(_process.ProcessId);
+                if (_gameHwnd == 0) _gameHwnd = GameHost.FindWindowForProcess(_process.ProcessId);
                 if (_gameHwnd != 0) _window.TrackGameWindow(_gameHwnd);
                 if (!_window.PumpMessages()) break;
                 Tick();
@@ -637,7 +635,7 @@ public sealed class RadarApp : IDisposable
                     if (nowHz >= _nextHzCheckUtc)
                     {
                         _nextHzCheckUtc = nowHz.AddSeconds(1);
-                        var det = DetectGameMonitorHz(_gameHwnd);
+                        var det = GameHost.DetectMonitorHz(_gameHwnd);
                         if (det > 0)
                         {
                             var clamped = Math.Clamp(det, 30, 360);
@@ -658,7 +656,7 @@ public sealed class RadarApp : IDisposable
                 while (frameSw.Elapsed.TotalMilliseconds < budgetMs) Thread.SpinWait(64);
             }
         }
-        finally { timeEndPeriod(1); }
+        finally { GameHost.EndHighResTimer(); }
     }
 
     /// <summary>The background world loop (~<see cref="WorldHz"/> Hz, adaptive): resolve the chain on its
@@ -977,7 +975,7 @@ public sealed class RadarApp : IDisposable
         _nextHoverScanUtc = now.AddMilliseconds(HoverScanThrottleMs);
 
         // Cursor in overlay-client pixels (same space as TryUiElementRect); only while PoE2 is foreground.
-        if (GetForegroundWindow() != _gameHwnd || !OverlayNative.GetCursorPos(out var pt)) { _hoverPrice = null; return; }
+        if (GameHost.GetForegroundWindow() != _gameHwnd || !GameHost.GetCursorPos(out var pt)) { _hoverPrice = null; return; }
         var (cx, cy) = ScreenToClientPoint(pt);
         var hov = _live.ReadHoveredItem(inGameState, _window.Width, _window.Height, cx, cy);
         if (hov is not { } h) { _hoverPrice = null; return; }
@@ -1202,7 +1200,7 @@ public sealed class RadarApp : IDisposable
             snap.AreaCode, _charName, snap.CharLevel, _worldMs, _renderMs, mr.Markers, _fps,
             ex.Open, ex.Summary, ex.Offered, ex.Wanted, ex.HaveQty, ex.FillNote);
 
-        var realActive = _gameHwnd != 0 && GetForegroundWindow() == _gameHwnd;
+        var realActive = _gameHwnd != 0 && GameHost.GetForegroundWindow() == _gameHwnd;
         // "Always show" draws the overlay even when PoE2 isn't focused (for dashboard calibration).
         var drawActive = realActive || _settings.AlwaysShowOverlay;
         var atlasProj = AtlasProjection(); // resolution-correct (auto from window height) or manual calib
@@ -1468,16 +1466,16 @@ public sealed class RadarApp : IDisposable
     {
         var overWidget = active
                          && _renderer.LegendRowRects.Count > 0
-                         && OverlayNative.GetCursorPos(out var pt)
+                         && GameHost.GetCursorPos(out var pt)
                          && HitTestWidget(ScreenToClientPoint(pt)) is not null;
         _window.SetClickThrough(!overWidget);
     }
 
     /// <summary>Convert a screen-space cursor point to the overlay window's client coords.</summary>
-    private (int X, int Y) ScreenToClientPoint(OverlayNative.POINT screen)
+    private (int X, int Y) ScreenToClientPoint(GameHost.Point screen)
     {
         var p = screen;
-        OverlayNative.ScreenToClient(_window.Handle, ref p);
+        GameHost.ScreenToClient(_window.Handle, ref p);
         return (p.X, p.Y);
     }
 
@@ -1705,7 +1703,7 @@ public sealed class RadarApp : IDisposable
         _hpPct = v.HpPct; _manaPct = v.ManaPct; _esPct = v.EsPct;
 
         if (!_autoFlask) { _flaskNote = "OFF (F8)"; return; }
-        if (GetForegroundWindow() != _gameHwnd) { _flaskNote = "paused (PoE2 not focused)"; return; }
+        if (GameHost.GetForegroundWindow() != _gameHwnd) { _flaskNote = "paused (PoE2 not focused)"; return; }
         _flaskNote = "armed";
 
         // Which pool(s) the single life-flask key watches. ES only participates when a real ES pool is
@@ -1722,12 +1720,12 @@ public sealed class RadarApp : IDisposable
         var now = DateTime.UtcNow;
         if (lifeTrigger && now - _lifeFiredAt >= TimeSpan.FromMilliseconds(_settings.LifeCooldownMs))
         {
-            SendInputNative.Tap((ushort)_settings.LifeKey); _lifeFiredAt = now; _flaskNote = lifeReason;
+            GameHost.TapKey((ushort)_settings.LifeKey); _lifeFiredAt = now; _flaskNote = lifeReason;
         }
         if (v.ManaPct < _settings.ManaThresholdPct &&
             now - _manaFiredAt >= TimeSpan.FromMilliseconds(_settings.ManaCooldownMs))
         {
-            SendInputNative.Tap((ushort)_settings.ManaKey); _manaFiredAt = now; _flaskNote = $"mana@{v.ManaPct:F0}%";
+            GameHost.TapKey((ushort)_settings.ManaKey); _manaFiredAt = now; _flaskNote = $"mana@{v.ManaPct:F0}%";
         }
     }
 
@@ -1750,7 +1748,7 @@ public sealed class RadarApp : IDisposable
         // F12 opens the web dashboard in the default browser — only while PoE2 is the foreground
         // window (debounced). Purely launches a browser; sends nothing to the game.
         if (Down(0x7B) && DateTime.UtcNow >= _nextBrowserAt
-            && _gameHwnd != 0 && GetForegroundWindow() == _gameHwnd)
+            && _gameHwnd != 0 && GameHost.GetForegroundWindow() == _gameHwnd)
         {
             _nextBrowserAt = DateTime.UtcNow.AddMilliseconds(800);
             OpenDashboard();
@@ -1788,7 +1786,8 @@ public sealed class RadarApp : IDisposable
     /// tooltip — that interfered with the point-to-point selection; the pick is just echoed to the console.)</summary>
     private void AtlasRoutePick()
     {
-        if (_inGameStateForApi == 0 || !GetCursorPos(out var pt)) { Console.WriteLine("\n[atlas route] not in game."); return; }
+        if (_inGameStateForApi == 0 || !GameHost.GetCursorPos(out var spt)) { Console.WriteLine("\n[atlas route] not in game."); return; }
+        var pt = ScreenToClientPoint(spt);
         // Invert the shared projection: for screen = relPos × scale (offset/shear/persp = 0), relPos = screen/scale.
         var proj = AtlasProjection();
         double scaleX = Math.Abs(proj[0]) > 1e-6 ? proj[0] : 1, scaleY = Math.Abs(proj[4]) > 1e-6 ? proj[4] : 1;
@@ -2733,74 +2732,7 @@ public sealed class RadarApp : IDisposable
         catch (Exception ex) { Console.Error.WriteLine($"Open dashboard failed: {ex.Message}"); }
     }
 
-    private static bool Down(int vk) => (GetAsyncKeyState(vk) & 0x8000) != 0;
-
-    [DllImport("user32.dll")]
-    private static extern short GetAsyncKeyState(int vKey);
-
-    [DllImport("user32.dll")]
-    private static extern nint GetForegroundWindow();
-
-    [StructLayout(LayoutKind.Sequential)] private struct CursorPoint { public int X, Y; }
-    [DllImport("user32.dll")] private static extern bool GetCursorPos(out CursorPoint p);
-
-    // Raise the system timer resolution to 1 ms so the render-loop frame pacer (Thread.Sleep) is accurate.
-    // Without this, Windows' default ~15.6 ms timer granularity caps ANY Thread.Sleep-paced loop at ~64 fps —
-    // which made the overlay judder on high-refresh monitors regardless of FpsCap.
-    [DllImport("winmm.dll")] private static extern uint timeBeginPeriod(uint uPeriod);
-    [DllImport("winmm.dll")] private static extern uint timeEndPeriod(uint uPeriod);
-
-    // Detect the refresh rate of the monitor the game window is currently on, so FpsCap=0 ("auto") matches it.
-    [DllImport("user32.dll")] private static extern nint MonitorFromWindow(nint hwnd, uint dwFlags);
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern bool GetMonitorInfoW(nint hMonitor, ref MonitorInfoEx lpmi);
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern bool EnumDisplaySettingsW(string? lpszDeviceName, int iModeNum, ref DevMode lpDevMode);
-
-    [StructLayout(LayoutKind.Sequential)] private struct DisplayRect { public int Left, Top, Right, Bottom; }
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct MonitorInfoEx
-    {
-        public uint cbSize;
-        public DisplayRect rcMonitor, rcWork;
-        public uint dwFlags;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string szDevice;
-    }
-
-    // Only the head of DEVMODEW matters up to dmDisplayFrequency; the layout below mirrors DEVMODEW exactly
-    // through that field (the display union is dmPosition(8)+orientation(4)+fixedOutput(4)).
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct DevMode
-    {
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
-        public ushort dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra;
-        public uint dmFields;
-        public int dmPositionX, dmPositionY;
-        public uint dmDisplayOrientation, dmDisplayFixedOutput;
-        public short dmColor, dmDuplex, dmYResolution, dmTTOption, dmCollate;
-        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName;
-        public ushort dmLogPixels;
-        public uint dmBitsPerPel, dmPelsWidth, dmPelsHeight, dmDisplayFlags, dmDisplayFrequency;
-        public uint dmICMMethod, dmICMIntent, dmMediaType, dmDitherType, dmReserved1, dmReserved2;
-        public uint dmPanningWidth, dmPanningHeight;
-    }
-
-    /// <summary>Refresh rate (Hz) of the monitor the game window is on, or 0 if it can't be determined
-    /// (e.g. dmDisplayFrequency reports 0/1 = "default"). Used only when FpsCap is set to 0 (auto-match).</summary>
-    private int DetectGameMonitorHz(nint hwnd)
-    {
-        try
-        {
-            if (hwnd == 0) return 0;
-            var hmon = MonitorFromWindow(hwnd, 2 /* MONITOR_DEFAULTTONEAREST */);
-            if (hmon == 0) return 0;
-            var mi = new MonitorInfoEx { cbSize = (uint)Marshal.SizeOf<MonitorInfoEx>() };
-            if (!GetMonitorInfoW(hmon, ref mi)) return 0;
-            var dm = new DevMode { dmSize = (ushort)Marshal.SizeOf<DevMode>() };
-            if (!EnumDisplaySettingsW(mi.szDevice, -1 /* ENUM_CURRENT_SETTINGS */, ref dm)) return 0;
-            return dm.dmDisplayFrequency > 1 ? (int)dm.dmDisplayFrequency : 0;
-        }
-        catch { return 0; }
-    }
+    private static bool Down(int vk) => GameHost.IsKeyDown(vk);
 
     public void Dispose()
     {

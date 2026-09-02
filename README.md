@@ -45,33 +45,66 @@ quality-of-life feature.
   rules, auto-flask tuning). Served same-origin only; setting/navigation writes are loopback-gated.
   Read endpoints: `GET /state`, `/entities`, `/landmarks`, `/api/icons`.
 
+This is a Linux-capable fork of [Sikaka/POE2Radar](https://github.com/Sikaka/POE2Radar). On Arch
+(and other Linux) it attaches to the Proton/Wine PoE2 process via `process_vm_readv` and draws a
+transparent X11 overlay (Proton windows are XWayland even on a Wayland desktop).
+
 ## Download (no build required)
 
-Grab the latest **`POE2Radar-vX.Y.Z-win-x64.zip`** from the
-[Releases page](https://github.com/Sikaka/POE2Radar/releases), unzip, and run `POE2Radar.Overlay.exe`
-**as Administrator** (reading another process's memory requires it) with PoE2 already running.
-The build is self-contained — no .NET install needed.
+**Windows:** grab **`POE2Radar-vX.Y.Z-win-x64.zip`** from
+[Releases](https://github.com/himent12/POE2Radar/releases), unzip, and run `POE2Radar.Overlay.exe`
+**as Administrator** with PoE2 already running.
+
+**Linux:** grab **`POE2Radar-vX.Y.Z-linux-x64.tar.gz`**, extract, then either:
+
+```
+sudo setcap cap_sys_ptrace=ep ./POE2Radar.Overlay
+./POE2Radar.Overlay
+```
+
+or allow same-user ptrace:
+
+```
+sudo sysctl kernel.yama.ptrace_scope=0
+```
+
+Start PoE2 first, in **borderless windowed** (exclusive fullscreen hides the overlay). No .NET
+install is needed for the self-contained build.
 
 Notes:
-- Windows SmartScreen may warn about an unsigned exe (expected for a community tool) — "More info →
-  Run anyway".
-- Antivirus may flag it because it reads game memory and (optionally) sends keystrokes; that's
-  inherent to what the tool does.
+- Windows SmartScreen may warn about an unsigned exe — "More info → Run anyway".
+- Antivirus may flag it because it reads game memory and (optionally) sends keystrokes.
+
+## Linux (Arch / CachyOS)
+
+Needs the **.NET 10 SDK**, `libX11`, `libXfixes`, `libXtst`, `fontconfig`.
+
+```
+sudo pacman -S --needed dotnet-sdk-10.0 libx11 libxfixes libxtst fontconfig
+# memory reads: Yama ptrace_scope=1 (Arch default) blocks attaching to Proton
+sudo sysctl kernel.yama.ptrace_scope=0
+echo 'kernel.yama.ptrace_scope = 0' | sudo tee /etc/sysctl.d/10-ptrace.conf
+
+./run.sh
+```
+
+`run.sh` builds Release and launches the overlay. PoE2 must already be running (Steam/Proton) and
+you should be in a zone, not at the login screen.
+
+To **exit**: **F9**, or Ctrl+C in the terminal. (The Windows tray icon is Windows-only.)
 
 ## Build from source
 
-Requires the **.NET 10 SDK**, Windows x64.
+Requires the **.NET 10 SDK**. Windows or Linux x64.
 
 ```
 dotnet build POE2Radar.slnx
 # launch with PoE2 already running and you in a zone:
-src\POE2Radar.Overlay\bin\Debug\net10.0-windows\POE2Radar.Overlay.exe
+#   Windows: src\POE2Radar.Overlay\bin\Debug\net10.0\POE2Radar.Overlay.exe
+#   Linux:   ./run.sh
 ```
 
-Reading another process generally requires running the overlay **as Administrator**.
-
-To **exit**: right-click the **POE2Radar system-tray icon → Exit**, or press **F9** (or close the
-console window).
+Reading another process generally requires Administrator (Windows) or ptrace permission (Linux).
 
 Hotkeys: **F8** toggles auto-flask; **F9** quits; **F12** opens the web dashboard; **F6** routes to
 the nearest landmark/POI and **F7** clears routes; **F10** (with the Atlas open) inspects the
@@ -82,10 +115,11 @@ hotkeys, to avoid accidental presses).
 
 Three projects:
 
-- `src/POE2Radar.Core` — memory plumbing (`OpenProcess` + `ReadProcessMemory`), the PoE2 offset
-  table (`Game/Poe2Offsets.cs`), and the live read layer (`Game/Poe2Live.cs`).
-- `src/POE2Radar.Overlay` — the radar `.exe`: attaches, AOB-resolves the game roots, runs the tick
-  loop, renders the Direct2D overlay, serves the API, and (opt-in) drives auto-flask input.
+- `src/POE2Radar.Core` — memory plumbing (Win32 `ReadProcessMemory` / Linux `process_vm_readv` against
+  Proton), the PoE2 offset table (`Game/Poe2Offsets.cs`), and the live read layer (`Game/Poe2Live.cs`).
+- `src/POE2Radar.Overlay` — the radar: attaches, AOB-resolves the game roots, runs the tick loop,
+  renders a Skia overlay (Win32 layered window or X11 ARGB), serves the API, and (opt-in) drives
+  auto-flask input.
 - `src/POE2Radar.Research` — dev-time offset discovery/validation tools (AOB scan, HP value-scan,
   entity/tile/UI probes, an area-change watcher). Never linked into the overlay binary.
 

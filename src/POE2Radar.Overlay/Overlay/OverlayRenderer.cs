@@ -3,9 +3,7 @@ using System.Numerics;
 using POE2Radar.Core.Game;
 using POE2Radar.Core.Pathfinding;
 using POE2Radar.Overlay.Config;
-using Vortice.Direct2D1;
-using Vortice.DirectWrite;
-using Vortice.Mathematics;
+using POE2Radar.Overlay.Draw;
 using NumVec2 = System.Numerics.Vector2;
 using GameVec2 = POE2Radar.Core.Game.Vector2;
 
@@ -52,8 +50,8 @@ public sealed class OverlayRenderer : IDisposable
     /// rect with an Action string: <c>"menu-toggle"</c>, <c>"corner:TopLeft|TopRight|BottomLeft|
     /// BottomRight"</c>, or <c>"target:&lt;navTargetId&gt;"</c> (dropdown rows, only when expanded).
     /// </summary>
-    public IReadOnlyList<(Vortice.RawRectF Rect, string Action)> LegendRowRects => _legendRowRects;
-    private readonly List<(Vortice.RawRectF Rect, string Action)> _legendRowRects = new();
+    public IReadOnlyList<(RawRectF Rect, string Action)> LegendRowRects => _legendRowRects;
+    private readonly List<(RawRectF Rect, string Action)> _legendRowRects = new();
 
     private readonly OverlayWindow _window;
     private TerrainBitmap? _terrain;
@@ -62,12 +60,12 @@ public sealed class OverlayRenderer : IDisposable
     // Per-icon-name geometry, built lazily from the SVG IconLibrary and cached for the renderer's
     // lifetime. A name that can't be resolved/parsed is mapped to the Circle geometry so something
     // always draws; the cache may therefore point several keys at one instance (deduped on Dispose).
-    private readonly Dictionary<string, ID2D1PathGeometry?> _geoCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, DrawPath?> _geoCache = new(StringComparer.OrdinalIgnoreCase);
 
-    private ID2D1SolidColorBrush? _bPlayer, _bOther, _bText, _bPanel, _bLandmark;
-    private ID2D1SolidColorBrush? _bPath;  // recolored per route via SetColor
-    private ID2D1SolidColorBrush? _bStyle; // scratch brush for config-driven icons / HP bars (recolored per draw)
-    private IDWriteTextFormat? _tf;
+    private DrawBrush? _bPlayer, _bOther, _bText, _bPanel, _bLandmark;
+    private DrawBrush? _bPath;  // recolored per route via SetColor
+    private DrawBrush? _bStyle; // scratch brush for config-driven icons / HP bars (recolored per draw)
+    private DrawTextFormat? _tf;
     private bool _ready;
 
     public OverlayRenderer(OverlayWindow window) { _window = window; }
@@ -83,7 +81,7 @@ public sealed class OverlayRenderer : IDisposable
         _bLandmark = rt.CreateSolidColorBrush(ColLandmark);
         _bPath     = rt.CreateSolidColorBrush(PathPalette[0]);
         _bStyle    = rt.CreateSolidColorBrush(ColText);
-        _tf = _window.DWriteFactory.CreateTextFormat("Consolas", null, FontWeight.Normal, FontStyle.Normal, FontStretch.Normal, 12f, "en-us");
+        _tf = _window.CreateTextFormat("Consolas", 12f);
         _atlasIcons = new AtlasIconCache();   // decode embedded atlas content PNGs once (#5)
         _ready = true;
     }
@@ -95,7 +93,7 @@ public sealed class OverlayRenderer : IDisposable
         var rt = _window.RenderTarget;
         rt.BeginDraw();
         rt.Clear(new Color4(0f, 0f, 0f, 0f));
-        rt.TextAntialiasMode = Vortice.Direct2D1.TextAntialiasMode.Grayscale;
+        rt.TextAntialiasMode = 0;
         try
         {
             // Draw nothing unless PoE2 is the foreground window — so the overlay never shows
@@ -148,7 +146,7 @@ public sealed class OverlayRenderer : IDisposable
     /// contrast over the busy atlas), with a node dot at each hop, a green START disc and a gold GOAL ring.
     /// Off-screen segments are simply clipped by Direct2D, so the route still reads when the destination has
     /// been panned off-screen. Drawn UNDER the highlight rings.</summary>
-    private void DrawAtlasRoute(ID2D1RenderTarget rt, RenderContext ctx)
+    private void DrawAtlasRoute(DrawTarget rt, RenderContext ctx)
     {
         var start = ctx.AtlasStart; var end = ctx.AtlasEnd; var route = ctx.AtlasRoute;
         var autos = ctx.AtlasAutoRoutes; var current = ctx.AtlasCurrent;
@@ -222,7 +220,7 @@ public sealed class OverlayRenderer : IDisposable
                 if (On(tgt, 0f))
                 {
                     string ht = ar.Hops.ToString();
-                    rt.FillRectangle(new Vortice.RawRectF(tgt.X - 11f, tgt.Y - 26f, tgt.X + 11f, tgt.Y - 10f), _bPanel!);
+                    rt.FillRectangle(new RawRectF(tgt.X - 11f, tgt.Y - 26f, tgt.X + 11f, tgt.Y - 10f), _bPanel!);
                     rt.DrawText(ht, _tf!, new Rect(tgt.X - 9f, tgt.Y - 26f, tgt.X + 11f, tgt.Y - 10f), _bText!, DrawTextOptions.Clip);
                 }
             }
@@ -274,7 +272,7 @@ public sealed class OverlayRenderer : IDisposable
     /// position (RelativePos) is projected to screen via the atlas transform. Tracked/arrowed maps draw a
     /// ring in their rule colour; off-screen arrowed maps get an edge arrow pointing toward them.
     /// </summary>
-    private void DrawAtlas(ID2D1RenderTarget rt, RenderContext ctx)
+    private void DrawAtlas(DrawTarget rt, RenderContext ctx)
     {
         if (ctx.AtlasNodes is not { Count: > 0 } marks) return;
         float W = ctx.WindowWidth, H = ctx.WindowHeight;
@@ -347,7 +345,7 @@ public sealed class OverlayRenderer : IDisposable
                 // than it's worth here); the chip sits just right of the ring.
                 float lx = sx + 24f, ly = sy - 9f;
                 float lw = label.Length * 7.0f + 8f;
-                rt.FillRectangle(new Vortice.RawRectF(lx - 4f, ly - 1f, lx + lw, ly + 17f), _bPanel!);
+                rt.FillRectangle(new RawRectF(lx - 4f, ly - 1f, lx + lw, ly + 17f), _bPanel!);
                 rt.DrawText(label, _tf!, new Rect(lx, ly, lx + lw + 40f, ly + 18f), _bText!, DrawTextOptions.Clip);
             }
         }
@@ -357,7 +355,7 @@ public sealed class OverlayRenderer : IDisposable
     /// screen X; <paramref name="topY"/> is the node ring's top — icons sit just above it. Square cells of
     /// <paramref name="iconH"/> px; only basenames present in the cache draw. A dark backing keeps the row
     /// readable over the busy atlas art. Called only for FOGGED nodes (the game draws its own on revealed ones).</summary>
-    private void DrawAtlasContentIcons(ID2D1RenderTarget rt, IReadOnlyList<string> basenames, float cx, float topY, float iconH)
+    private void DrawAtlasContentIcons(DrawTarget rt, IReadOnlyList<string> basenames, float cx, float topY, float iconH)
     {
         if (iconH < 6f) iconH = 6f;
         var cnt = 0;
@@ -367,7 +365,7 @@ public sealed class OverlayRenderer : IDisposable
         float totalW = cnt * iconH + (cnt - 1) * gap;
         float ix = cx - totalW * 0.5f;
         float iy = topY - iconH - 5f;
-        rt.FillRectangle(new Vortice.RawRectF(ix - 3f, iy - 2f, ix + totalW + 3f, iy + iconH + 2f), _bPanel!);
+        rt.FillRectangle(new RawRectF(ix - 3f, iy - 2f, ix + totalW + 3f, iy + iconH + 2f), _bPanel!);
         foreach (var bn in basenames)
         {
             var bmp = _atlasIcons!.Get(rt, bn);
@@ -385,7 +383,7 @@ public sealed class OverlayRenderer : IDisposable
     /// intervals along the segment (#4). <paramref name="carry"/> holds the leftover distance into the next
     /// segment so spacing stays even across a multi-segment route. Ported from the GameHelper2 Atlas plugin's
     /// DrawChevrons (filled triangles → stroked chevrons here, cheaper in Direct2D and reads the same).</summary>
-    private void DrawAtlasChevrons(ID2D1RenderTarget rt, NumVec2 a, NumVec2 b, Color4 color, float size, float spacing, ref float carry)
+    private void DrawAtlasChevrons(DrawTarget rt, NumVec2 a, NumVec2 b, Color4 color, float size, float spacing, ref float carry)
     {
         var d = b - a;
         float len = d.Length();
@@ -440,7 +438,7 @@ public sealed class OverlayRenderer : IDisposable
     /// <summary>Draw an edge arrow pointing from screen-centre toward an OFF-SCREEN atlas map (sx,sy), so
     /// you can pan toward high-value maps you can't zoom out far enough to see. Clamped to a screen-edge
     /// inset, coloured by the rule, labelled with the map/content.</summary>
-    private void DrawAtlasArrow(ID2D1RenderTarget rt, float sx, float sy, float cx, float cy, float W, float H, Color4 col, string? label)
+    private void DrawAtlasArrow(DrawTarget rt, float sx, float sy, float cx, float cy, float W, float H, Color4 col, string? label)
     {
         float dx = sx - cx, dy = sy - cy;
         float len = MathF.Sqrt(dx * dx + dy * dy); if (len < 1f) return;
@@ -466,7 +464,7 @@ public sealed class OverlayRenderer : IDisposable
             float lx = ex - ux * 30f - lw * 0.5f, ly = ey - uy * 22f - 9f;
             lx = Math.Clamp(lx, 2f, W - lw - 2f);
             ly = Math.Clamp(ly, 2f, H - 20f);
-            rt.FillRectangle(new Vortice.RawRectF(lx - 3f, ly - 1f, lx + lw, ly + 17f), _bPanel!);
+            rt.FillRectangle(new RawRectF(lx - 3f, ly - 1f, lx + lw, ly + 17f), _bPanel!);
             rt.DrawText(label, _tf!, new Rect(lx, ly, lx + lw + 40f, ly + 18f), _bText!, DrawTextOptions.Clip);
         }
     }
@@ -479,7 +477,7 @@ public sealed class OverlayRenderer : IDisposable
     /// a Hide rule (no bars over hidden mobs), and the bar FILL follows the mob's dot color. Bar GEOMETRY
     /// (width/border/offset) is per-rarity from HpBars.
     /// </summary>
-    private void DrawNameplates(ID2D1RenderTarget rt, RenderContext ctx)
+    private void DrawNameplates(DrawTarget rt, RenderContext ctx)
     {
         if (ctx.CameraMatrix is not { } m || ctx.HpBarTargets is not { Count: > 0 } bars) return;
         float W = ctx.WindowWidth, H = ctx.WindowHeight;
@@ -502,10 +500,10 @@ public sealed class OverlayRenderer : IDisposable
             var bw = t.Width;
             var bx = sx - bw / 2f + hb.OffsetX;
             var by = sy + hb.OffsetY; // OffsetY is relative to the mob (negative = above)
-            var barRect = new Vortice.RawRectF(bx, by, bx + bw, by + bh);
+            var barRect = new RawRectF(bx, by, bx + bw, by + bh);
             rt.FillRectangle(barRect, _bPanel!);
             _bStyle!.Color = t.Frac < 0.3f ? ColLowHp : ColorFromU(t.Fill);
-            rt.FillRectangle(new Vortice.RawRectF(bx, by, bx + bw * t.Frac, by + bh), _bStyle);
+            rt.FillRectangle(new RawRectF(bx, by, bx + bw * t.Frac, by + bh), _bStyle);
             if (t.BorderWidth > 0f)
             {
                 _bStyle.Color = ColorFromU(t.Border);
@@ -520,7 +518,7 @@ public sealed class OverlayRenderer : IDisposable
     /// unidentified uniques) + value on a backing panel; items above the value threshold get a gold
     /// border. Drawn whether the big map is open or not — it's a heads-up loot overlay.
     /// </summary>
-    private void DrawItemLabels(ID2D1RenderTarget rt, RenderContext ctx)
+    private void DrawItemLabels(DrawTarget rt, RenderContext ctx)
     {
         if (ctx.CameraMatrix is not { } m || ctx.ItemLabels is not { Count: > 0 } labels) return;
         float W = ctx.WindowWidth, H = ctx.WindowHeight;
@@ -542,7 +540,7 @@ public sealed class OverlayRenderer : IDisposable
                 var text = $"{it.Name}\n{it.Value}";
                 var halfW = MathF.Max(48f, 4.5f * MathF.Max(it.Name.Length, it.Value.Length + 3));
                 const float halfH = 19f;
-                var panel = new Vortice.RawRectF(sx - halfW, sy - halfH, sx + halfW, sy + halfH);
+                var panel = new RawRectF(sx - halfW, sy - halfH, sx + halfW, sy + halfH);
                 rt.FillRectangle(panel, _bPanel!);
                 if (it.Highlight) { _bStyle!.Color = ColItemHi; rt.DrawRectangle(panel, _bStyle, 2.5f); }
                 _bStyle!.Color = it.Highlight ? ColItemHi : ColItemText;
@@ -555,7 +553,7 @@ public sealed class OverlayRenderer : IDisposable
                 // shows the item's name on its loot tag). Border when high-value.
                 var halfW = MathF.Max(26f, 4.5f * (it.Value.Length + 1));
                 const float halfH = 11f;
-                var panel = new Vortice.RawRectF(sx - halfW, sy - halfH, sx + halfW, sy + halfH);
+                var panel = new RawRectF(sx - halfW, sy - halfH, sx + halfW, sy + halfH);
                 rt.FillRectangle(panel, _bPanel!);
                 if (it.Highlight) { _bStyle!.Color = ColItemHi; rt.DrawRectangle(panel, _bStyle, 2f); }
                 _bStyle!.Color = it.Highlight ? ColItemHi : ColItemText;
@@ -571,7 +569,7 @@ public sealed class OverlayRenderer : IDisposable
     /// <summary>Rune-crafting reward prices: a small value box just outside the right edge of each visible
     /// reward row in the "Runeshape Combinations" panel. Rects are screen-space (already scaled in
     /// Poe2Runeforge); text + tier color are precomputed in RadarApp. Screen-space, so no world projection.</summary>
-    private void DrawRuneforge(ID2D1RenderTarget rt, RenderContext ctx)
+    private void DrawRuneforge(DrawTarget rt, RenderContext ctx)
     {
         if (ctx.RuneLabels is not { Count: > 0 } labels) return;
         const float gap = 8f, boxW = 96f, boxH = 22f;
@@ -579,7 +577,7 @@ public sealed class OverlayRenderer : IDisposable
         {
             var lx = r.X + r.W + gap;             // just past the row's right edge
             var cy = r.Y + r.H * 0.5f;            // vertically centered on the row
-            var box = new Vortice.RawRectF(lx, cy - boxH * 0.5f, lx + boxW, cy + boxH * 0.5f);
+            var box = new RawRectF(lx, cy - boxH * 0.5f, lx + boxW, cy + boxH * 0.5f);
             rt.FillRectangle(box, _bPanel!);
             _bStyle!.Color = ColorFromU(r.Color);
             rt.DrawText(r.Text, _tf!, new Rect(lx + 5f, cy - boxH * 0.5f + 2f, lx + boxW - 2f, cy + boxH * 0.5f - 1f),
@@ -590,7 +588,7 @@ public sealed class OverlayRenderer : IDisposable
     /// <summary>Ritual tribute-shop reward values: a value chip centered on the bottom edge of each reward
     /// tile in the open shop. Rects are screen-space (already scaled in Poe2Live.ReadRitualRewards); text +
     /// tier color are precomputed in RadarApp. High-value rewards get a gold border. No world projection.</summary>
-    private void DrawRitualRewards(ID2D1RenderTarget rt, RenderContext ctx)
+    private void DrawRitualRewards(DrawTarget rt, RenderContext ctx)
     {
         if (ctx.RitualRewards is not { Count: > 0 } labels) return;
         const float boxH = 20f;
@@ -599,7 +597,7 @@ public sealed class OverlayRenderer : IDisposable
             var boxW = MathF.Max(44f, 7.5f * (r.Text.Length + 1));
             var cx = r.X + r.W * 0.5f;
             var top = r.Y + r.H - boxH;            // sit on the tile's bottom edge
-            var box = new Vortice.RawRectF(cx - boxW * 0.5f, top, cx + boxW * 0.5f, top + boxH);
+            var box = new RawRectF(cx - boxW * 0.5f, top, cx + boxW * 0.5f, top + boxH);
             rt.FillRectangle(box, _bPanel!);
             if (r.Highlight) { _bStyle!.Color = ColItemHi; rt.DrawRectangle(box, _bStyle, 2f); }
             _bStyle!.Color = ColorFromU(r.Color);
@@ -613,7 +611,7 @@ public sealed class OverlayRenderer : IDisposable
     /// the tag exactly with no world projection and no jitter. Covers items the game already names (currency,
     /// runes, essences, fragments, identified uniques); unidentified uniques use the world-projected reveal
     /// in DrawItemLabels. High-value matches get a gold border (same palette as the item labels).</summary>
-    private void DrawLootTags(ID2D1RenderTarget rt, RenderContext ctx)
+    private void DrawLootTags(DrawTarget rt, RenderContext ctx)
     {
         if (ctx.LootTags is not { Count: > 0 } labels) return;
         const float gap = 6f, boxH = 18f;
@@ -622,7 +620,7 @@ public sealed class OverlayRenderer : IDisposable
             var lx = t.X + t.W + gap;             // just past the tag's right edge
             var cy = t.Y + t.H * 0.5f;            // vertically centered on the tag
             var boxW = MathF.Max(40f, 7.5f * (t.Value.Length + 1));
-            var box = new Vortice.RawRectF(lx, cy - boxH * 0.5f, lx + boxW, cy + boxH * 0.5f);
+            var box = new RawRectF(lx, cy - boxH * 0.5f, lx + boxW, cy + boxH * 0.5f);
             rt.FillRectangle(box, _bPanel!);
             if (t.Highlight) { _bStyle!.Color = ColItemHi; rt.DrawRectangle(box, _bStyle, 2f); }
             _bStyle!.Color = t.Highlight ? ColItemHi : ColItemText;
@@ -634,7 +632,7 @@ public sealed class OverlayRenderer : IDisposable
     /// <summary>Price bar for the item under the cursor: a single-line styled bar aligned to the game
     /// tooltip's content box (same left + width), drawn just below the tooltip. If the tooltip sits near the
     /// bottom of the screen the bar snaps to just ABOVE its top edge instead. Border/emphasis when highlighted.</summary>
-    private void DrawHoverPrice(ID2D1RenderTarget rt, RenderContext ctx)
+    private void DrawHoverPrice(DrawTarget rt, RenderContext ctx)
     {
         if (ctx.HoverPrice is not { } hp) return;
         const float rowH = 17f, gap = 3f, pad = 7f, charW = 7.3f;  // charW ≈ Consolas 12px advance
@@ -652,7 +650,7 @@ public sealed class OverlayRenderer : IDisposable
         if (y + chipH > ctx.WindowHeight - 2f) y = hp.Y - chipH - gap;
         if (y < 2f) y = 2f;
 
-        var box = new Vortice.RawRectF(x, y, x + w, y + chipH);
+        var box = new RawRectF(x, y, x + w, y + chipH);
         rt.FillRectangle(box, _bPanel!);
         _bStyle!.Color = hp.Highlight ? ColItemHi : ColItemText;
         rt.DrawRectangle(box, _bStyle, hp.Highlight ? 2f : 1f);
@@ -670,7 +668,7 @@ public sealed class OverlayRenderer : IDisposable
     /// <summary>Runeshape-monolith map markers: a value-coloured ring with the hole count N inside, and a
     /// "{best} ex · {reward}" label to the right. Drawn on the big map (grid → screen via the same
     /// projection as entity dots / landmarks). Augments the generic POI dot with the monolith's value.</summary>
-    private void DrawMonoliths(ID2D1RenderTarget rt, RenderContext ctx, NumVec2 player, NumVec2 center, float scale)
+    private void DrawMonoliths(DrawTarget rt, RenderContext ctx, NumVec2 player, NumVec2 center, float scale)
     {
         if (ctx.Monoliths is not { Count: > 0 } monos) return;
         foreach (var m in monos)
@@ -688,7 +686,7 @@ public sealed class OverlayRenderer : IDisposable
     /// <summary>The nearby-monolith reward panel: a screen-space list (top-right) of the area's monoliths
     /// sorted by best value, each with its anchor + N + top priced rewards. Draws even with the big map
     /// closed (the values are read area-wide off the persistent devices).</summary>
-    private void DrawMonolithPanel(ID2D1RenderTarget rt, RenderContext ctx)
+    private void DrawMonolithPanel(DrawTarget rt, RenderContext ctx)
     {
         if (!ctx.ShowMonolithPanel || ctx.Monoliths is not { Count: > 0 } monos) return;
         const float w = 248f, pad = 6f, lineH = 15f, headH = 17f, titleH = 18f;
@@ -704,9 +702,9 @@ public sealed class OverlayRenderer : IDisposable
         {
             // Collapsed: just the clickable header bar, keeping the count visible for quick reference.
             float ch = pad * 2f + titleH;
-            rt.FillRectangle(new Vortice.RawRectF(x, y, x + w, y + ch), _bPanel!);
+            rt.FillRectangle(new RawRectF(x, y, x + w, y + ch), _bPanel!);
             rt.DrawText($"{caret}Monoliths ({monos.Count})", _tf!, new Rect(x + pad, y + pad, x + w - pad, y + pad + titleH), _bText!, DrawTextOptions.Clip);
-            _legendRowRects.Add((new Vortice.RawRectF(x, y, x + w, y + ch), "mono-collapse"));
+            _legendRowRects.Add((new RawRectF(x, y, x + w, y + ch), "mono-collapse"));
             return;
         }
 
@@ -718,11 +716,11 @@ public sealed class OverlayRenderer : IDisposable
             var rows = 0; foreach (var r in m.Rewards) if (r.Ex > 0 && rows < 3) rows++;
             h += headH + lineH * rows;
         }
-        rt.FillRectangle(new Vortice.RawRectF(x, y, x + w, y + h), _bPanel!);
+        rt.FillRectangle(new RawRectF(x, y, x + w, y + h), _bPanel!);
 
         float cy = y + pad;
         rt.DrawText($"{caret}Monoliths ({monos.Count})", _tf!, new Rect(x + pad, cy, x + w - pad, cy + titleH), _bText!, DrawTextOptions.Clip);
-        _legendRowRects.Add((new Vortice.RawRectF(x, cy, x + w, cy + titleH), "mono-collapse"));
+        _legendRowRects.Add((new RawRectF(x, cy, x + w, cy + titleH), "mono-collapse"));
         cy += titleH;
         foreach (var m in list)
         {
@@ -754,7 +752,7 @@ public sealed class OverlayRenderer : IDisposable
     /// green; the deepest single tier (best ratio you can actually move size at) is amber. A one-line note
     /// shows the competition (other sellers, the OFFERED side's best). Screen-space; mirrors DrawRuneforge's
     /// brush/text reuse. NOTE: volume units (raw ListedCount vs ×Give/Get) pending in-game validation.</summary>
-    private void DrawCurrencyExchange(ID2D1RenderTarget rt, RenderContext ctx)
+    private void DrawCurrencyExchange(DrawTarget rt, RenderContext ctx)
     {
         if (!ctx.ExchangeOpen) return;
         // OFFERED = orders giving your have-item for your want-item = your actual SELL ladder (the ≤market
@@ -774,10 +772,10 @@ public sealed class OverlayRenderer : IDisposable
         if (ctx.ExchangeCollapsed)
         {
             float tx = pinned ? Math.Max(4f, ctx.ExchangePanelX - tabW - 8f) : ctx.WindowWidth - tabW - 10f;
-            var tab = new Vortice.RawRectF(tx, anchorY, tx + tabW, anchorY + tabH);
+            var tab = new RawRectF(tx, anchorY, tx + tabW, anchorY + tabH);
             rt.FillRectangle(tab, _bPanel!);
             _bStyle!.Color = ColExchangeGold;
-            rt.FillRectangle(new Vortice.RawRectF(tx, anchorY + tabH - 2f, tx + tabW, anchorY + tabH), _bStyle);  // gold underline
+            rt.FillRectangle(new RawRectF(tx, anchorY + tabH - 2f, tx + tabW, anchorY + tabH), _bStyle);  // gold underline
             _bStyle.Color = ColExchangeFill;
             rt.DrawText("+ Sell Guide", _tf!, new Rect(tx + 7f, anchorY + 2f, tx + tabW - 4f, anchorY + tabH), _bStyle, DrawTextOptions.Clip);
             _legendRowRects.Add((tab, "exchange-collapse"));
@@ -795,20 +793,20 @@ public sealed class OverlayRenderer : IDisposable
         float h = pad * 2f + titleH + subH + (hasFill ? heroH + sepH : 0f) + sepH + headH + rowH * rowsShown;
         float x = pinned ? Math.Max(4f, ctx.ExchangePanelX - w - 8f) : ctx.WindowWidth - w - 10f;
         float y = anchorY;
-        rt.FillRectangle(new Vortice.RawRectF(x, y, x + w, y + h), _bPanel!);
+        rt.FillRectangle(new RawRectF(x, y, x + w, y + h), _bPanel!);
         float lx = x + pad, rx = x + w - pad, cy = y + pad;
 
         // X close button (collapses to the tab), top-right of the card.
         float bx = x + w - 17f;
         _bStyle!.Color = ColExchangeDim;
         rt.DrawText("X", _tf!, new Rect(bx, y + 2f, x + w, y + 18f), _bStyle, DrawTextOptions.Clip);
-        _legendRowRects.Add((new Vortice.RawRectF(bx - 3f, y + 2f, x + w, y + 19f), "exchange-collapse"));
+        _legendRowRects.Add((new RawRectF(bx - 3f, y + 2f, x + w, y + 19f), "exchange-collapse"));
 
         // Title + Kalguur-gold accent rule (the signature PoE touch); leave room for the X.
         rt.DrawText("Currency Exchange", _tf!, new Rect(lx, cy, bx - 4f, cy + titleH), _bText!, DrawTextOptions.Clip);
         cy += titleH;
         _bStyle.Color = ColExchangeGold;
-        rt.FillRectangle(new Vortice.RawRectF(lx, cy + 1f, rx, cy + 2.5f), _bStyle);
+        rt.FillRectangle(new RawRectF(lx, cy + 1f, rx, cy + 2.5f), _bStyle);
         cy += 4f;
 
         // Subtitle: best sell/buy ratios + spread, at a glance (warm grey).
@@ -848,7 +846,7 @@ public sealed class OverlayRenderer : IDisposable
             // bar ∝ this tier's marginal volume; best=green, deepest=amber, else bronze.
             var bw = Math.Max(2f, (float)r.Stock / maxStock * barMaxW);
             _bStyle.Color = i == 0 ? ColExchangeRec : i == deepIdx ? ColExchangeVol : ColExchangeBar;
-            rt.FillRectangle(new Vortice.RawRectF(barX, cy + 2f, barX + bw, cy + rowH - 2f), _bStyle);
+            rt.FillRectangle(new RawRectF(barX, cy + 2f, barX + bw, cy + rowH - 2f), _bStyle);
             _bStyle.Color = rowCol;
             rt.DrawText($"{r.Ratio:0.##}:1", _tf!, new Rect(lx, cy, lx + ratioW, cy + rowH), _bStyle, DrawTextOptions.Clip);
             rt.DrawText(r.CumStock.ToString("N0"), _tf!, new Rect(rx - cumW, cy, rx, cy + rowH), _bStyle, DrawTextOptions.Clip);
@@ -864,7 +862,7 @@ public sealed class OverlayRenderer : IDisposable
     /// consecutive waypoints; a marker dot sits on each. Z is approximated by the player's height, so
     /// the line sits at the player's feet plane (it can float/sink on steep slopes — height TBD).
     /// </summary>
-    private void DrawPathsWorld(ID2D1RenderTarget rt, RenderContext ctx)
+    private void DrawPathsWorld(DrawTarget rt, RenderContext ctx)
     {
         if (ctx.CameraMatrix is not { } m || ctx.SelectedPaths.Count == 0) return;
         float W = ctx.WindowWidth, H = ctx.WindowHeight;
@@ -910,7 +908,7 @@ public sealed class OverlayRenderer : IDisposable
     /// the unit space the old hardcoded geometries used, so <see cref="DrawIcon"/> can stamp it with the
     /// same scale+translate transform. Unknown/unparseable names fall back to "Circle".
     /// </summary>
-    private ID2D1PathGeometry? GetGeometry(string? name)
+    private DrawPath? GetGeometry(string? name)
     {
         name ??= "Circle";
         if (_geoCache.TryGetValue(name, out var cached)) return cached;
@@ -922,7 +920,7 @@ public sealed class OverlayRenderer : IDisposable
         return built;
     }
 
-    private ID2D1PathGeometry? BuildGeometry(string name)
+    private DrawPath? BuildGeometry(string name)
     {
         if (!IconLibrary.Map.TryGetValue(name, out var def)) return null;
 
@@ -932,37 +930,42 @@ public sealed class OverlayRenderer : IDisposable
         float scale = 2f / MathF.Max(def.VbW, def.VbH);
         NumVec2 N(NumVec2 p) => new((p.X - cx) * scale, (p.Y - cy) * scale);
 
-        var factory = (ID2D1Factory)_window.RenderTarget.Factory;
-        var geo = factory.CreatePathGeometry();
+        var path = new SkiaSharp.SKPath { FillType = SkiaSharp.SKPathFillType.EvenOdd };
         bool any = false;
-        using (var sink = geo.Open())
-        {
-            foreach (var d in def.Paths)
-                foreach (var fig in SvgPath.Parse(d))
+        foreach (var d in def.Paths)
+            foreach (var fig in SvgPath.Parse(d))
+            {
+                var s = N(fig.Start);
+                path.MoveTo(s.X, s.Y);
+                foreach (var seg in fig.Segs)
                 {
-                    sink.BeginFigure(N(fig.Start), FigureBegin.Filled);
-                    foreach (var seg in fig.Segs)
+                    var e = N(seg.End);
+                    switch (seg.Kind)
                     {
-                        switch (seg.Kind)
-                        {
-                            case SvgPath.SegKind.Line: sink.AddLine(N(seg.End)); break;
-                            case SvgPath.SegKind.Cubic: sink.AddBezier(new BezierSegment { Point1 = N(seg.C1), Point2 = N(seg.C2), Point3 = N(seg.End) }); break;
-                            case SvgPath.SegKind.Quad: sink.AddQuadraticBezier(new QuadraticBezierSegment { Point1 = N(seg.C1), Point2 = N(seg.End) }); break;
-                        }
+                        case SvgPath.SegKind.Line:
+                            path.LineTo(e.X, e.Y);
+                            break;
+                        case SvgPath.SegKind.Cubic:
+                            var c1 = N(seg.C1); var c2 = N(seg.C2);
+                            path.CubicTo(c1.X, c1.Y, c2.X, c2.Y, e.X, e.Y);
+                            break;
+                        case SvgPath.SegKind.Quad:
+                            var q = N(seg.C1);
+                            path.QuadTo(q.X, q.Y, e.X, e.Y);
+                            break;
                     }
-                    sink.EndFigure(fig.Closed ? FigureEnd.Closed : FigureEnd.Open);
-                    any = true;
                 }
-            sink.Close();
-        }
-        if (any) return geo;
-        geo.Dispose();
+                if (fig.Closed) path.Close();
+                any = true;
+            }
+        if (any) return new DrawPath(path);
+        path.Dispose();
         return null;
     }
 
     /// <summary>Draw a named library icon at screen point p with radius r, by stamping its cached unit
     /// geometry via a per-call scale+translate transform.</summary>
-    private void DrawIcon(ID2D1RenderTarget rt, string shape, NumVec2 p, float r, ID2D1SolidColorBrush brush, bool filled)
+    private void DrawIcon(DrawTarget rt, string shape, NumVec2 p, float r, DrawBrush brush, bool filled)
     {
         var geo = GetGeometry(shape);
         if (geo is null) return;
@@ -987,7 +990,7 @@ public sealed class OverlayRenderer : IDisposable
     /// <summary>Clamp a 0..1 channel to a 0..255 byte (rounded).</summary>
     private static byte ToByte(float f) => (byte)Math.Clamp((int)MathF.Round(f * 255f), 0, 255);
 
-    private void DrawMap(ID2D1RenderTarget rt, RenderContext ctx)
+    private void DrawMap(DrawTarget rt, RenderContext ctx)
     {
         // MapCenter = window center + DefaultShift(0,-20) + Shift + manual offset.
         var center = new NumVec2(
@@ -1083,7 +1086,7 @@ public sealed class OverlayRenderer : IDisposable
     /// (grid → screen), drawn in that landmark's legend color (<see cref="PathColor"/>). Routes are
     /// precomputed per-target by RadarApp; here we just project and stroke them.
     /// </summary>
-    private void DrawPaths(ID2D1RenderTarget rt, RenderContext ctx, NumVec2 player, NumVec2 center, float scale)
+    private void DrawPaths(DrawTarget rt, RenderContext ctx, NumVec2 player, NumVec2 center, float scale)
     {
         foreach (var path in ctx.SelectedPaths)
         {
@@ -1124,7 +1127,7 @@ public sealed class OverlayRenderer : IDisposable
     /// <c>Bottom*</c> grows upward (chip pinned to the bottom edge, rows stacked above it). Every
     /// clickable rect is recorded into <see cref="LegendRowRects"/> with its Action string.</para>
     /// </summary>
-    private void DrawNavMenu(ID2D1RenderTarget rt, RenderContext ctx)
+    private void DrawNavMenu(DrawTarget rt, RenderContext ctx)
     {
         _legendRowRects.Clear();
 
@@ -1144,7 +1147,7 @@ public sealed class OverlayRenderer : IDisposable
         left = Math.Clamp(left, NavMargin, Math.Max(NavMargin, ctx.WindowWidth  - NavMargin - panelW));
         top  = Math.Clamp(top,  NavMargin, Math.Max(NavMargin, ctx.WindowHeight - NavMargin - panelH));
 
-        rt.FillRectangle(new Vortice.RawRectF(left, top, left + panelW, top + panelH), _bPanel!);
+        rt.FillRectangle(new RawRectF(left, top, left + panelW, top + panelH), _bPanel!);
 
         // Header row: when pinned to a Bottom corner the dropdown grows UPWARD, so the chip sits at
         // the BOTTOM of the panel and rows stack above it; otherwise the chip is at the top.
@@ -1153,7 +1156,7 @@ public sealed class OverlayRenderer : IDisposable
         // "POE2Radar" chip (click → toggle dropdown). Sized to its text so the corner buttons sit after it.
         const string chip = "POE2Radar";
         var chipW = chip.Length * 7.3f + 8f;
-        var chipRect = new Vortice.RawRectF(left + NavPad, headerY, left + NavPad + chipW, headerY + NavHeaderH - 2f);
+        var chipRect = new RawRectF(left + NavPad, headerY, left + NavPad + chipW, headerY + NavHeaderH - 2f);
         rt.FillRectangle(chipRect, _bPanel!);
         rt.DrawRectangle(chipRect, _bPlayer!, 1f);
         rt.DrawText((expanded ? "v " : "> ") + chip, _tf!,
@@ -1165,7 +1168,7 @@ public sealed class OverlayRenderer : IDisposable
         foreach (var (label, c) in NavCorners)
         {
             var bw = label.Length * 7.3f + 4f;
-            var bRect = new Vortice.RawRectF(bx, headerY, bx + bw, headerY + NavHeaderH - 2f);
+            var bRect = new RawRectF(bx, headerY, bx + bw, headerY + NavHeaderH - 2f);
             var sel = c == corner;
             rt.DrawText(label, _tf!, new Rect(bRect.Left, headerY + 2f, bRect.Right + 6f, headerY + NavHeaderH),
                 sel ? _bPlayer! : _bOther!, DrawTextOptions.Clip);
@@ -1180,12 +1183,12 @@ public sealed class OverlayRenderer : IDisposable
         var y = rowTop;
         foreach (var row in ctx.Legend)
         {
-            var rowRect = new Vortice.RawRectF(left, y, left + panelW, y + NavRowH);
+            var rowRect = new RawRectF(left, y, left + panelW, y + NavRowH);
             _legendRowRects.Add((rowRect, "target:" + row.Target.Id)); // click → TogglePathTarget(id)
 
             // Swatch: selected rows fill with their selection-order route color (matches DrawPaths);
             // unselected rows get just a dim outline so the click target is still visible.
-            var swatchRect = new Vortice.RawRectF(left + NavPad, y + 3f, left + NavPad + NavSwatch, y + 3f + NavSwatch);
+            var swatchRect = new RawRectF(left + NavPad, y + 3f, left + NavPad + NavSwatch, y + 3f + NavSwatch);
             if (row.IsSelected)
             {
                 _bPath!.Color = PathColor(row.ColorSlot);

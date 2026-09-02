@@ -37,7 +37,10 @@ public sealed class ProcessHandle : IDisposable
     {
         // PoE2 client process names (window title "Path of Exile 2"). Source: GameHelper2
         // GameProcessName.cs — see resources/community-offsets.md.
-        candidateNames ??= ["PathOfExile", "PathOfExileSteam", "PathOfExile_x64", "PathOfExile_KG", "PathOfExileEGS"];
+        candidateNames ??= PoeProcessNames.Stems;
+
+        if (OperatingSystem.IsLinux())
+            return AttachToPoELinux(candidateNames);
 
         foreach (var name in candidateNames)
         {
@@ -59,10 +62,14 @@ public sealed class ProcessHandle : IDisposable
 
     /// <summary>
     /// Open the given PID for read access, locate the main EXE module, and return a handle wrapper.
-    /// Throws Win32Exception on OpenProcess failure (typically ERROR_ACCESS_DENIED â€” re-run as admin).
+    /// Throws on OpenProcess / ptrace failure (typically access denied — re-run as admin, or on
+    /// Linux relax yama.ptrace_scope / set cap_sys_ptrace).
     /// </summary>
     public static ProcessHandle AttachToProcess(int processId, string? expectedProcessName = null)
     {
+        if (OperatingSystem.IsLinux())
+            return AttachToProcessLinux(processId, expectedProcessName);
+
         var handle = NativeMethods.OpenProcess(
             NativeMethods.PROCESS_VM_READ | NativeMethods.PROCESS_QUERY_LIMITED_INFORMATION,
             false,
@@ -83,6 +90,103 @@ public sealed class ProcessHandle : IDisposable
         {
             if (handle != 0) NativeMethods.CloseHandle(handle);
         }
+    }
+
+    private static ProcessHandle? AttachToPoELinux(IReadOnlyList<string> candidateNames)
+    {
+        foreach (var pid in FindLinuxPoePids(candidateNames))
+        {
+            try { return AttachToProcessLinux(pid, null); }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"Attach PID {pid} failed: {ex.Message}");
+            }
+        }
+        return null;
+    }
+
+    private static IEnumerable<int> FindLinuxPoePids(IReadOnlyList<string> candidateNames)
+    {
+        var found = new List<(int Pid, long ExeBytes)>();
+        string[] procDirs;
+        try { procDirs = Directory.GetDirectories("/proc"); }
+        catch { yield break; }
+
+        foreach (var dir in procDirs)
+        {
+            var name = Path.GetFileName(dir);
+            if (name.Length == 0 || !char.IsDigit(name[0])) continue;
+            if (!int.TryParse(name, out var pid) || pid <= 0) continue;
+
+            string cmdline;
+            try { cmdline = File.ReadAllText(Path.Combine(dir, "cmdline")).Replace('\0', ' '); }
+            catch { continue; }
+
+            var hit = false;
+            foreach (var stem in candidateNames)
+            {
+                if (cmdline.Contains(stem, StringComparison.OrdinalIgnoreCase)) { hit = true; break; }
+            }
+            if (!hit)
+            {
+                // Proton often truncates comm to 15 chars ("PathOfExileSte") and cmdline may be the
+                // wine-preloader path; maps are the source of truth.
+                try
+                {
+                    var maps = File.ReadAllText(Path.Combine(dir, "maps"));
+                    if (maps.Contains("PathOfExile", StringComparison.OrdinalIgnoreCase)
+                        && maps.Contains(".exe", StringComparison.OrdinalIgnoreCase))
+                        hit = true;
+                }
+                catch { /* ignore */ }
+            }
+            if (!hit) continue;
+
+            long exeBytes = 0;
+            try
+            {
+                foreach (var v in LinuxMemory.ReadMaps(pid))
+                {
+                    if (v.Path.Contains("PathOfExile", StringComparison.OrdinalIgnoreCase)
+                        && v.Path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                        exeBytes += (long)v.End - (long)v.Start;
+                }
+            }
+            catch { /* ignore */ }
+            found.Add((pid, exeBytes));
+        }
+
+        // Prefer the process that actually maps the game EXE (skip wineserver / steam helpers).
+        foreach (var (pid, _) in found.OrderByDescending(t => t.ExeBytes))
+            yield return pid;
+    }
+
+    private static ProcessHandle AttachToProcessLinux(int processId, string? expectedProcessName)
+    {
+        if (!Directory.Exists($"/proc/{processId}"))
+            throw new InvalidOperationException($"Process {processId} is not running.");
+
+        if (!LinuxMemory.TryFindMainModule(processId, expectedProcessName, out var modulePath, out var baseAddr, out var size))
+        {
+            throw new InvalidOperationException(
+                $"Could not find PathOfExile*.exe in /proc/{processId}/maps. {LinuxMemory.PtraceHint()}");
+        }
+
+        // Probe a few bytes so a ptrace_scope denial fails here with a useful message, not later
+        // as a mysterious AOB miss.
+        unsafe
+        {
+            byte b;
+            if (!LinuxMemory.TryRead(processId, baseAddr, &b, 1, out _))
+            {
+                throw new UnauthorizedAccessException(
+                    $"Cannot read PID {processId} memory. {LinuxMemory.PtraceHint()}");
+            }
+        }
+
+        var name = expectedProcessName ?? Path.GetFileNameWithoutExtension(modulePath.Replace('\\', '/'));
+        // On Linux the "handle" is the pid; CloseHandle is a no-op. MemoryReader uses ProcessId.
+        return new ProcessHandle(processId, name, modulePath, baseAddr, size, (nint)processId);
     }
 
     private static (string ModulePath, nint BaseAddress, uint Size) ResolveMainModule(nint handle, string? expectedName)
@@ -130,6 +234,17 @@ public sealed class ProcessHandle : IDisposable
         if (endAddress == 0) endAddress = unchecked((nint)UserModeAddressUpperBound);
         if (Handle == 0) throw new ObjectDisposedException(nameof(ProcessHandle));
 
+        if (OperatingSystem.IsLinux())
+        {
+            foreach (var v in LinuxMemory.ReadMaps(ProcessId))
+            {
+                if (v.End <= startAddress) continue;
+                if (v.Start >= endAddress) break;
+                yield return LinuxMemory.ToMbi(v);
+            }
+            yield break;
+        }
+
         var addr = startAddress;
         var mbiSize = (nuint)Marshal.SizeOf<NativeMethods.MemoryBasicInformation>();
         while (addr < endAddress)
@@ -166,7 +281,8 @@ public sealed class ProcessHandle : IDisposable
     {
         if (Handle != 0)
         {
-            NativeMethods.CloseHandle(Handle);
+            if (OperatingSystem.IsWindows())
+                NativeMethods.CloseHandle(Handle);
             Handle = 0;
         }
         GC.SuppressFinalize(this);

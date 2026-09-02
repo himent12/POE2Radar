@@ -8675,55 +8675,43 @@ static nint? TryGetHexArg(string[] args, string flag)
 
 static class Win
 {
-    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
     public struct RECT { public int left, top, right, bottom; }
-
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    public static extern nint GetForegroundWindow();
-
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    public static extern bool GetClientRect(nint h, out RECT r);
-
-    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
     public struct POINT { public int X, Y; }
 
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    public static extern bool GetCursorPos(out POINT p);
+    public static nint GetForegroundWindow() => POE2Radar.Core.Native.GameHost.GetForegroundWindow();
 
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    public static extern bool ScreenToClient(nint h, ref POINT p);
-
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    public static extern int GetSystemMetrics(int n);
-
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    public static extern bool EnumWindows(EnumWindowsProc cb, nint lparam);
-    public delegate bool EnumWindowsProc(nint h, nint lparam);
-
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    public static extern uint GetWindowThreadProcessId(nint h, out uint pid);
-
-    [System.Runtime.InteropServices.DllImport("user32.dll")]
-    public static extern bool IsWindowVisible(nint h);
-
-    // The largest visible top-level window owned by `pid` (the game's main window, even when not focused).
-    public static nint FindMainWindowForPid(uint pid)
+    public static bool GetClientRect(nint h, out RECT r)
     {
-        nint best = 0; long bestArea = 0;
-        EnumWindows((h, _) =>
-        {
-            if (!IsWindowVisible(h)) return true;
-            GetWindowThreadProcessId(h, out var wp);
-            if (wp != pid) return true;
-            if (GetClientRect(h, out var r))
-            {
-                long area = (long)r.right * r.bottom;
-                if (area > bestArea) { bestArea = area; best = h; }
-            }
-            return true;
-        }, 0);
-        return best;
+        r = default;
+        if (!POE2Radar.Core.Native.GameHost.TryGetWindowRect(h, out var rect)) return false;
+        r = new RECT { left = 0, top = 0, right = rect.Width, bottom = rect.Height };
+        return true;
     }
+
+    public static bool GetCursorPos(out POINT p)
+    {
+        var ok = POE2Radar.Core.Native.GameHost.GetCursorPos(out var gp);
+        p = new POINT { X = gp.X, Y = gp.Y };
+        return ok;
+    }
+
+    public static bool ScreenToClient(nint h, ref POINT p)
+    {
+        var gp = new POE2Radar.Core.Native.GameHost.Point { X = p.X, Y = p.Y };
+        var ok = POE2Radar.Core.Native.GameHost.ScreenToClient(h, ref gp);
+        p.X = gp.X; p.Y = gp.Y;
+        return ok;
+    }
+
+    public static int GetSystemMetrics(int n) => n switch
+    {
+        0 => POE2Radar.Core.Native.GameHost.GetScreenWidth(),
+        1 => POE2Radar.Core.Native.GameHost.GetScreenHeight(),
+        _ => 0,
+    };
+
+    public static nint FindMainWindowForPid(uint pid)
+        => POE2Radar.Core.Native.GameHost.FindWindowForProcess((int)pid);
 }
 
 readonly record struct VecLayout(int VecOff, int ElemSize, int SlotA, int SlotB);
