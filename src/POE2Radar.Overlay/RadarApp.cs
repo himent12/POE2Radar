@@ -1233,9 +1233,11 @@ public sealed class RadarApp : IDisposable
 
         var focused = _gameHwnd != 0 && GameHost.GetForegroundWindow() == _gameHwnd;
         var combatEntities = worldFresh ? snap.Entities : (IReadOnlyList<Poe2Live.EntityDot>)Array.Empty<Poe2Live.EntityDot>();
+        var inCombat = (_combatAssist || _botEnabled)
+            && CombatAssist.HasHostileInRange(combatEntities, player, _settings.CombatRange);
         TickCombatAssist(inGame, focused, player, combatEntities);
-        TickPathMove(inGame, focused, player, selectedPaths, playerWorld);
-        TickQuestUse(inGame, focused, player, playerWorld);
+        TickPathMove(inGame, focused, player, selectedPaths, playerWorld, inCombat);
+        TickQuestUse(inGame, focused, player, playerWorld, inCombat);
 
         _state = new RadarState(inGame, snap.AreaHash, snap.AreaLevel, map.IsVisible, map.Zoom, player,
             snap.Entities, snap.Landmarks, _hpPct, _manaPct, _esPct, _autoFlask, _flaskNote,
@@ -1833,7 +1835,7 @@ public sealed class RadarApp : IDisposable
     /// this method only taps (and aims the cursor for Click) and updates the status note.
     /// </summary>
     private void TickPathMove(bool inGame, bool focused, NumVec2 player,
-        IReadOnlyList<SelectedPath> paths, POE2Radar.Core.Game.Vector3? playerWorld)
+        IReadOnlyList<SelectedPath> paths, POE2Radar.Core.Game.Vector3? playerWorld, bool inCombat)
     {
         var now = DateTime.UtcNow;
         IReadOnlyList<(int x, int y)> waypoints = paths.Count > 0
@@ -1854,7 +1856,8 @@ public sealed class RadarApp : IDisposable
             KeyA: _settings.MoveKeyA,
             KeyS: _settings.MoveKeyS,
             KeyD: _settings.MoveKeyD,
-            ClickKey: _settings.MoveClickKey));
+            ClickKey: _settings.MoveClickKey,
+            PauseForCombat: inCombat));
         _moveNote = decision.Note;
         if (!decision.ShouldTap) return;
         if (PathMove.IsClick(_settings.MoveMethod))
@@ -1882,7 +1885,7 @@ public sealed class RadarApp : IDisposable
     /// the selected quest target. Armed by F3. Decision is <see cref="QuestFollow.DecideUse"/>.
     /// </summary>
     private void TickQuestUse(bool inGame, bool focused, NumVec2 player,
-        POE2Radar.Core.Game.Vector3? playerWorld)
+        POE2Radar.Core.Game.Vector3? playerWorld, bool inCombat)
     {
         var now = DateTime.UtcNow;
         var decision = QuestFollow.DecideUse(new QuestFollow.UseSnapshot(
@@ -1896,7 +1899,8 @@ public sealed class RadarApp : IDisposable
             NowUtc: now,
             LastFireUtc: _questUseFiredAt,
             CooldownMs: _settings.QuestUseCooldownMs,
-            UseKey: _settings.QuestUseKey));
+            UseKey: _settings.QuestUseKey,
+            PauseForCombat: inCombat));
         if (!decision.ShouldTap) return;
         if (decision.Vk is 0x01 or 0x02 or 0x04 or 0x05 or 0x06)
             AimClick((int)MathF.Round(_questFollowGx), (int)MathF.Round(_questFollowGy), playerWorld);

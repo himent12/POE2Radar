@@ -38,7 +38,8 @@ public static class QuestFollow
         DateTime NowUtc,
         DateTime LastFireUtc,
         int CooldownMs,
-        int UseKey);
+        int UseKey,
+        bool PauseForCombat = false);
 
     public readonly record struct UseDecision(bool ShouldTap, ushort Vk, string Note);
 
@@ -132,6 +133,7 @@ public static class QuestFollow
         if (!s.Armed) return new(false, 0, "OFF (F3)");
         if (!s.InGame) return new(false, 0, "paused (not in game)");
         if (!s.Focused) return new(false, 0, "paused (PoE2 not focused)");
+        if (s.PauseForCombat) return new(false, 0, "combat");
         if (!s.HasTarget) return new(false, 0, "armed (no target)");
         if (s.UseKey is < 1 or > 255) return new(false, 0, "armed");
 

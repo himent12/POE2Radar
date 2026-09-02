@@ -51,7 +51,8 @@ public sealed class QuestFollowTests
         DateTime? now = null,
         DateTime? lastFire = null,
         int cooldownMs = 400,
-        int useKey = VkUse)
+        int useKey = VkUse,
+        bool pauseForCombat = false)
         => new(
             Armed: armed,
             Focused: focused,
@@ -63,7 +64,8 @@ public sealed class QuestFollowTests
             NowUtc: now ?? T0,
             LastFireUtc: lastFire ?? DateTime.MinValue,
             CooldownMs: cooldownMs,
-            UseKey: useKey);
+            UseKey: useKey,
+            PauseForCombat: pauseForCombat);
 
     [Fact]
     public void ExitToken_selects_matching_transition_landmark()
@@ -289,5 +291,13 @@ public sealed class QuestFollowTests
             cooldownMs: 400));
         Assert.False(d.ShouldTap);
         Assert.Equal("armed", d.Note);
+    }
+
+    [Fact]
+    public void Use_pauseForCombat_skips()
+    {
+        var d = QuestFollow.DecideUse(UseBase(pauseForCombat: true));
+        Assert.False(d.ShouldTap);
+        Assert.Equal("combat", d.Note);
     }
 }

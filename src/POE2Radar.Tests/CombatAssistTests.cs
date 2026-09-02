@@ -241,4 +241,20 @@ public sealed class CombatAssistTests
         Assert.Equal((ushort)VkW, d.Vk);
         Assert.Equal(1, d.SkillIndex);
     }
+
+    [Fact]
+    public void HasHostileInRange_true_for_alive_hostile()
+    {
+        Assert.True(CombatAssist.HasHostileInRange(
+            [Monster(10, 0, reaction: 0)], new NumVec2(0, 0), 35));
+    }
+
+    [Fact]
+    public void HasHostileInRange_false_for_friendly_or_far()
+    {
+        Assert.False(CombatAssist.HasHostileInRange(
+            [Monster(5, 0, reaction: 1)], new NumVec2(0, 0), 35));
+        Assert.False(CombatAssist.HasHostileInRange(
+            [Monster(100, 0, reaction: 0)], new NumVec2(0, 0), 35));
+    }
 }

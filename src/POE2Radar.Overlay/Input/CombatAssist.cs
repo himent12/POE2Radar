@@ -46,7 +46,7 @@ public static class CombatAssist
         if (cursor < 0) cursor += n;
 
         var globalRange = Math.Max(0f, s.Range);
-        if (!HostileInRange(in s, globalRange)) return Idle(cursor, "armed");
+        if (!HasHostileInRange(s.Entities, s.PlayerGrid, globalRange)) return Idle(cursor, "armed");
 
         var last = s.LastFireUtc;
         var lastN = last?.Count ?? 0;
@@ -56,7 +56,7 @@ public static class CombatAssist
             var sk = skills![idx];
             if (sk.Key is < 1 or > 255) continue;
             var skillRange = sk.Range > 0f ? sk.Range : globalRange;
-            if (!HostileInRange(in s, skillRange)) continue;
+            if (!HasHostileInRange(s.Entities, s.PlayerGrid, skillRange)) continue;
             var firedAt = idx < lastN ? last![idx] : DateTime.MinValue;
             var cooldown = TimeSpan.FromMilliseconds(Math.Max(0, sk.CooldownMs));
             if (s.NowUtc - firedAt < cooldown) continue;
@@ -70,17 +70,22 @@ public static class CombatAssist
 
     /// <summary>
     /// Hostile = not friendly: <c>(Reaction &amp; 0x7F) != 1</c>. Only alive monsters count.
+    /// Bot master uses this to halt quest pathing while a fight is on.
     /// </summary>
-    private static bool HostileInRange(in Snapshot s, float range)
+    public static bool HasHostileInRange(
+        IReadOnlyList<Poe2Live.EntityDot>? entities,
+        NumVec2 playerGrid,
+        float range)
     {
-        var rangeSq = range * range;
-        foreach (var e in s.Entities)
+        if (entities is null) return false;
+        var rangeSq = Math.Max(0f, range) * Math.Max(0f, range);
+        foreach (var e in entities)
         {
             if (e.Category != Poe2Live.EntityCategory.Monster) continue;
             if (!e.IsAlive) continue;
             if ((e.Reaction & 0x7F) == 1) continue;
-            var dx = e.Grid.X - s.PlayerGrid.X;
-            var dy = e.Grid.Y - s.PlayerGrid.Y;
+            var dx = e.Grid.X - playerGrid.X;
+            var dy = e.Grid.Y - playerGrid.Y;
             if (dx * dx + dy * dy <= rangeSq) return true;
         }
         return false;

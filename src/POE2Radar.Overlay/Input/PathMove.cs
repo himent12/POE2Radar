@@ -30,7 +30,8 @@ public static class PathMove
         int KeyA,
         int KeyS,
         int KeyD,
-        int ClickKey);
+        int ClickKey,
+        bool PauseForCombat = false);
 
     public readonly record struct Decision(bool ShouldTap, ushort Vk, string Note, int TargetX = 0, int TargetY = 0);
 
@@ -43,6 +44,7 @@ public static class PathMove
         if (!s.Armed) return new(false, 0, "OFF (F5)");
         if (!s.InGame) return new(false, 0, "paused (not in game)");
         if (!s.Focused) return new(false, 0, "paused (PoE2 not focused)");
+        if (s.PauseForCombat) return new(false, 0, "combat");
 
         var pts = s.Waypoints;
         if (pts is not { Count: > 0 }) return new(false, 0, "no path");

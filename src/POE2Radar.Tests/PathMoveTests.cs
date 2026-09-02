@@ -20,6 +20,7 @@ public sealed class PathMoveTests
         int cooldownMs = 80,
         string method = "WASD",
         int clickKey = PathMove.VkClick,
+        bool pauseForCombat = false,
         params (int x, int y)[] waypoints)
         => new(
             Armed: armed,
@@ -36,7 +37,8 @@ public sealed class PathMoveTests
             KeyA: PathMove.VkA,
             KeyS: PathMove.VkS,
             KeyD: PathMove.VkD,
-            ClickKey: clickKey);
+            ClickKey: clickKey,
+            PauseForCombat: pauseForCombat);
 
     [Fact]
     public void NoPath_skips()
@@ -106,6 +108,15 @@ public sealed class PathMoveTests
         Assert.Equal("click", d.Note);
         Assert.Equal(30, d.TargetX);
         Assert.Equal(0, d.TargetY);
+    }
+
+    [Fact]
+    public void PauseForCombat_skipsClickTowardQuest()
+    {
+        var d = PathMove.Decide(Base(method: "Click", pauseForCombat: true, waypoints: [(0, 20)]));
+        Assert.False(d.ShouldTap);
+        Assert.Equal(0, d.Vk);
+        Assert.Equal("combat", d.Note);
     }
 
     [Fact]
