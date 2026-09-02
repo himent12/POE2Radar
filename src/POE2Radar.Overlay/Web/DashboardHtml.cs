@@ -390,6 +390,7 @@ internal static class DashboardHtml
       <div class="kv"><span>Map open</span><span id="kMap">—</span></div>
       <div class="kv"><span>Auto-flask</span><span id="kFlask">—</span></div>
       <div class="kv"><span>Bot</span><span id="kBot">—</span></div>
+      <div class="kv"><span>Map clear</span><span id="kClear">—</span></div>
       <div class="kv"><span>Combat assist</span><span id="kCombat">—</span></div>
       <div class="kv"><span>Quest follow</span><span id="kQuest">—</span></div>
       <div class="kv"><span>Path move</span><span id="kMove">—</span></div>
@@ -640,7 +641,7 @@ internal static class DashboardHtml
           </div>
           <div class="card">
             <h3>Combat / Bot</h3>
-            <div class="row"><div class="rl hint-row">F3 toggles the bot master in-game (quest follow + path move + combat). F4 toggles combat assist independently. F5 toggles path move. Arm bits cannot be armed from this page. Bot: <span id="botState">&mdash;</span></div></div>
+            <div class="row"><div class="rl hint-row">F3 toggles the bot master in-game (quest follow + path move + combat). F2 toggles map-clear (walk the zone; unique bosses first). F4 toggles combat assist independently. F5 toggles path move. Arm bits cannot be armed from this page. Bot: <span id="botState">&mdash;</span></div></div>
             <div class="row"><div class="rl">Attack range<small>grid units; tap only if a hostile monster is this close</small></div>
               <input class="numin" type="number" step="1" min="1" max="200" data-set="combatRange"></div>
             <div class="row"><div class="rl">Skill rotation<small>ordered keys (QWER); skip a skill while its cooldown is running; wraps. Optional range of 0 uses the attack range above</small></div></div>
@@ -648,7 +649,7 @@ internal static class DashboardHtml
             <div id="combatSkills"></div>
             <div class="row"><button type="button" class="addbtn" id="combatSkillAdd">Add skill</button></div>
             <div class="row"><div class="rl hint-row">F4 toggles combat assist in-game. It cannot be armed from this page. Status: <span id="combatState">&mdash;</span></div></div>
-            <div class="row"><div class="rl hint-row">When armed, each zone auto-selects a nav target from the area's zone notes (or a Transition / waypoint / boss landmark) and reuses the existing A* route. On arrival, taps interact/use. F3 toggles quest follow in-game. It cannot be armed from this page. Status: <span id="questFollowState">&mdash;</span></div></div>
+            <div class="row"><div class="rl hint-row">When armed, each zone auto-selects a nav target from the area's zone notes (or a Transition / waypoint / boss landmark) and reuses the existing A* route. A unique monster (boss) that spawns is targeted immediately. On arrival, taps interact/use. F3 toggles quest follow in-game. It cannot be armed from this page. Status: <span id="questFollowState">&mdash;</span></div></div>
             <div class="row"><div class="rl">Use / interact<small>key or mouse button tapped on arrival at the quest target</small></div>
               <select class="numin selin" data-set="questUseKey">
                 <option value="1">Left mouse</option>
@@ -683,6 +684,9 @@ internal static class DashboardHtml
               <input class="numin keyin" type="text" maxlength="1" data-set="moveKeyS"></div>
             <div class="row"><div class="rl">Move key D<small>grid +X</small></div>
               <input class="numin keyin" type="text" maxlength="1" data-set="moveKeyD"></div>
+            <div class="row"><div class="rl hint-row">F2 toggles map-clear in-game (walks unexplored walkable cells; unique bosses and live hostiles first; pauses quest follow while on). It cannot be armed from this page. Status: <span id="mapClearState">&mdash;</span></div></div>
+            <div class="row"><div class="rl">Clear stamp radius<small>grid cells marked visited around the player each tick while map-clear is on</small></div>
+              <input class="numin" type="number" step="1" min="4" max="64" data-set="mapClearStampRadius"></div>
             <div class="row"><div class="rl hint-row">F5 toggles path move in-game (F3 quest follow also arms it). It cannot be armed from this page. Status: <span id="pathMoveState">&mdash;</span></div></div>
           </div>
         </div>
@@ -1633,6 +1637,8 @@ function renderState(){
   const fs=$('#flaskState'); if(fs) fs.textContent=(s.autoFlask?'ON':'OFF')+(s.flask?' · '+s.flask:'');
   $('#kBot').textContent=(s.bot?'on':'off')+(s.botNote?' · '+s.botNote:'');
   const bs=$('#botState'); if(bs) bs.textContent=(s.bot?'ON':'OFF')+(s.botNote?' · '+s.botNote:'');
+  $('#kClear').textContent=(s.mapClear?'on':'off')+(s.clear?' · '+s.clear:'');
+  const cls=$('#mapClearState'); if(cls) cls.textContent=(s.mapClear?'ON':'OFF')+(s.clear?' · '+s.clear:'');
   $('#kCombat').textContent=(s.combatAssist?'on':'off')+(s.combat?' · '+s.combat:'');
   const cs=$('#combatState'); if(cs) cs.textContent=(s.combatAssist?'ON':'OFF')+(s.combat?' · '+s.combat:'');
   $('#kQuest').textContent=(s.questFollow?'on':'off')+(s.quest?' · '+s.quest:'');

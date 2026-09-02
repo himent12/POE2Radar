@@ -1215,13 +1215,13 @@ public sealed class OverlayRenderer : IDisposable
     private static readonly Color4 ColOff = new(0.55f, 0.50f, 0.42f, 0.85f);
 
     /// <summary>
-    /// Live ON/OFF strip for bot/combat/move/quest/flask. Top-right unless the nav menu is
+    /// Live ON/OFF strip for bot/clear/combat/move/quest/flask. Top-right unless the nav menu is
     /// already pinned there, in which case it drops to the bottom-right. Not clickable.
     /// </summary>
     private void DrawBotStatus(DrawTarget rt, RenderContext ctx)
     {
         const float w = 228f, rowH = 16f, pad = 6f, titleH = 16f, dot = 7f;
-        const int n = 5;
+        const int n = 6;
         var h = pad * 2f + titleH + n * rowH;
         var x = ctx.WindowWidth - NavMargin - w;
         var y = NavMargin;
@@ -1232,10 +1232,11 @@ public sealed class OverlayRenderer : IDisposable
         rt.DrawText("STATUS", _tf!, new Rect(x + pad, y + pad, x + w - pad, y + pad + titleH), _bText!, DrawTextOptions.Clip);
 
         DrawStatusRow(rt, x, y + pad + titleH, w, rowH, pad, dot, "F3 Bot", ctx.BotEnabled, ctx.BotNote);
-        DrawStatusRow(rt, x, y + pad + titleH + rowH, w, rowH, pad, dot, "F4 Combat", ctx.CombatAssist, ctx.CombatNote);
-        DrawStatusRow(rt, x, y + pad + titleH + rowH * 2, w, rowH, pad, dot, "F5 Move", ctx.PathMove, ctx.PathMoveNote);
-        DrawStatusRow(rt, x, y + pad + titleH + rowH * 3, w, rowH, pad, dot, "Quest", ctx.QuestFollow, ctx.QuestFollowNote);
-        DrawStatusRow(rt, x, y + pad + titleH + rowH * 4, w, rowH, pad, dot, "F8 Flask", ctx.AutoFlask, ctx.FlaskNote);
+        DrawStatusRow(rt, x, y + pad + titleH + rowH, w, rowH, pad, dot, "F2 Clear", ctx.MapClear, ctx.MapClearNote);
+        DrawStatusRow(rt, x, y + pad + titleH + rowH * 2, w, rowH, pad, dot, "F4 Combat", ctx.CombatAssist, ctx.CombatNote);
+        DrawStatusRow(rt, x, y + pad + titleH + rowH * 3, w, rowH, pad, dot, "F5 Move", ctx.PathMove, ctx.PathMoveNote);
+        DrawStatusRow(rt, x, y + pad + titleH + rowH * 4, w, rowH, pad, dot, "Quest", ctx.QuestFollow, ctx.QuestFollowNote);
+        DrawStatusRow(rt, x, y + pad + titleH + rowH * 5, w, rowH, pad, dot, "F8 Flask", ctx.AutoFlask, ctx.FlaskNote);
     }
 
     private void DrawStatusRow(DrawTarget rt, float x, float y, float w, float rowH, float pad, float dot,

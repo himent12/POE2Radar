@@ -231,13 +231,21 @@ public sealed class RadarApp : IDisposable
     private volatile string _botNote = "OFF (F3)";
     // Quest follow (opt-in nav). Armed by F3 bot master. Selects a nav target per zone;
     // MaintainRoutes owns the A*; DecideUse taps interact on arrival. Not writable via the dashboard.
+    // Paused while map-clear (F2) is on.
     private volatile bool _questFollow;
     private DateTime _nextQuestToggleAt = DateTime.MinValue;
     private volatile string _questFollowNote = "OFF (F3)";
-    private volatile string? _questFollowId; // last auto-selected quest target id
+    private volatile string? _questFollowId; // last auto-selected quest/clear target id
     private volatile bool _questFollowHasGrid;
     private volatile float _questFollowGx, _questFollowGy;
     private DateTime _questUseFiredAt = DateTime.MinValue;
+    // Map clear (opt-in nav). F2 kill-switch. Walks unexplored walkable cells; unique bosses and
+    // live hostiles take priority. Arms path move + combat. Not writable via the dashboard.
+    private volatile bool _mapClear;
+    private DateTime _nextMapClearToggleAt = DateTime.MinValue;
+    private volatile string _mapClearNote = "OFF (F2)";
+    private readonly HashSet<long> _mapClearVisited = new();
+    private readonly List<MapClear.MobHint> _clearMobs = new();
     // Path move (opt-in input). Same gates as combat assist; F5 kill-switch. Default OFF.
     // Also armed while F3 bot master is on. Walks the first SelectedPath.
     private bool _moveEnabled;
@@ -267,6 +275,7 @@ public sealed class RadarApp : IDisposable
     // at the palette size so colors stay distinct (and per-tick planning stays bounded). On a zone
     // change the selection is cleared, then the persistent auto-nav patterns re-select matching
     // targets in the new zone.
+    private const int MapClearVk = 0x71; // F2
     private const int QuestFollowVk = 0x72; // F3
     private const int PathMoveVk = 0x74; // F5
     private const int AddNearestVk = 0x75; // F6
@@ -311,8 +320,10 @@ public sealed class RadarApp : IDisposable
         _autoFlask = _settings.AutoFlaskEnabled;   // restore the persisted F8 state (default ON)
         _combatAssist = _settings.CombatAssistEnabled; // restore F4 state (default OFF)
         _botEnabled = _settings.BotEnabled || _settings.QuestFollowEnabled; // F3 master (default OFF)
-        _questFollow = _botEnabled;                    // quest follow rides the bot master
-        if (_botEnabled) { _botNote = "armed"; _questFollowNote = "armed"; }
+        _mapClear = _settings.MapClearEnabled;         // F2 map-clear (default OFF)
+        _questFollow = _botEnabled && !_mapClear;      // quest follow rides the bot master; F2 pauses it
+        if (_botEnabled) { _botNote = "armed"; _questFollowNote = _questFollow ? "armed" : "paused (clear)"; }
+        if (_mapClear) _mapClearNote = "armed";
         _moveEnabled = _settings.MoveEnabled;          // restore F5 state (default OFF)
         Console.WriteLine($"Settings: {RadarSettings.FilePath}");
         Console.WriteLine($"Entity names: {EntityNameResolver.Shared.Count} mappings; zones: {ZoneGuide.Shared.Count}");
@@ -590,7 +601,7 @@ public sealed class RadarApp : IDisposable
         try { _api.Start(); Console.WriteLine($"API on http://localhost:{_settings.ApiPort} (dashboard at /)"); }
         catch (Exception ex) { Console.Error.WriteLine($"API server disabled: {ex.Message}"); }
         Console.WriteLine("Hotkeys: F6=add nearest path target  F7=clear path targets  "
-                          + "F8=auto-flask  F4=combat assist  F3=bot (quest+move+combat)  F5=path move  F9=quit  F12=open dashboard");
+                          + "F8=auto-flask  F4=combat assist  F3=bot (quest+move+combat)  F2=map clear  F5=path move  F9=quit  F12=open dashboard");
         Console.WriteLine("         F10 (Atlas open) = inspect hovered tile (dumps map name + code + content"
                           + " to console for web-UI filters) and set route START->END (3rd press resets)");
         // Best-effort version check against GitHub (non-blocking; never fails startup).
@@ -1233,7 +1244,7 @@ public sealed class RadarApp : IDisposable
 
         var focused = _gameHwnd != 0 && GameHost.GetForegroundWindow() == _gameHwnd;
         var combatEntities = worldFresh ? snap.Entities : (IReadOnlyList<Poe2Live.EntityDot>)Array.Empty<Poe2Live.EntityDot>();
-        var inCombat = (_combatAssist || _botEnabled)
+        var inCombat = CombatArmed
             && CombatAssist.HasHostileInRange(combatEntities, player, _settings.CombatRange);
         TickCombatAssist(inGame, focused, player, combatEntities);
         TickPathMove(inGame, focused, player, selectedPaths, playerWorld, inCombat);
@@ -1243,8 +1254,8 @@ public sealed class RadarApp : IDisposable
             snap.Entities, snap.Landmarks, _hpPct, _manaPct, _esPct, _autoFlask, _flaskNote,
             snap.AreaCode, _charName, snap.CharLevel, _worldMs, _renderMs, mr.Markers, _fps,
             ex.Open, ex.Summary, ex.Offered, ex.Wanted, ex.HaveQty, ex.FillNote,
-            _combatAssist || _botEnabled, _combatNote, _questFollow, _questFollowNote,
-            _moveEnabled || _botEnabled, _moveNote, _botEnabled, _botNote);
+            CombatArmed, _combatNote, _questFollow, _questFollowNote,
+            MoveArmed, _moveNote, _botEnabled, _botNote, _mapClear, _mapClearNote);
 
         var realActive = _gameHwnd != 0 && GameHost.GetForegroundWindow() == _gameHwnd;
         // "Always show" draws the overlay even when PoE2 isn't focused (for dashboard calibration).
@@ -1344,12 +1355,14 @@ public sealed class RadarApp : IDisposable
             AutoFlask: _autoFlask,
             BotEnabled: _botEnabled,
             BotNote: _botNote,
-            CombatAssist: _combatAssist || _botEnabled,
+            CombatAssist: CombatArmed,
             CombatNote: _combatNote,
             QuestFollow: _questFollow,
             QuestFollowNote: _questFollowNote,
-            PathMove: _moveEnabled || _botEnabled,
-            PathMoveNote: _moveNote);
+            PathMove: MoveArmed,
+            PathMoveNote: _moveNote,
+            MapClear: _mapClear,
+            MapClearNote: _mapClearNote);
         // The overlay is only visible while PoE2 is foreground (Render draws nothing otherwise). Skip
         // the whole draw + UpdateLayeredWindow blit when unfocused — but render once on the focus-loss
         // transition so the last visible frame is cleared rather than left frozen on screen.
@@ -1491,10 +1504,11 @@ public sealed class RadarApp : IDisposable
             OnAreaChanged(areaHash);
         }
 
-        // Quest follow: when armed, auto-select one nav target from zone notes (or a
-        // Transition/waypoint/boss fallback) so MaintainRoutes can A* it. Runs every world
-        // tick so a landmark that appears after zone-in still gets picked.
-        ApplyQuestFollow(areaCode);
+        // Quest follow / map-clear: when armed, auto-select one nav target so MaintainRoutes
+        // can A* it. Map-clear (F2) overrides quest follow. Runs every world tick so a boss
+        // that spawns after zone-in still gets picked.
+        if (_mapClear) ApplyMapClear(areaCode, player);
+        else ApplyQuestFollow(areaCode, player);
 
         // Auto-deselect entity targets the game has marked complete (e.g. a looted expedition):
         // they're already gone from the map + nav-target list, but the still-present (faded)
@@ -1808,7 +1822,7 @@ public sealed class RadarApp : IDisposable
             specs[i] = new CombatAssist.Skill(sk.Key, sk.CooldownMs, sk.Range);
         }
         var decision = CombatAssist.Decide(new CombatAssist.Snapshot(
-            Armed: _combatAssist || _botEnabled,
+            Armed: CombatArmed,
             Focused: focused,
             InGame: inGame,
             PlayerGrid: player,
@@ -1851,7 +1865,7 @@ public sealed class RadarApp : IDisposable
             ? paths[0].Points
             : Array.Empty<(int x, int y)>();
         var decision = PathMove.Decide(new PathMove.Snapshot(
-            Armed: _moveEnabled || _botEnabled,
+            Armed: MoveArmed,
             Focused: focused,
             InGame: inGame,
             PlayerGrid: player,
@@ -1918,7 +1932,10 @@ public sealed class RadarApp : IDisposable
         _questFollowNote = "use";
     }
 
-    /// <summary>Poll overlay hotkeys: F8 auto-flask toggle, F4 combat, F3 bot master (quest follow), F5 path move, F9 quit, F12 dashboard, F6/F7 path targets.
+    private bool CombatArmed => _combatAssist || _botEnabled || _mapClear;
+    private bool MoveArmed => _moveEnabled || _botEnabled || _mapClear;
+
+    /// <summary>Poll overlay hotkeys: F8 auto-flask toggle, F4 combat, F3 bot master (quest follow), F2 map clear, F5 path move, F9 quit, F12 dashboard, F6/F7 path targets.
     /// Map calibration is web-config-only (no in-game keys, to avoid accidental presses).</summary>
     private void HandleHotkeys()
     {
@@ -1941,20 +1958,37 @@ public sealed class RadarApp : IDisposable
             Console.WriteLine($"\nCombat assist: {(_combatAssist ? "ON" : "OFF")}");
         }
         // F3 bot master (debounced). Arms quest follow + path move + combat. Not writable via the dashboard.
-        // F4 combat stays independently toggleable (OR'd with the bot). F8 flask stays independent.
+        // F4 combat stays independently toggleable (OR'd with the bot). F2 map-clear pauses quest follow.
+        // F8 flask stays independent.
         if (Down(QuestFollowVk) && DateTime.UtcNow >= _nextQuestToggleAt)
         {
             _botEnabled = !_botEnabled;
-            _questFollow = _botEnabled;
+            _questFollow = _botEnabled && !_mapClear;
             _nextQuestToggleAt = DateTime.UtcNow.AddMilliseconds(300);
             _settings.BotEnabled = _botEnabled;
-            _settings.QuestFollowEnabled = _questFollow;
+            _settings.QuestFollowEnabled = _botEnabled;
             _settings.Save();
             _botNote = _botEnabled ? "armed" : "OFF (F3)";
-            _questFollowNote = _questFollow ? "armed" : "OFF (F3)";
-            if (!_questFollow) { _questFollowId = null; _questFollowHasGrid = false; }
-            _moveNote = _moveEnabled || _botEnabled ? "armed" : "OFF (F5)";
+            _questFollowNote = _questFollow ? "armed" : (_botEnabled ? "paused (clear)" : "OFF (F3)");
+            if (!_questFollow && !_mapClear) { _questFollowId = null; _questFollowHasGrid = false; }
+            _moveNote = MoveArmed ? "armed" : "OFF (F5)";
             Console.WriteLine($"\nBot (quest follow): {(_botEnabled ? "ON" : "OFF")}");
+        }
+        // F2 map-clear (debounced). Walks unexplored cells; unique bosses + hostiles first.
+        // Arms path move + combat. Pauses F3 quest follow while on. Not writable via the dashboard.
+        if (Down(MapClearVk) && DateTime.UtcNow >= _nextMapClearToggleAt)
+        {
+            _mapClear = !_mapClear;
+            _questFollow = _botEnabled && !_mapClear;
+            _nextMapClearToggleAt = DateTime.UtcNow.AddMilliseconds(300);
+            _settings.MapClearEnabled = _mapClear;
+            _settings.Save();
+            _mapClearNote = _mapClear ? "armed" : "OFF (F2)";
+            _questFollowNote = _questFollow ? "armed" : (_botEnabled ? "paused (clear)" : "OFF (F3)");
+            _questFollowId = null;
+            _questFollowHasGrid = false;
+            _moveNote = MoveArmed ? "armed" : "OFF (F5)";
+            Console.WriteLine($"\nMap clear: {(_mapClear ? "ON" : "OFF")}");
         }
         // F5 master kill-switch for path move (debounced). Not writable via the dashboard.
         if (Down(PathMoveVk) && DateTime.UtcNow >= _nextMoveToggleAt)
@@ -1963,7 +1997,7 @@ public sealed class RadarApp : IDisposable
             _nextMoveToggleAt = DateTime.UtcNow.AddMilliseconds(300);
             _settings.MoveEnabled = _moveEnabled;
             _settings.Save();
-            _moveNote = _moveEnabled || _botEnabled ? "armed" : "OFF (F5)";
+            _moveNote = MoveArmed ? "armed" : "OFF (F5)";
             Console.WriteLine($"\nPath move: {(_moveEnabled ? "ON" : "OFF")}");
         }
         // F9 quits the overlay (besides the tray-icon Exit).
@@ -2136,8 +2170,9 @@ public sealed class RadarApp : IDisposable
     private void OnAreaChanged(uint areaHash)
     {
         int count; bool restored;
-        var follow = _questFollow;
+        var follow = _questFollow || _mapClear;
         _questFollowId = null;
+        _mapClearVisited.Clear();
         lock (_navLock)
         {
             // Save what was selected in the zone we're leaving, keyed by ITS instance hash.
@@ -2147,7 +2182,7 @@ public sealed class RadarApp : IDisposable
             _selectionCapWarned = false;
             _selectionAreaHash = areaHash;
 
-            // Quest follow owns the selection this visit — ApplyQuestFollow fills it from zone notes.
+            // Quest follow / map-clear owns the selection this visit — the picker fills it.
             // Skip restore/auto-path so the bot doesn't inherit leftover AutoPath targets.
             if (follow)
             {
@@ -2191,14 +2226,15 @@ public sealed class RadarApp : IDisposable
 
     /// <summary>
     /// When quest follow is armed, pick one nav target from the current area's zone notes
-    /// (or a Transition/waypoint/boss fallback) and select it so <see cref="MaintainRoutes"/>
-    /// draws/A*s the route. Pure pick lives in <see cref="QuestFollow.PickTarget"/>.
+    /// (or a live unique boss, then a Transition/waypoint/boss fallback) and select it so
+    /// <see cref="MaintainRoutes"/> draws/A*s the route. Pure pick lives in
+    /// <see cref="QuestFollow.PickTarget"/>. Unique monsters win the moment they spawn.
     /// </summary>
-    private void ApplyQuestFollow(string areaCode)
+    private void ApplyQuestFollow(string areaCode, NumVec2 player)
     {
         if (!_questFollow)
         {
-            _questFollowNote = "OFF (F3)";
+            _questFollowNote = _botEnabled && _mapClear ? "paused (clear)" : "OFF (F3)";
             _questFollowHasGrid = false;
             return;
         }
@@ -2215,20 +2251,63 @@ public sealed class RadarApp : IDisposable
             _questEnt.Add(new QuestFollow.EntityHint(
                 "e:" + e.Id, EntityLabel(e.Metadata), e.Metadata, e.Poi,
                 e.Category == Poe2Live.EntityCategory.Monster && e.Rarity == Poe2Live.Rarity.Unique,
-                e.Category));
+                e.Category, e.Grid));
         }
 
-        var id = QuestFollow.PickTarget(areaCode, notes, _questLm, _questEnt);
+        var id = QuestFollow.PickTarget(areaCode, notes, _questLm, _questEnt, player);
+        _questFollowNote = SetAutoNavTarget(id, "armed (no target)", "Quest follow");
+    }
+
+    /// <summary>
+    /// When map-clear is armed, stamp visited walkable cells around the player and pick the
+    /// next clear target (unique boss, nearest hostile, then unexplored frontier). Pure pick
+    /// lives in <see cref="MapClear.PickTarget"/>.
+    /// </summary>
+    private void ApplyMapClear(string areaCode, NumVec2 player)
+    {
+        if (!_mapClear)
+        {
+            _mapClearNote = "OFF (F2)";
+            return;
+        }
+
+        var terrain = _terrain;
+        if (terrain is { Walkable: { } walk, Width: var w, Height: var h } && w > 0 && h > 0)
+            MapClear.StampVisited(_mapClearVisited, walk, w, h, player, _settings.MapClearStampRadius);
+
+        _clearMobs.Clear();
+        foreach (var e in _entities)
+        {
+            if (!e.IsAlive || e.IconComplete) continue;
+            if (e.Category != Poe2Live.EntityCategory.Monster || e.IsFriendly) continue;
+            _clearMobs.Add(new MapClear.MobHint(
+                "e:" + e.Id, e.Grid,
+                e.Rarity == Poe2Live.Rarity.Unique));
+        }
+
+        var id = MapClear.PickTarget(
+            areaCode, player,
+            terrain?.Walkable, terrain?.Width ?? 0, terrain?.Height ?? 0,
+            _mapClearVisited, _clearMobs, _questFollowId);
+        _mapClearNote = SetAutoNavTarget(id, terrain is null ? "armed (no terrain)" : "armed (cleared)", "Map clear");
+    }
+
+    /// <summary>Select <paramref name="id"/> as the bot's A* target (quest follow or map-clear).</summary>
+    private string SetAutoNavTarget(string? id, string noneNote, string logPrefix)
+    {
         if (id is null)
         {
-            _questFollowNote = "armed (no target)";
             _questFollowHasGrid = false;
-            return;
+            if (_questFollowId is { } stale)
+            {
+                lock (_navLock) _selectedIds.Remove(stale);
+                _questFollowId = null;
+            }
+            return noneNote;
         }
 
         PublishQuestGrid(id);
         var label = TargetLabel(id);
-        _questFollowNote = "→ " + label;
         if (string.Equals(_questFollowId, id, StringComparison.Ordinal))
         {
             lock (_navLock)
@@ -2236,7 +2315,7 @@ public sealed class RadarApp : IDisposable
                 if (!_selectedIds.Contains(id) && _selectedIds.Count < MaxSelectedTargets)
                     _selectedIds.Insert(0, id);
             }
-            return;
+            return "→ " + label;
         }
 
         lock (_navLock)
@@ -2250,7 +2329,8 @@ public sealed class RadarApp : IDisposable
             }
         }
         _questFollowId = id;
-        Console.WriteLine($"\nQuest follow: {label}");
+        Console.WriteLine($"\n{logPrefix}: {label}");
+        return "→ " + label;
     }
 
     private void PublishQuestGrid(string id)
@@ -2469,6 +2549,12 @@ public sealed class RadarApp : IDisposable
             return false;
         }
 
+        if (MapClear.TryParseCell(id, out var cx, out var cy))
+        {
+            grid = new NumVec2(cx, cy);
+            return true;
+        }
+
         return false;
     }
 
@@ -2545,6 +2631,7 @@ public sealed class RadarApp : IDisposable
     private string TargetLabel(string id)
     {
         foreach (var t in _navTargets) if (t.Id == id) return t.Name;
+        if (MapClear.TryParseCell(id, out var x, out var y)) return $"unexplored ({x},{y})";
         return id;
     }
 

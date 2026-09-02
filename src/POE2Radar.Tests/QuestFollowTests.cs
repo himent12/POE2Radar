@@ -17,8 +17,9 @@ public sealed class QuestFollowTests
     private static QuestFollow.EntityHint Ent(
         string id, string name, string meta,
         bool poi = false, bool unique = false,
-        Poe2Live.EntityCategory cat = Poe2Live.EntityCategory.Monster)
-        => new(id, name, meta, poi, unique, cat);
+        Poe2Live.EntityCategory cat = Poe2Live.EntityCategory.Monster,
+        float gx = 0, float gy = 0)
+        => new(id, name, meta, poi, unique, cat, new NumVec2(gx, gy));
 
     private static readonly QuestFollow.LandmarkHint GrelwoodExit = Tile(
         "t:Metadata/Terrain/Woods/AreaTransitions/Clearfell_OldForest_Transition_01.tdtx:1-y:0@40,10",
@@ -136,6 +137,37 @@ public sealed class QuestFollowTests
             [cemetery],
             []);
         Assert.Equal(cemetery.Id, id);
+    }
+
+    [Fact]
+    public void Unique_monster_beats_directed_exit()
+    {
+        var boss = Ent("e:7", "Beira", "Metadata/Monsters/Beira", unique: true, gx: 8, gy: 0);
+        var id = QuestFollow.PickTarget(
+            "G1_2",
+            "Exit > The Grelwood",
+            [GrelwoodExit],
+            [boss],
+            new NumVec2(0, 0));
+        Assert.Equal("e:7", id);
+    }
+
+    [Fact]
+    public void PickBoss_nearest_unique()
+    {
+        var far = Ent("e:1", "Far", "Metadata/Monsters/Far", unique: true, gx: 40, gy: 0);
+        var near = Ent("e:2", "Near", "Metadata/Monsters/Near", unique: true, gx: 5, gy: 0);
+        var white = Ent("e:3", "Pack", "Metadata/Monsters/Pack", unique: false, gx: 1, gy: 0);
+        var id = QuestFollow.PickBoss([far, near, white], new NumVec2(0, 0));
+        Assert.Equal("e:2", id);
+    }
+
+    [Fact]
+    public void PickBoss_none_when_no_unique()
+    {
+        var white = Ent("e:3", "Pack", "Metadata/Monsters/Pack", unique: false, gx: 1, gy: 0);
+        Assert.Null(QuestFollow.PickBoss([white], NumVec2.Zero));
+        Assert.Null(QuestFollow.PickBoss([], NumVec2.Zero));
     }
 
     [Fact]

@@ -201,6 +201,13 @@ public sealed class RadarSettings
     public float QuestUseRadius { get; set; } = 6f;
     public int QuestUseCooldownMs { get; set; } = 400;
 
+    // ── Map clear (F2 in-game kill-switch). Default OFF. MapClearEnabled is NOT writable via the
+    //    HTTP API — same as BotEnabled / CombatAssistEnabled. When armed, path move + combat are
+    //    armed and the bot walks unexplored walkable cells (unique bosses first). F3 quest follow
+    //    is paused while this is on. Stamp radius is grid cells marked visited around the player. ──
+    public bool MapClearEnabled { get; set; }
+    public int MapClearStampRadius { get; set; } = 16;
+
     // ── Path move (F5 in-game kill-switch). Default OFF. MoveEnabled is NOT writable
     //    via the HTTP API — same as CombatAssistEnabled / QuestFollowEnabled / BotEnabled. When armed
     //    (F5 or F3 bot master), taps WASD (or the configured method) toward the next waypoint of the

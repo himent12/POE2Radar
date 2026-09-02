@@ -18,14 +18,16 @@ public static class QuestFollow
     public readonly record struct LandmarkHint(string Id, string Name, string? CuratedName, string Path);
 
     /// <summary>A live entity the picker can select. <see cref="Id"/> is the nav id
-    /// (<c>e:</c> + entity id). <see cref="Name"/> is the display label (curated or prettified).</summary>
+    /// (<c>e:</c> + entity id). <see cref="Name"/> is the display label (curated or prettified).
+    /// <see cref="Grid"/> is the live position used to pick the nearest unique boss.</summary>
     public readonly record struct EntityHint(
         string Id,
         string Name,
         string Metadata,
         bool Poi,
         bool UniqueMonster,
-        Poe2Live.EntityCategory Category);
+        Poe2Live.EntityCategory Category,
+        NumVec2 Grid = default);
 
     public readonly record struct UseSnapshot(
         bool Armed,
@@ -60,18 +62,42 @@ public static class QuestFollow
         [" usually", " then ", " for ", " or ", " if ", " to ", ",", ";", " — ", " – "];
 
     /// <summary>
+    /// Nearest live unique monster (boss), or null. Quest follow and map-clear both retarget
+    /// onto a unique the moment it appears in the entity list.
+    /// </summary>
+    public static string? PickBoss(IReadOnlyList<EntityHint> entities, NumVec2 player)
+    {
+        if (entities is null) return null;
+        string? best = null;
+        var bestD = float.MaxValue;
+        foreach (var e in entities)
+        {
+            if (!e.UniqueMonster) continue;
+            var dx = e.Grid.X - player.X;
+            var dy = e.Grid.Y - player.Y;
+            var d = dx * dx + dy * dy;
+            if (d < bestD) { bestD = d; best = e.Id; }
+        }
+        return best;
+    }
+
+    /// <summary>
     /// Pick a nav-target id for this zone, or null when nothing matches.
-    /// Towns/hideouts return null. Matching order: note <c>Exit/Checkpoint/Waypoint &gt; name</c>
-    /// tokens against landmarks (transitions first) then entity POIs; then any landmark/POI whose
-    /// name appears in the notes; then a Transition / waypoint / boss fallback.
+    /// Towns/hideouts return null. Matching order: live unique boss; note
+    /// <c>Exit/Checkpoint/Waypoint &gt; name</c> tokens against landmarks (transitions first)
+    /// then entity POIs; then any landmark/POI whose name appears in the notes; then a
+    /// Transition / waypoint / boss fallback.
     /// </summary>
     public static string? PickTarget(
         string areaCode,
         string notes,
         IReadOnlyList<LandmarkHint> landmarks,
-        IReadOnlyList<EntityHint> entities)
+        IReadOnlyList<EntityHint> entities,
+        NumVec2 player = default)
     {
         if (IsTownOrHideout(areaCode)) return null;
+        var boss = PickBoss(entities, player);
+        if (boss is not null) return boss;
         notes ??= "";
         var directed = ExtractDirected(notes);
 

@@ -242,4 +242,6 @@ public sealed record RenderContext(
     bool QuestFollow = false,
     string QuestFollowNote = "",
     bool PathMove = false,
-    string PathMoveNote = "");
+    string PathMoveNote = "",
+    bool MapClear = false,
+    string MapClearNote = "");

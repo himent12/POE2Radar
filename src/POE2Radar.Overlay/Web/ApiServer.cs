@@ -156,6 +156,7 @@ public sealed class ApiServer : IDisposable
                     questFollow = s.QuestFollow, quest = s.QuestFollowNote,
                     pathMove = s.PathMove, move = s.PathMoveNote,
                     bot = s.Bot, botNote = s.BotNote,
+                    mapClear = s.MapClear, clear = s.MapClearNote,
                     player = new { x = s.Player.X, y = s.Player.Y },
                     entityCount = s.Entities.Count,
                     poiCount = s.Entities.Count(e => e.Poi),
@@ -473,7 +474,7 @@ public sealed class ApiServer : IDisposable
     /// The settings the dashboard may read AND write. Covers radar/visual options plus auto-flask
     /// tuning (thresholds, cooldowns, keys) and bot-profile tunables (combat range/skills, move
     /// keys/CDs). Arm flags (autoFlaskEnabled, combatAssistEnabled, questFollowEnabled, moveEnabled,
-    /// botEnabled) are omitted — F-keys only. All writes are loopback-Host-gated (see Handle). The
+    /// botEnabled, mapClearEnabled) are omitted — F-keys only. All writes are loopback-Host-gated (see Handle). The
     /// API port is read-only here (changing it needs a restart). This object also doubles as the GET payload.
     /// </summary>
     private object ReadSettings() => new
@@ -507,6 +508,7 @@ public sealed class ApiServer : IDisposable
         questUseKey = _settings.QuestUseKey,
         questUseRadius = _settings.QuestUseRadius,
         questUseCooldownMs = _settings.QuestUseCooldownMs,
+        mapClearStampRadius = _settings.MapClearStampRadius,
         moveMethod = _settings.MoveMethod,
         moveArriveRadius = _settings.MoveArriveRadius,
         moveCooldownMs = _settings.MoveCooldownMs,
@@ -575,6 +577,7 @@ public sealed class ApiServer : IDisposable
                 // Quest follow ARM (QuestFollowEnabled) is F3-only — never a settings POST key.
                 // Path move ARM (MoveEnabled) is F5-only (also armed by F3 bot master) — never a settings POST key.
                 // Bot master ARM (BotEnabled) is F3-only — never a settings POST key, never nested.
+                // Map clear ARM (MapClearEnabled) is F2-only — never a settings POST key.
                 case "combatRange" when TryFloat(p.Value, out var f): _settings.CombatRange = Math.Clamp(f, 1f, 200f); applied.Add(p.Name); break;
                 case "combatSkills" when p.Value.ValueKind == JsonValueKind.Array:
                     if (TryParseCombatSkills(p.Value, out var csk)) { _settings.CombatSkills = csk; applied.Add(p.Name); }
@@ -582,6 +585,7 @@ public sealed class ApiServer : IDisposable
                 case "questUseKey" when TryInt(p.Value, out var n): _settings.QuestUseKey = Math.Clamp(n, 1, 255); applied.Add(p.Name); break;
                 case "questUseRadius" when TryFloat(p.Value, out var f): _settings.QuestUseRadius = Math.Clamp(f, 0f, 64f); applied.Add(p.Name); break;
                 case "questUseCooldownMs" when TryInt(p.Value, out var n): _settings.QuestUseCooldownMs = Math.Clamp(n, 0, 60000); applied.Add(p.Name); break;
+                case "mapClearStampRadius" when TryInt(p.Value, out var n): _settings.MapClearStampRadius = Math.Clamp(n, 4, 64); applied.Add(p.Name); break;
                 case "moveMethod" when p.Value.ValueKind == JsonValueKind.String && p.Value.GetString() is { } mm
                     && (mm is "WASD" or "Click" or "ClickToMove"): _settings.MoveMethod = mm; applied.Add(p.Name); break;
                 case "moveArriveRadius" when TryFloat(p.Value, out var f): _settings.MoveArriveRadius = Math.Clamp(f, 0f, 64f); applied.Add(p.Name); break;
@@ -1135,7 +1139,9 @@ public sealed record RadarState(
     bool PathMove = false,
     string PathMoveNote = "",
     bool Bot = false,
-    string BotNote = "")
+    string BotNote = "",
+    bool MapClear = false,
+    string MapClearNote = "")
 {
     public static readonly RadarState Empty =
         new(false, 0, 0, false, 0, System.Numerics.Vector2.Zero,
