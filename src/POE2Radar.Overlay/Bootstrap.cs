@@ -18,11 +18,18 @@ internal static class Bootstrap
             return 0;
         }
 
-        Console.WriteLine("Scanning for GameState via 'Game States' AOB pattern...");
+        Console.WriteLine($"Scanning for GameState via 'Game States' AOB pattern...");
+        Console.WriteLine($"  module 0x{process.MainModuleBase:X} size 0x{process.MainModuleSize:X} ({process.ProcessName})");
+        var exec = AobScanner.ReadExecutableSections(process, reader);
+        Console.WriteLine($"  executable sections: {exec.Count}  ({exec.Sum(s => (long)s.Bytes.Length) / (1024 * 1024)} MB)");
+        var anySlots = false;
         foreach (var pattern in AobPatterns.GameStateRefs)
         {
-            foreach (var slot in AobScanner.ScanForResolvedAddresses(process, reader, pattern).Distinct())
+            var slots = AobScanner.ScanForResolvedAddresses(process, reader, pattern).Distinct().ToList();
+            Console.WriteLine($"  pattern hits: {slots.Count}");
+            foreach (var slot in slots)
             {
+                anySlots = true;
                 var live = new Poe2Live(reader, slot);
                 if (live.TryResolve(out _, out _, out var localPlayer))
                 {
@@ -32,6 +39,11 @@ internal static class Bootstrap
             }
         }
 
+        if (!anySlots)
+        {
+            Console.Error.WriteLine("AOB pattern did not match in the game's .text. Module mapping may be wrong.");
+            return 0;
+        }
         Console.Error.WriteLine("Pattern matched but no slot resolved to an in-game chain.");
         Console.Error.WriteLine("Make sure you're loaded into a zone (not at login / character select).");
         return 0;

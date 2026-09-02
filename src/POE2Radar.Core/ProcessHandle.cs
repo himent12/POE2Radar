@@ -248,11 +248,18 @@ public sealed class ProcessHandle : IDisposable
 
         if (OperatingSystem.IsLinux())
         {
+            // Wine/Proton copies PE .text into anonymous r-xp pages (no file path in maps).
+            // Windows VirtualQueryEx still reports those as MEM_IMAGE; we do the same for any
+            // VMA that falls inside the main module [base, base+SizeOfImage].
+            var moduleEnd = MainModuleSize == 0 ? 0 : MainModuleBase + (nint)MainModuleSize;
             foreach (var v in LinuxMemory.ReadMaps(ProcessId))
             {
                 if (v.End <= startAddress) continue;
                 if (v.Start >= endAddress) break;
-                yield return LinuxMemory.ToMbi(v);
+                var mbi = LinuxMemory.ToMbi(v);
+                if (moduleEnd != 0 && v.Start >= MainModuleBase && v.Start < moduleEnd)
+                    mbi.Type = NativeMethods.MEM_IMAGE;
+                yield return mbi;
             }
             yield break;
         }

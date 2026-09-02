@@ -81,8 +81,8 @@ public static partial class LinuxX11
         public nint Screen;
     }
 
-    // Keep this conservative: we only read type/window/x/y from ButtonPress.
-    [StructLayout(LayoutKind.Sequential)]
+    // XEvent is a 24-long union (192 bytes on x86_64). Undersizing this makes XNextEvent smash the stack.
+    [StructLayout(LayoutKind.Sequential, Size = 192)]
     public struct XEvent
     {
         public int Type;
@@ -96,7 +96,6 @@ public static partial class LinuxX11
         public int X, Y, XRoot, YRoot;
         public uint State, Button;
         public int SameScreen;
-        private readonly nint _pad0, _pad1, _pad2, _pad3, _pad4, _pad5, _pad6, _pad7, _pad8, _pad9;
     }
 
     [LibraryImport(X11, EntryPoint = "XInitThreads")]

@@ -112,11 +112,18 @@ public sealed partial class OverlayWindow
     private bool PumpLinux()
     {
         if (_dpy == 0) return true;
-        while (LinuxX11.XPending(_dpy) > 0)
+        try
         {
-            LinuxX11.XNextEvent(_dpy, out var ev);
-            if (ev.Type == LinuxX11.ButtonPress && !_xClickThrough)
-                OnClientClick?.Invoke(ev.X, ev.Y);
+            while (LinuxX11.XPending(_dpy) > 0)
+            {
+                LinuxX11.XNextEvent(_dpy, out var ev);
+                if (ev.Type == LinuxX11.ButtonPress && !_xClickThrough)
+                    OnClientClick?.Invoke(ev.X, ev.Y);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"X11 event pump: {ex.Message}");
         }
         return true;
     }
