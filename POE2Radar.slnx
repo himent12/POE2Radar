@@ -3,5 +3,6 @@
     <Project Path="src/POE2Radar.Core/POE2Radar.Core.csproj" />
     <Project Path="src/POE2Radar.Overlay/POE2Radar.Overlay.csproj" />
     <Project Path="src/POE2Radar.Research/POE2Radar.Research.csproj" />
+    <Project Path="src/POE2Radar.Tests/POE2Radar.Tests.csproj" />
   </Folder>
 </Solution>

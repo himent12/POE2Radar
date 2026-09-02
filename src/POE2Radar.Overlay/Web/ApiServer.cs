@@ -152,6 +152,7 @@ public sealed class ApiServer : IDisposable
                     areaAct = ZoneGuide.Shared.Area(s.AreaCode)?.Act ?? 0,
                     mapVisible = s.MapVisible, zoom = s.Zoom,
                     hpPct = s.HpPct, manaPct = s.ManaPct, esPct = s.EsPct, autoFlask = s.AutoFlask, flask = s.FlaskNote,
+                    combatAssist = s.CombatAssist, combat = s.CombatNote,
                     player = new { x = s.Player.X, y = s.Player.Y },
                     entityCount = s.Entities.Count,
                     poiCount = s.Entities.Count(e => e.Poi),
@@ -497,6 +498,9 @@ public sealed class ApiServer : IDisposable
         manaCooldownMs = _settings.ManaCooldownMs,
         lifeKey = _settings.LifeKey,
         manaKey = _settings.ManaKey,
+        combatRange = _settings.CombatRange,
+        combatCooldownMs = _settings.CombatCooldownMs,
+        combatAttackKey = _settings.CombatAttackKey,
         apiPort = _settings.ApiPort, // display only — changing it needs a restart
         styles = _settings.Styles,   // per-item icon shapes/colors/sizes + mechanic overrides
         hpBars = _settings.HpBars,   // monster HP-bar geometry (width/height/offset)
@@ -553,6 +557,10 @@ public sealed class ApiServer : IDisposable
                 case "manaCooldownMs" when TryInt(p.Value, out var n): _settings.ManaCooldownMs = Math.Clamp(n, 0, 60000); applied.Add(p.Name); break;
                 case "lifeKey" when TryInt(p.Value, out var n): _settings.LifeKey = Math.Clamp(n, 1, 255); applied.Add(p.Name); break;
                 case "manaKey" when TryInt(p.Value, out var n): _settings.ManaKey = Math.Clamp(n, 1, 255); applied.Add(p.Name); break;
+                // Combat assist ARM (CombatAssistEnabled) is F4-only — never a settings POST key.
+                case "combatRange" when TryFloat(p.Value, out var f): _settings.CombatRange = Math.Clamp(f, 1f, 200f); applied.Add(p.Name); break;
+                case "combatCooldownMs" when TryInt(p.Value, out var n): _settings.CombatCooldownMs = Math.Clamp(n, 0, 60000); applied.Add(p.Name); break;
+                case "combatAttackKey" when TryInt(p.Value, out var n): _settings.CombatAttackKey = Math.Clamp(n, 1, 255); applied.Add(p.Name); break;
                 // Atlas declutter + content-icon + route-chevron options (#3/#4/#5).
                 case "atlasHideCompleted" when TryBool(p.Value, out var b): _settings.AtlasHideCompleted = b; applied.Add(p.Name); break;
                 case "atlasHideAccessible" when TryBool(p.Value, out var b): _settings.AtlasHideAccessible = b; applied.Add(p.Name); break;
@@ -1059,7 +1067,9 @@ public sealed record RadarState(
     IReadOnlyList<ExchangeRow>? ExchangeOffered = null,
     IReadOnlyList<ExchangeRow>? ExchangeWanted = null,
     int ExchangeHaveQty = 0,
-    string ExchangeFillNote = "")
+    string ExchangeFillNote = "",
+    bool CombatAssist = false,
+    string CombatNote = "")
 {
     public static readonly RadarState Empty =
         new(false, 0, 0, false, 0, System.Numerics.Vector2.Zero,

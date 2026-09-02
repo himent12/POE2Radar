@@ -39,6 +39,9 @@ quality-of-life feature.
 - **Auto-flask** (opt-in input) — presses the life/mana flask key below a Life, Energy Shield, or
   mana threshold (selectable). Hard-gated: only when PoE2 is the foreground window, with cooldowns
   and an **F8 kill-switch**.
+- **Combat assist** (opt-in input, **off by default**) — while armed with **F4**, taps a configurable
+  attack key when a hostile monster is in grid range. Same gates as auto-flask (focused window,
+  in-game, cooldown). Cannot be armed from the dashboard.
 - **Web dashboard** (`http://localhost:7777`, or **F12** in-game) — a local control panel: a
   searchable list of every entity/landmark you can click to navigate to, plus settings tabs (radar
   display + icon styling, monster HP bars, atlas tracking, loot-value pricing/league, monster-mod
@@ -106,7 +109,7 @@ dotnet build POE2Radar.slnx
 
 Reading another process generally requires Administrator (Windows) or ptrace permission (Linux).
 
-Hotkeys: **F8** toggles auto-flask; **F9** quits; **F12** opens the web dashboard; **F6** routes to
+Hotkeys: **F8** toggles auto-flask; **F4** toggles combat assist; **F9** quits; **F12** opens the web dashboard; **F6** routes to
 the nearest landmark/POI and **F7** clears routes; **F10** (with the Atlas open) inspects the
 hovered tile and sets a route start/end. All other settings live in the dashboard (no calibration
 hotkeys, to avoid accidental presses).

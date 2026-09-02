@@ -176,6 +176,13 @@ public sealed class RadarSettings
     public int LifeKey { get; set; } = 0x31;
     public int ManaKey { get; set; } = 0x32;
 
+    // ── Combat assist (F4 in-game kill-switch). Default OFF. CombatAssistEnabled is NOT writable
+    //    via the HTTP API — same as AutoFlaskEnabled. Range is grid units; attack key is VK. ──
+    public bool CombatAssistEnabled { get; set; }
+    public float CombatRange { get; set; } = 35f;
+    public int CombatCooldownMs { get; set; } = 400;
+    public int CombatAttackKey { get; set; } = 0x51; // Q
+
     // ── HTTP API. ──
     public int ApiPort { get; set; } = 7777;
 

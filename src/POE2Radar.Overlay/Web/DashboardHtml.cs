@@ -378,6 +378,7 @@ internal static class DashboardHtml
       <div class="kv"><span>Act / Level</span><span id="kAlvl">—</span></div>
       <div class="kv"><span>Map open</span><span id="kMap">—</span></div>
       <div class="kv"><span>Auto-flask</span><span id="kFlask">—</span></div>
+      <div class="kv"><span>Combat assist</span><span id="kCombat">—</span></div>
       <div id="zoneNotes" class="znotes" hidden></div>
 
       <div class="sect">Census</div>
@@ -622,6 +623,16 @@ internal static class DashboardHtml
             <div class="row"><div class="rl">Mana cooldown<small>min ms between mana taps</small></div>
               <input class="numin" type="number" step="100" min="0" data-set="manaCooldownMs"></div>
             <div class="row"><div class="rl hint-row">F8 toggles auto-flask in-game. Status: <span id="flaskState">&mdash;</span></div></div>
+          </div>
+          <div class="card">
+            <h3>Combat Assist</h3>
+            <div class="row"><div class="rl">Attack range<small>grid units; tap only if a hostile monster is this close</small></div>
+              <input class="numin" type="number" step="1" min="1" max="200" data-set="combatRange"></div>
+            <div class="row"><div class="rl">Attack key</div>
+              <input class="numin keyin" type="text" maxlength="1" data-set="combatAttackKey"></div>
+            <div class="row"><div class="rl">Cooldown<small>min ms between taps</small></div>
+              <input class="numin" type="number" step="50" min="0" data-set="combatCooldownMs"></div>
+            <div class="row"><div class="rl hint-row">F4 toggles combat assist in-game. It cannot be armed from this page. Status: <span id="combatState">&mdash;</span></div></div>
           </div>
         </div>
         <div style="margin-top:18px; height:14px"><span class="saved" id="savedMsg">&#10003; saved to config</span></div>
@@ -1535,6 +1546,8 @@ function renderState(){
   $('#kMap').textContent=s.mapVisible?'yes':'no';
   $('#kFlask').textContent=(s.autoFlask?'on':'off')+(s.flask?' · '+s.flask:'');
   const fs=$('#flaskState'); if(fs) fs.textContent=(s.autoFlask?'ON':'OFF')+(s.flask?' · '+s.flask:'');
+  $('#kCombat').textContent=(s.combatAssist?'on':'off')+(s.combat?' · '+s.combat:'');
+  const cs=$('#combatState'); if(cs) cs.textContent=(s.combatAssist?'ON':'OFF')+(s.combat?' · '+s.combat:'');
   $('#cEnt').textContent=s.entityCount||0;
   $('#cPoi').textContent=s.poiCount||0;
   $('#cMon').textContent=(s.counts&&s.counts.Monster)||0;

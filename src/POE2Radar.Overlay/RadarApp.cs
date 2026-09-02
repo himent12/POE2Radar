@@ -3,6 +3,7 @@ using NumVec2 = System.Numerics.Vector2;
 using POE2Radar.Core;
 using POE2Radar.Core.Game;
 using POE2Radar.Overlay.Config;
+using POE2Radar.Overlay.Input;
 using POE2Radar.Core.Native;
 using POE2Radar.Overlay.Navigation;
 using POE2Radar.Overlay.Web;
@@ -217,6 +218,11 @@ public sealed class RadarApp : IDisposable
     private DateTime _nextBrowserAt = DateTime.MinValue;
     private float _hpPct = 100f, _manaPct = 100f, _esPct = 100f;
     private string _flaskNote = "";
+    // Combat assist (opt-in input). Same gates as auto-flask; F4 kill-switch. Default OFF.
+    private bool _combatAssist;
+    private DateTime _combatFiredAt = DateTime.MinValue;
+    private DateTime _nextCombatToggleAt = DateTime.MinValue;
+    private string _combatNote = "OFF (F4)";
     private string _charName = "";   // render thread (RadarState.CharName); area code comes from the snapshot
     private nint _charNameFor;   // local-player ptr the cached _charName was read for (re-read only on change)
     private float[]? _cameraMatrix;
@@ -278,6 +284,7 @@ public sealed class RadarApp : IDisposable
         _reader = reader;
         _settings = RadarSettings.Load();
         _autoFlask = _settings.AutoFlaskEnabled;   // restore the persisted F8 state (default ON)
+        _combatAssist = _settings.CombatAssistEnabled; // restore F4 state (default OFF)
         Console.WriteLine($"Settings: {RadarSettings.FilePath}");
         Console.WriteLine($"Entity names: {EntityNameResolver.Shared.Count} mappings; zones: {ZoneGuide.Shared.Count}");
         _live = new Poe2Live(reader, gameStateSlot);
@@ -554,7 +561,7 @@ public sealed class RadarApp : IDisposable
         try { _api.Start(); Console.WriteLine($"API on http://localhost:{_settings.ApiPort} (dashboard at /)"); }
         catch (Exception ex) { Console.Error.WriteLine($"API server disabled: {ex.Message}"); }
         Console.WriteLine("Hotkeys: F6=add nearest path target  F7=clear path targets  "
-                          + "F8=auto-flask  F9=quit  F12=open dashboard");
+                          + "F8=auto-flask  F4=combat assist  F9=quit  F12=open dashboard");
         Console.WriteLine("         F10 (Atlas open) = inspect hovered tile (dumps map name + code + content"
                           + " to console for web-UI filters) and set route START->END (3rd press resets)");
         // Best-effort version check against GitHub (non-blocking; never fails startup).
@@ -1195,10 +1202,15 @@ public sealed class RadarApp : IDisposable
         var monoliths = worldFresh && mr.AreaHash == _areaHash
             ? mr.Markers : (IReadOnlyList<MonolithMarker>)Array.Empty<MonolithMarker>();
 
+        var focused = _gameHwnd != 0 && GameHost.GetForegroundWindow() == _gameHwnd;
+        var combatEntities = worldFresh ? snap.Entities : (IReadOnlyList<Poe2Live.EntityDot>)Array.Empty<Poe2Live.EntityDot>();
+        TickCombatAssist(inGame, focused, player, combatEntities);
+
         _state = new RadarState(inGame, snap.AreaHash, snap.AreaLevel, map.IsVisible, map.Zoom, player,
             snap.Entities, snap.Landmarks, _hpPct, _manaPct, _esPct, _autoFlask, _flaskNote,
             snap.AreaCode, _charName, snap.CharLevel, _worldMs, _renderMs, mr.Markers, _fps,
-            ex.Open, ex.Summary, ex.Offered, ex.Wanted, ex.HaveQty, ex.FillNote);
+            ex.Open, ex.Summary, ex.Offered, ex.Wanted, ex.HaveQty, ex.FillNote,
+            _combatAssist, _combatNote);
 
         var realActive = _gameHwnd != 0 && GameHost.GetForegroundWindow() == _gameHwnd;
         // "Always show" draws the overlay even when PoE2 isn't focused (for dashboard calibration).
@@ -1729,6 +1741,31 @@ public sealed class RadarApp : IDisposable
         }
     }
 
+    /// <summary>
+    /// Combat assist: tap the configured attack key when a hostile monster is in grid range.
+    /// Same gates as auto-flask (armed + focused + in-game + cooldown). Decision is
+    /// <see cref="CombatAssist.Decide"/>; this method only taps and updates the status note.
+    /// </summary>
+    private void TickCombatAssist(bool inGame, bool focused, NumVec2 player,
+        IReadOnlyList<Poe2Live.EntityDot> entities)
+    {
+        var now = DateTime.UtcNow;
+        var decision = CombatAssist.Decide(new CombatAssist.Snapshot(
+            Armed: _combatAssist,
+            Focused: focused,
+            InGame: inGame,
+            PlayerGrid: player,
+            Entities: entities,
+            Range: _settings.CombatRange,
+            NowUtc: now,
+            LastFireUtc: _combatFiredAt,
+            CooldownMs: _settings.CombatCooldownMs));
+        _combatNote = decision.Note;
+        if (!decision.ShouldTap) return;
+        GameHost.TapKey((ushort)_settings.CombatAttackKey);
+        _combatFiredAt = now;
+    }
+
     /// <summary>Poll overlay hotkeys: F8 auto-flask toggle, F9 quit, F12 dashboard, F6/F7 path targets.
     /// Map calibration is web-config-only (no in-game keys, to avoid accidental presses).</summary>
     private void HandleHotkeys()
@@ -1741,6 +1778,15 @@ public sealed class RadarApp : IDisposable
             _settings.AutoFlaskEnabled = _autoFlask;   // persist so the choice survives a restart
             _settings.Save();
             Console.WriteLine($"\nAuto-flask: {(_autoFlask ? "ON" : "OFF")}");
+        }
+        // F4 master kill-switch for combat assist (debounced). Not writable via the dashboard.
+        if (Down(0x73) && DateTime.UtcNow >= _nextCombatToggleAt)
+        {
+            _combatAssist = !_combatAssist;
+            _nextCombatToggleAt = DateTime.UtcNow.AddMilliseconds(300);
+            _settings.CombatAssistEnabled = _combatAssist;
+            _settings.Save();
+            Console.WriteLine($"\nCombat assist: {(_combatAssist ? "ON" : "OFF")}");
         }
         // F9 quits the overlay (besides the tray-icon Exit).
         if (Down(0x78)) { Console.WriteLine("\nF9 — exiting."); RequestShutdown(); }

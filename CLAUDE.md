@@ -2,8 +2,8 @@
 
 External memory-reading **map/radar overlay for Path of Exile 2**. .NET 10, Windows and Linux x64
 (Proton/Wine on Linux). Overlay renders with SkiaSharp.
-Reads game state out of process (no injection) and draws an overlay; an opt-in auto-flask feature
-sends keystrokes. Forked from a PoE1 framework, since rewritten around the live PoE2 layout.
+Reads game state out of process (no injection) and draws an overlay; opt-in auto-flask and combat
+assist send keystrokes. Forked from a PoE1 framework, since rewritten around the live PoE2 layout.
 
 ## Non-negotiable rules
 
@@ -14,18 +14,19 @@ sends keystrokes. Forked from a PoE1 framework, since rewritten around the live 
 `process_vm_readv` (Linux/Proton). **Never** inject into the
 PoE2 process — no DLL injection, no function hooking, no packet manipulation.
 
-**Input/automation (opt-in).** The overlay may send keystrokes via `SendInput`
-(`Input/SendInputNative`) for auto-flask only. Rules: foreground-gated (only when PoE2 is focused),
-in-game-gated, per-action cooldowns, master kill-switch hotkey (F8). Keep automation minimal and
-clearly gated — a personal QoL tool, not a headless bot.
+**Input/automation (opt-in).** The overlay may send keystrokes via `GameHost.TapKey` for auto-flask
+and combat assist. Rules: foreground-gated (only when PoE2 is focused), in-game-gated, per-action
+cooldowns, local kill-switch hotkeys (F8 flask, F4 combat). Combat assist defaults off and cannot be
+armed over HTTP. Keep automation minimal and clearly gated.
 
 **Offset discovery lives in Research.** The overlay just reads; reverse-engineering/probes live in
 `POE2Radar.Research`. When a patch breaks reads, run the Research probes, re-validate, commit.
 
-**Three-pillar layout.** Exactly three projects:
+**Three-pillar layout.** Product projects:
 - `src/POE2Radar.Core` — memory plumbing + the PoE2 offset table + the live read layer. Read-side.
 - `src/POE2Radar.Overlay` — tick loop, Skia overlay, HTTP API, opt-in input. The deliverable.
 - `src/POE2Radar.Research` — dev-time discovery/validation tooling. Never linked into the overlay.
+- `src/POE2Radar.Tests` — unit tests of overlay decision code. Never linked into the overlay.
 
 ## Architecture
 
