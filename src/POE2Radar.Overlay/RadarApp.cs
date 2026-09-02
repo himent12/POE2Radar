@@ -1340,7 +1340,16 @@ public sealed class RadarApp : IDisposable
             ExchangeFillNote: ex.Open ? ex.FillNote : null,
             ExchangePanelX: ex.Open ? ex.PanelX : 0f,
             ExchangePanelY: ex.Open ? ex.PanelY : 0f,
-            ExchangeCollapsed: ex.Open && ex.Collapsed);
+            ExchangeCollapsed: ex.Open && ex.Collapsed,
+            AutoFlask: _autoFlask,
+            BotEnabled: _botEnabled,
+            BotNote: _botNote,
+            CombatAssist: _combatAssist || _botEnabled,
+            CombatNote: _combatNote,
+            QuestFollow: _questFollow,
+            QuestFollowNote: _questFollowNote,
+            PathMove: _moveEnabled || _botEnabled,
+            PathMoveNote: _moveNote);
         // The overlay is only visible while PoE2 is foreground (Render draws nothing otherwise). Skip
         // the whole draw + UpdateLayeredWindow blit when unfocused — but render once on the focus-loss
         // transition so the last visible frame is cleared rather than left frozen on screen.

@@ -232,4 +232,14 @@ public sealed record RenderContext(
     string? ExchangeFillNote = null,   // the recommended-sale-ratio headline for that quantity
     float ExchangePanelX = 0f,         // exchange-window screen rect top-left (pin anchor; 0 = default corner)
     float ExchangePanelY = 0f,
-    bool ExchangeCollapsed = false);   // card shrunk to a small "expand" tab
+    bool ExchangeCollapsed = false,    // card shrunk to a small "expand" tab
+    // Live bot/flask arm bits + notes for the on-overlay status panel.
+    bool AutoFlask = false,
+    bool BotEnabled = false,
+    string BotNote = "",
+    bool CombatAssist = false,
+    string CombatNote = "",
+    bool QuestFollow = false,
+    string QuestFollowNote = "",
+    bool PathMove = false,
+    string PathMoveNote = "");

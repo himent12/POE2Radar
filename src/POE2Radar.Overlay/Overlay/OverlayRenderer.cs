@@ -134,6 +134,7 @@ public sealed class OverlayRenderer : IDisposable
                 DrawHoverPrice(rt, ctx);               // price chip beside the hovered item's tooltip (screen-space)
                 DrawMonolithPanel(rt, ctx);            // nearby-monolith reward list (screen-space)
                 DrawCurrencyExchange(rt, ctx);         // currency-exchange order-book depth panel (top-right, screen-space)
+                DrawBotStatus(rt, ctx);
             }
         }
         finally { rt.EndDraw(); }
@@ -1208,6 +1209,50 @@ public sealed class OverlayRenderer : IDisposable
             rt.DrawText(text, _tf!, new Rect(left + NavPad + NavSwatch + 5f, y, left + panelW - 4f, y + NavRowH), textBrush, DrawTextOptions.Clip);
             y += NavRowH;
         }
+    }
+
+    private static readonly Color4 ColOn = new(0.35f, 0.95f, 0.45f, 1f);
+    private static readonly Color4 ColOff = new(0.55f, 0.50f, 0.42f, 0.85f);
+
+    /// <summary>
+    /// Live ON/OFF strip for bot/combat/move/quest/flask. Top-right unless the nav menu is
+    /// already pinned there, in which case it drops to the bottom-right. Not clickable.
+    /// </summary>
+    private void DrawBotStatus(DrawTarget rt, RenderContext ctx)
+    {
+        const float w = 228f, rowH = 16f, pad = 6f, titleH = 16f, dot = 7f;
+        const int n = 5;
+        var h = pad * 2f + titleH + n * rowH;
+        var x = ctx.WindowWidth - NavMargin - w;
+        var y = NavMargin;
+        if (ctx.NavMenuCorner is "TopRight")
+            y = Math.Max(NavMargin, ctx.WindowHeight - NavMargin - h);
+
+        rt.FillRectangle(new RawRectF(x, y, x + w, y + h), _bPanel!);
+        rt.DrawText("STATUS", _tf!, new Rect(x + pad, y + pad, x + w - pad, y + pad + titleH), _bText!, DrawTextOptions.Clip);
+
+        DrawStatusRow(rt, x, y + pad + titleH, w, rowH, pad, dot, "F3 Bot", ctx.BotEnabled, ctx.BotNote);
+        DrawStatusRow(rt, x, y + pad + titleH + rowH, w, rowH, pad, dot, "F4 Combat", ctx.CombatAssist, ctx.CombatNote);
+        DrawStatusRow(rt, x, y + pad + titleH + rowH * 2, w, rowH, pad, dot, "F5 Move", ctx.PathMove, ctx.PathMoveNote);
+        DrawStatusRow(rt, x, y + pad + titleH + rowH * 3, w, rowH, pad, dot, "Quest", ctx.QuestFollow, ctx.QuestFollowNote);
+        DrawStatusRow(rt, x, y + pad + titleH + rowH * 4, w, rowH, pad, dot, "F8 Flask", ctx.AutoFlask, ctx.FlaskNote);
+    }
+
+    private void DrawStatusRow(DrawTarget rt, float x, float y, float w, float rowH, float pad, float dot,
+        string label, bool on, string? note)
+    {
+        _bStyle!.Color = on ? ColOn : ColOff;
+        rt.FillEllipse(new Ellipse(new NumVec2(x + pad + dot * 0.5f, y + rowH * 0.5f), dot * 0.45f, dot * 0.45f), _bStyle);
+        var tag = on ? "ON " : "off";
+        var extra = string.IsNullOrEmpty(note) ? "" : " " + TrimNote(note);
+        var line = tag + " " + label + extra;
+        rt.DrawText(line, _tf!, new Rect(x + pad + dot + 4f, y, x + w - pad, y + rowH), _bStyle, DrawTextOptions.Clip);
+    }
+
+    private static string TrimNote(string note)
+    {
+        if (note.StartsWith("OFF ", StringComparison.Ordinal)) return "";
+        return note.Length <= 18 ? note : note[..17] + "…";
     }
 
     private static Color4 WithAlpha(Color4 c, float a) => new(c.R, c.G, c.B, a);
