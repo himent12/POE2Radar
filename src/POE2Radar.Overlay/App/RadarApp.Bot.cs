@@ -205,7 +205,10 @@ public sealed partial class RadarApp
             PriorityOrder: string.Equals(_settings.CombatRotationMode, "Priority", StringComparison.OrdinalIgnoreCase),
             PlayerHpPct: _hpPct,
             KeyboardOnly: GameHost.IsBackgroundActive && !GameHost.BackgroundSupportsMouse,
-            Busy: busy));
+            Busy: busy,
+            PreferredTargetId: _lastTargetId));
+        _comboBusy = busy;
+        _lastTargetId = decision.HasTarget ? decision.TargetId : 0;
         _hostilesNear = decision.HostilesInRange;
         if (GameHost.IsBackgroundActive && !GameHost.BackgroundSupportsMouse && !decision.ShouldTap && decision.HasTarget
             && (src?.All(k => k.Key is 0x01 or 0x02 or 0x04 or 0x05 or 0x06) ?? false))
@@ -221,10 +224,20 @@ public sealed partial class RadarApp
         // rotation swings at wherever the last move-click left the cursor and the mob never dies.
         if (decision.HasTarget) AimAtEntity(decision.TargetGrid, decision.TargetWorld, playerWorld);
         var spec = specs[decision.SkillIndex];
-        if (spec.Repeat > 1 || spec.HoldMs > 0 || spec.DodgeAfter || spec.NextDelayMs > 0)
+        var isCombo = spec.Repeat > 1 || spec.HoldMs > 0 || spec.DodgeAfter || spec.NextDelayMs > 0;
+        if (isCombo)
+        {
+            // A combo commits us for a second or more: only start it with the target comfortably inside range
+            // (85 %) so it cannot walk out halfway and waste the remaining casts.
+            var reach = spec.Range > 0f ? spec.Range : _settings.CombatRange;
+            if (NumVec2.Distance(player, decision.TargetGrid) > reach * 0.85f)
+            {
+                _combatNote = $"closing in ({NumVec2.Distance(player, decision.TargetGrid):0} / {reach * 0.85f:0})";
+                return;
+            }
             StartComboMacro(spec, decision, now);
-        else
-            GameHost.TapKey(decision.Vk);
+        }
+        else GameHost.TapKey(decision.Vk);
         if ((uint)decision.SkillIndex < (uint)_combatFiredAt.Length)
             _combatFiredAt[decision.SkillIndex] = now;
         _combatNextIndex = decision.NextIndex;
@@ -236,6 +249,9 @@ public sealed partial class RadarApp
     private enum MacroStep { Aim, KeyDown, KeyUp, Tap, DodgeStart, DodgeEnd, Done }
     private uint _macroTargetId;
     private POE2Radar.Core.Game.Vector3 _macroTargetWorld;
+    private uint _lastTargetId;
+    // A combo in flight owns the character: the mover (and its run/dodge key) must stay idle until it ends.
+    private volatile bool _comboBusy;
     private readonly Queue<(MacroStep Step, ushort Vk, TimeSpan After)> _macro = new();
     private DateTime _macroNextUtc = DateTime.MinValue;
     private DateTime _comboLockUntil = DateTime.MinValue;
@@ -379,19 +395,22 @@ public sealed partial class RadarApp
 
         var clicks = _eventClicks.GetValueOrDefault(ev.Id) + 1;
         _eventClicks[ev.Id] = clicks;
-        if (clicks > Math.Max(1, _settings.EventMaxClicks))
-        {
-            lock (_eventBlacklist) _eventBlacklist[ev.Id] = now.AddSeconds(90);
-            _eventClicks.Remove(ev.Id);
-            _eventNote = $"event: {ev.Label} unresponsive — skipped";
-            Console.WriteLine($"\nEvent: {ev.Label} #{ev.Id} did not respond after {clicks - 1} clicks — skipping.");
-            return;
-        }
+        // One click is the whole interaction for chests / boxes / shrines / breaches / essences — the game's
+        // Opened/complete flags can lag or never flip, so consider it DONE right away and move on rather than
+        // standing there re-clicking until the blacklist kicks in. Stalled monsters get a few tries.
+        var maxClicks = ev.Kind == MapEvents.Kind.Stalled ? Math.Max(1, _settings.EventMaxClicks) : 1;
         AimAtEntity(ev.Grid, ev.World, playerWorld);
         GameHost.TapKey((ushort)Math.Clamp(_settings.QuestUseKey, 1, 255));
         _eventFiredAt = now;
         _eventNote = $"event: clicked {ev.Label} ({clicks})";
         if (ev.Kind is MapEvents.Kind.Essence or MapEvents.Kind.Stalled) _combatWatch.Reset(); // freed rare → fight it now
+        if (clicks >= maxClicks)
+        {
+            lock (_eventBlacklist) _eventBlacklist[ev.Id] = now.AddMinutes(30); // done for this zone
+            _eventClicks.Remove(ev.Id);
+            _eventTarget = null;   // next world tick re-picks immediately (no wait for the flag to flip)
+            _clearStuckId = null;
+        }
     }
 
     /// <summary>Grow/shrink the per-skill last-fire clocks to match the current rotation length.</summary>

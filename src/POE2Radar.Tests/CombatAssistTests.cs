@@ -346,6 +346,23 @@ public sealed class CombatAssistTests
     }
 
     [Fact]
+    public void Preferred_target_is_kept_while_valid()
+    {
+        var ents = new[] { Monster(3, 0, reaction: 0, id: 1), Monster(6, 0, reaction: 0, id: 2) };
+        // Nearest is 1, but we were hitting 2 → keep 2.
+        var d = CombatAssist.Decide(Base(entities: ents) with { PreferredTargetId = 2 });
+        Assert.Equal(2u, d.TargetId);
+        // Preferred died → fall back to the best pick.
+        var dead = new[] { Monster(3, 0, reaction: 0, id: 1), Monster(6, 0, reaction: 0, id: 2, hpCur: 0) };
+        d = CombatAssist.Decide(Base(entities: dead) with { PreferredTargetId = 2 });
+        Assert.Equal(1u, d.TargetId);
+        // Rarity mode upgrades to a rarer mob even with a preferred normal.
+        var rare = new[] { Monster(3, 0, reaction: 0, id: 1), Monster(6, 0, reaction: 0, id: 2), Monster(9, 0, reaction: 0, id: 3, rarity: Poe2Live.Rarity.Rare) };
+        d = CombatAssist.Decide(Base(entities: rare) with { PreferredTargetId = 2, Mode = CombatAssist.TargetMode.Rarity });
+        Assert.Equal(3u, d.TargetId);
+    }
+
+    [Fact]
     public void Busy_macro_blocks_new_decisions()
     {
         var d = CombatAssist.Decide(Base(nextIndex: 1, entities: [Monster(3, 0, reaction: 0)]) with { Busy = true });

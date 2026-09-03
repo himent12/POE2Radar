@@ -55,7 +55,8 @@ public static class CombatAssist
         bool PriorityOrder = false,
         float PlayerHpPct = 100f,
         bool KeyboardOnly = false,    // background mode on Linux: mouse-bound skills cannot be delivered
-        bool Busy = false);           // a combo macro is still executing → no new decision
+        bool Busy = false,            // a combo macro is still executing → no new decision
+        uint PreferredTargetId = 0);  // stick to this target while it is alive and in range (no hopping between mobs)
 
     /// <summary>
     /// <see cref="HasTarget"/> + <see cref="TargetGrid"/> / <see cref="TargetWorld"/> name the hostile the
@@ -98,6 +99,12 @@ public static class CombatAssist
         var globalRange = Math.Max(0f, s.Range);
         if (!TryPickTarget(s.Entities, s.PlayerGrid, globalRange, out var target, s.IgnoreIds, s.Mode))
             return Idle(cursor, "armed");
+        // Stickiness: keep hitting the mob we were hitting while it is alive and in range — hopping to the
+        // nearest one every tick re-aims mid-combo and wastes casts. Rarity mode may still upgrade to a rarer mob.
+        if (s.PreferredTargetId != 0 && s.PreferredTargetId != target.Id
+            && TryFindHostile(s.Entities, s.PreferredTargetId, s.PlayerGrid, globalRange, s.IgnoreIds, out var kept)
+            && (s.Mode != TargetMode.Rarity || RarityRank(kept.Rarity) >= RarityRank(target.Rarity)))
+            target = kept;
 
         var tdx = target.Grid.X - s.PlayerGrid.X;
         var tdy = target.Grid.Y - s.PlayerGrid.Y;
@@ -188,6 +195,24 @@ public static class CombatAssist
             }
         }
         return found;
+    }
+
+    private static bool TryFindHostile(IReadOnlyList<Poe2Live.EntityDot>? entities, uint id, NumVec2 player, float range,
+        IReadOnlyCollection<uint>? ignore, out Poe2Live.EntityDot found)
+    {
+        found = default;
+        if (entities is null) return false;
+        var rangeSq = Math.Max(0f, range) * Math.Max(0f, range);
+        foreach (var e in entities)
+        {
+            if (e.Id != id) continue;
+            if (!IsHostile(e)) return false;
+            if (ignore is { Count: > 0 } && ignore.Contains(e.Id)) return false;
+            var dx = e.Grid.X - player.X; var dy = e.Grid.Y - player.Y;
+            if (dx * dx + dy * dy > rangeSq) return false;
+            found = e; return true;
+        }
+        return false;
     }
 
     public static int CountHostilesInRange(

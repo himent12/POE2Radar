@@ -213,7 +213,8 @@ public sealed partial class RadarApp
         {
             movePaths = new[] { new SelectedPath(0, new List<(int x, int y)> { ((int)MathF.Round(fleeTo.X), (int)MathF.Round(fleeTo.Y)) }) };
         }
-        TickPathMove(inGame, focused, player, movePaths, playerWorld, inCombat, watch.Flee || watch.Kite);
+        // A running combo pauses movement (and kiting) — a roll or run press mid-cast cancels the cast.
+        TickPathMove(inGame, focused, player, movePaths, playerWorld, inCombat || _comboBusy, (watch.Flee || watch.Kite) && !_comboBusy);
         TickQuestUse(inGame, focused, player, playerWorld, inCombat);
         TickEventUse(inGame, focused, player, playerWorld, inCombat);
 
