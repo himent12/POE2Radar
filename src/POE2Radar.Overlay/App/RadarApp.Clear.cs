@@ -54,6 +54,20 @@ public sealed partial class RadarApp
     private DateTime _clearStuckSince;
 
     private readonly Dictionary<uint, DateTime> _clearIgnoredMobs = new();
+    // Map events (world thread writes, render thread reads).
+    private readonly Dictionary<uint, DateTime> _eventBlacklist = new();
+    private sealed record EventBox(MapEvents.Event Ev);
+    private volatile EventBox? _eventTargetBox;
+    private MapEvents.Event? _eventTarget
+    {
+        get => _eventTargetBox?.Ev;
+        set => _eventTargetBox = value is { } v ? new EventBox(v) : null;
+    }
+    private volatile HashSet<uint> _imprisonedIds = new();
+    private volatile HashSet<uint> _pendingEventIds = new();
+    private readonly Dictionary<uint, int> _eventClicks = new();
+    private DateTime _eventFiredAt = DateTime.MinValue;
+    private volatile string _eventNote = "";
 
     private NumVec2 _clearPrevPlayer;
 
@@ -77,6 +91,10 @@ public sealed partial class RadarApp
         _clearIgnoredMobs.Clear();
         _clearStuckId = null;
         _combatWatch.Reset();
+        lock (_eventBlacklist) _eventBlacklist.Clear();
+        _eventTarget = null;
+        _imprisonedIds = new HashSet<uint>();
+        _pendingEventIds = new HashSet<uint>();
         lock (_navLock)
         {
             // Save what was selected in the zone we're leaving, keyed by ITS instance hash.
@@ -193,11 +211,28 @@ public sealed partial class RadarApp
             if (expired is not null) foreach (var k in expired) _clearIgnoredMobs.Remove(k);
         }
 
+        // Map events: what to click, what is imprisoned (immune until its crystal is clicked).
+        HashSet<uint> blacklist;
+        lock (_eventBlacklist)
+        {
+            List<uint>? expiredEv = null;
+            foreach (var kv in _eventBlacklist) if (kv.Value <= now) (expiredEv ??= new()).Add(kv.Key);
+            if (expiredEv is not null) foreach (var k in expiredEv) _eventBlacklist.Remove(k);
+            blacklist = new HashSet<uint>(_eventBlacklist.Keys);
+        }
+        var eventOpts = new MapEvents.Options(_settings.EventEssence, _settings.EventStrongbox, _settings.EventShrine,
+            _settings.EventBreach, _settings.EventRitual, _settings.EventChests, _settings.EventClickStalled);
+        var imprisoned = MapEvents.ImprisonedMonsters(_entities);
+        var events = MapEvents.Pending(_entities, eventOpts, blacklist, _combatWatch.IgnoredIds);
+        _imprisonedIds = imprisoned;
+        _pendingEventIds = new HashSet<uint>(events.Select(ev => ev.Id));
+
         _clearMobs.Clear();
         foreach (var e in _entities)
         {
             if (!e.IsAlive || e.IconComplete) continue;
             if (e.Category != Poe2Live.EntityCategory.Monster || e.IsFriendly) continue;
+            if (imprisoned.Contains(e.Id)) continue; // immune: click the crystal instead
             // Skip monsters the fight watchdog / stuck watchdog gave up on (unreachable, untargetable).
             if (_clearIgnoredMobs.ContainsKey(e.Id) || _combatWatch.IsIgnored(e.Id)) continue;
             _clearMobs.Add(new MapClear.MobHint(
@@ -214,7 +249,12 @@ public sealed partial class RadarApp
             areaCode, player,
             terrain?.Walkable, terrain?.Width ?? 0, terrain?.Height ?? 0,
             _mapClearVisited, _clearMobs, _questFollowId, _settings.MapClearAggroRange, _clearHeading,
-            _settings.MapClearStampRadius);
+            _settings.MapClearStampRadius, events, _settings.EventRange);
+
+        // Publish the event under the picked id (if any) for the render thread's use/click tick.
+        _eventTarget = null;
+        if (id is not null && id.StartsWith("e:", StringComparison.Ordinal) && uint.TryParse(id.AsSpan(2), out var evId))
+            foreach (var ev in events) if (ev.Id == evId) { _eventTarget = ev; break; }
 
         // Stuck watchdog: no progress toward the target for MapClearStuckMs while not fighting → skip it.
         if (id is not null && TryResolveTargetGrid(id, out var goal))
@@ -254,6 +294,8 @@ public sealed partial class RadarApp
         }
 
         _mapClearNote = SetAutoNavTarget(id, terrain is null ? "armed (no terrain)" : "armed (cleared)", "Map clear");
+        if (_eventTarget is { } evt && !string.IsNullOrEmpty(_eventNote)) _mapClearNote = _eventNote;
+        else if (_eventTarget is { } evt2) _mapClearNote = $"→ {evt2.Label}";
     }
 
     /// <summary>Select <paramref name="id"/> as the bot's A* target (quest follow or map-clear).</summary>

@@ -214,6 +214,13 @@ public sealed partial class RadarApp
                 else if (parts[2] == "moveDiagonals") _settings.MoveDiagonals = !_settings.MoveDiagonals;
                 else if (parts[2] == "playInBackground") _settings.PlayInBackground = !_settings.PlayInBackground;
                 else if (parts[2] == "autoRespawn") _settings.AutoRespawn = !_settings.AutoRespawn;
+                else if (parts[2] == "eventEssence") _settings.EventEssence = !_settings.EventEssence;
+                else if (parts[2] == "eventStrongbox") _settings.EventStrongbox = !_settings.EventStrongbox;
+                else if (parts[2] == "eventShrine") _settings.EventShrine = !_settings.EventShrine;
+                else if (parts[2] == "eventBreach") _settings.EventBreach = !_settings.EventBreach;
+                else if (parts[2] == "eventRitual") _settings.EventRitual = !_settings.EventRitual;
+                else if (parts[2] == "eventChests") _settings.EventChests = !_settings.EventChests;
+                else if (parts[2] == "eventClickStalled") _settings.EventClickStalled = !_settings.EventClickStalled;
                 else return;
                 _settings.Save();
                 return;
@@ -235,6 +242,8 @@ public sealed partial class RadarApp
         "mapClearStampRadius" => _settings.MapClearStampRadius,
         "mapClearAggroRange" => _settings.MapClearAggroRange,
         "mapClearStuckMs" => _settings.MapClearStuckMs,
+        "eventRange" => _settings.EventRange,
+        "eventUseRadius" => _settings.EventUseRadius,
         "moveArriveRadius" => _settings.MoveArriveRadius,
         "moveCooldownMs" => _settings.MoveCooldownMs,
         "moveLookAhead" => _settings.MoveLookAhead,
@@ -260,6 +269,8 @@ public sealed partial class RadarApp
             case "mapClearStampRadius": s.MapClearStampRadius = (int)v; break;
             case "mapClearAggroRange": s.MapClearAggroRange = v; break;
             case "mapClearStuckMs": s.MapClearStuckMs = (int)v; break;
+            case "eventRange": s.EventRange = v; break;
+            case "eventUseRadius": s.EventUseRadius = v; break;
             case "moveArriveRadius": s.MoveArriveRadius = v; break;
             case "moveCooldownMs": s.MoveCooldownMs = (int)v; break;
             case "moveLookAhead": s.MoveLookAhead = v; break;

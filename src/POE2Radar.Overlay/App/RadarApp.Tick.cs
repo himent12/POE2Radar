@@ -215,6 +215,7 @@ public sealed partial class RadarApp
         }
         TickPathMove(inGame, focused, player, movePaths, playerWorld, inCombat, watch.Flee || watch.Kite);
         TickQuestUse(inGame, focused, player, playerWorld, inCombat);
+        TickEventUse(inGame, focused, player, playerWorld, inCombat);
 
         _state = new RadarState(inGame, snap.AreaHash, snap.AreaLevel, map.IsVisible, map.Zoom, player,
             snap.Entities, snap.Landmarks, _hpPct, _manaPct, _esPct, _autoFlask, _flaskNote,
@@ -364,7 +365,15 @@ public sealed partial class RadarApp
                 PlayInBackground: _settings.PlayInBackground,
                 NestedInput: GameHost.NestedInputDisplay,
                 AutoRespawn: _settings.AutoRespawn,
-                RespawnNote: _respawnNote) : null);
+                RespawnNote: _respawnNote,
+                EventEssence: _settings.EventEssence,
+                EventStrongbox: _settings.EventStrongbox,
+                EventShrine: _settings.EventShrine,
+                EventBreach: _settings.EventBreach,
+                EventRitual: _settings.EventRitual,
+                EventChests: _settings.EventChests,
+                EventClickStalled: _settings.EventClickStalled,
+                EventRange: _settings.EventRange) : null);
         // The overlay is only visible while PoE2 is foreground (Render draws nothing otherwise). Skip
         // the whole draw + UpdateLayeredWindow blit when unfocused — but render once on the focus-loss
         // transition so the last visible frame is cleared rather than left frozen on screen.

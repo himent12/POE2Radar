@@ -401,6 +401,20 @@ internal static partial class DashboardHtml
               <input class="numin" type="number" step="1" min="0" max="500" data-set="mapClearAggroRange"></div>
               <div class="row"><div class="rl">Clear stuck timeout<small>ms without getting closer to the current target (while not fighting) before it is skipped</small></div>
               <input class="numin" type="number" step="500" min="1000" max="120000" data-set="mapClearStuckMs"></div>
+              <div class="row"><div class="rl hint-row">Map events — while clearing, walk to these and click them (after any fight nearby). Monsters standing on an unopened essence are treated as immune until the crystal is clicked.</div></div>
+              <div class="row"><div class="rl">Essence crystals</div><input type="checkbox" data-set="eventEssence"></div>
+              <div class="row"><div class="rl">Strongboxes</div><input type="checkbox" data-set="eventStrongbox"></div>
+              <div class="row"><div class="rl">Shrines</div><input type="checkbox" data-set="eventShrine"></div>
+              <div class="row"><div class="rl">Breach hands</div><input type="checkbox" data-set="eventBreach"></div>
+              <div class="row"><div class="rl">Ritual altars<small>starts a ritual — off by default</small></div><input type="checkbox" data-set="eventRitual"></div>
+              <div class="row"><div class="rl">Plain chests</div><input type="checkbox" data-set="eventChests"></div>
+              <div class="row"><div class="rl">Click stalled monsters<small>a monster nothing lands on for the stall time gets walked to and clicked (essence-encased rares)</small></div><input type="checkbox" data-set="eventClickStalled"></div>
+              <div class="row"><div class="rl">Event range<small>grid units; only detour to events this close (0 = any)</small></div>
+              <input class="numin" type="number" step="5" min="0" max="500" data-set="eventRange"></div>
+              <div class="row"><div class="rl">Event use radius<small>click when this close</small></div>
+              <input class="numin" type="number" step="1" min="1" max="30" data-set="eventUseRadius"></div>
+              <div class="row"><div class="rl">Event max clicks<small>give up on an event (90 s) after this many clicks without effect</small></div>
+              <input class="numin" type="number" step="1" min="1" max="20" data-set="eventMaxClicks"></div>
             <div class="row"><div class="rl hint-row">F5 toggles path move in-game (F3 quest follow also arms it). It cannot be armed from this page. Status: <span id="pathMoveState">&mdash;</span></div></div>
           </div>
         </div>

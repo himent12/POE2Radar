@@ -145,7 +145,9 @@ public static class MapClear
         string? currentId,
         float maxMobDistance = 0f,
         NumVec2 heading = default,
-        int stampRadius = 0)
+        int stampRadius = 0,
+        IReadOnlyList<MapEvents.Event>? events = null,
+        float maxEventDistance = 0f)
     {
         if (QuestFollow.IsTownOrHideout(areaCode)) return null;
 
@@ -173,6 +175,10 @@ public static class MapClear
         }
         if (bestUnique is not null) return bestUnique;
         if (bestMob is not null) return bestMob;
+
+        // Map events (essence / strongbox / shrine / breach / stalled mob …): after the fight, before the sweep.
+        if (events is { Count: > 0 } && MapEvents.Nearest(events, player, maxEventDistance) is { } ev)
+            return "e:" + ev.Id;
 
         if (currentId is not null
             && TryParseCell(currentId, out var holdX, out var holdY)

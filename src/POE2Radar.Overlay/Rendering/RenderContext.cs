@@ -284,7 +284,15 @@ public sealed record InsMenuData(
     bool PlayInBackground = false,
     string? NestedInput = null,
     bool AutoRespawn = true,
-    string RespawnNote = "");
+    string RespawnNote = "",
+    bool EventEssence = true,
+    bool EventStrongbox = true,
+    bool EventShrine = true,
+    bool EventBreach = true,
+    bool EventRitual = false,
+    bool EventChests = false,
+    bool EventClickStalled = true,
+    float EventRange = 120f);
 
 /// <summary>Numeric tunables the INSERT menu exposes as sliders: range + step + display, shared by the
 /// renderer (fill fraction) and RadarApp (click → value). Keys match the HTTP settings names.</summary>
@@ -311,6 +319,8 @@ public readonly record struct InsSliderSpec(string Key, float Min, float Max, fl
         ["mapClearStampRadius"]  = new("mapClearStampRadius", 8, 48, 1, ""),
         ["mapClearAggroRange"]   = new("mapClearAggroRange", 0, 200, 5, "", "any"),
         ["mapClearStuckMs"]      = new("mapClearStuckMs", 2000, 30000, 500, "ms"),
+        ["eventRange"]           = new("eventRange", 0, 300, 10, "", "any"),
+        ["eventUseRadius"]       = new("eventUseRadius", 1, 30, 1, ""),
         ["moveArriveRadius"]     = new("moveArriveRadius", 0.5f, 12, 0.5f, ""),
         ["moveCooldownMs"]       = new("moveCooldownMs", 20, 500, 10, "ms"),
         ["moveLookAhead"]        = new("moveLookAhead", 2, 40, 1, ""),

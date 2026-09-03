@@ -63,6 +63,16 @@ public sealed partial class ApiServer
         mapClearStampRadius = _settings.MapClearStampRadius,
         mapClearAggroRange = _settings.MapClearAggroRange,
         mapClearStuckMs = _settings.MapClearStuckMs,
+        eventEssence = _settings.EventEssence,
+        eventStrongbox = _settings.EventStrongbox,
+        eventShrine = _settings.EventShrine,
+        eventBreach = _settings.EventBreach,
+        eventRitual = _settings.EventRitual,
+        eventChests = _settings.EventChests,
+        eventClickStalled = _settings.EventClickStalled,
+        eventRange = _settings.EventRange,
+        eventUseRadius = _settings.EventUseRadius,
+        eventMaxClicks = _settings.EventMaxClicks,
         moveMethod = _settings.MoveMethod,
         moveArriveRadius = _settings.MoveArriveRadius,
         moveRunEnabled = _settings.MoveRunEnabled,
@@ -165,6 +175,16 @@ public sealed partial class ApiServer
                 case "mapClearStampRadius" when TryInt(p.Value, out var n): _settings.MapClearStampRadius = Math.Clamp(n, 4, 64); applied.Add(p.Name); break;
                 case "mapClearAggroRange" when TryFloat(p.Value, out var f): _settings.MapClearAggroRange = Math.Clamp(f, 0f, 500f); applied.Add(p.Name); break;
                 case "mapClearStuckMs" when TryInt(p.Value, out var n): _settings.MapClearStuckMs = Math.Clamp(n, 1000, 120000); applied.Add(p.Name); break;
+                case "eventEssence" when TryBool(p.Value, out var b): _settings.EventEssence = b; applied.Add(p.Name); break;
+                case "eventStrongbox" when TryBool(p.Value, out var b): _settings.EventStrongbox = b; applied.Add(p.Name); break;
+                case "eventShrine" when TryBool(p.Value, out var b): _settings.EventShrine = b; applied.Add(p.Name); break;
+                case "eventBreach" when TryBool(p.Value, out var b): _settings.EventBreach = b; applied.Add(p.Name); break;
+                case "eventRitual" when TryBool(p.Value, out var b): _settings.EventRitual = b; applied.Add(p.Name); break;
+                case "eventChests" when TryBool(p.Value, out var b): _settings.EventChests = b; applied.Add(p.Name); break;
+                case "eventClickStalled" when TryBool(p.Value, out var b): _settings.EventClickStalled = b; applied.Add(p.Name); break;
+                case "eventRange" when TryFloat(p.Value, out var f): _settings.EventRange = Math.Clamp(f, 0f, 500f); applied.Add(p.Name); break;
+                case "eventUseRadius" when TryFloat(p.Value, out var f): _settings.EventUseRadius = Math.Clamp(f, 1f, 30f); applied.Add(p.Name); break;
+                case "eventMaxClicks" when TryInt(p.Value, out var n): _settings.EventMaxClicks = Math.Clamp(n, 1, 20); applied.Add(p.Name); break;
                 case "moveMethod" when p.Value.ValueKind == JsonValueKind.String && p.Value.GetString() is { } mm
                     && (mm is "WASD" or "Click" or "ClickToMove"): _settings.MoveMethod = mm; applied.Add(p.Name); break;
                 case "moveArriveRadius" when TryFloat(p.Value, out var f): _settings.MoveArriveRadius = Math.Clamp(f, 0f, 64f); applied.Add(p.Name); break;

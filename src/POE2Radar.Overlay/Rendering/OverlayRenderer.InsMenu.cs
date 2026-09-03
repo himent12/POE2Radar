@@ -351,11 +351,19 @@ public sealed partial class OverlayRenderer
         y = Slider(rt, x, y, w, "Stamp radius", "cells marked explored around you", m.MapClearStampRadius, "mapClearStampRadius", 0);
         y = Slider(rt, x, y, w, "Aggro range", "chase packs this close", m.MapClearAggroRange, "mapClearAggroRange", 1);
         y = Slider(rt, x, y, w, "Stuck timeout", "skip a target you stop getting closer to", m.MapClearStuckMs, "mapClearStuckMs", 2);
-        rt.FillRectangle(new RawRectF(x, y + 6f, x + w, y + 6f + RowH), B(PBgRowAlt));
-        T(rt, "explored this zone", _tfBody!, x + 10f, y + 6f + RowH * 0.5f, PMuted);
-        TR(rt, $"{m.VisitedCells:N0} cells", _tfMono!, x + w - 10f, y + 6f + RowH * 0.5f, PText);
-        T(rt, "Sweep heads for the fog: biggest unexplored area per step, steps through fog cost less than cleared ground,", _tfSmall!, x, y + 6f + RowH + 18f, PDim);
-        T(rt, "slivers are skipped and the zone counts as cleared when only slivers remain. Bosses first, packs inside aggro.", _tfSmall!, x, y + 6f + RowH + 32f, PDim);
+        y = Slider(rt, x, y, w, "Event range", "detour to events this close", m.EventRange, "eventRange", 3);
+        // Map events: compact toggle grid (two columns).
+        var half = (w - 12f) * 0.5f;
+        var ly = y; var ry = y;
+        ly = ToggleWide(rt, x, ly, half, "Essences", "click the crystal, then fight", m.EventEssence, "ins:flag:eventEssence", 4);
+        ry = ToggleWide(rt, x + half + 12f, ry, half, "Strongboxes", "open", m.EventStrongbox, "ins:flag:eventStrongbox", 5);
+        ly = ToggleWide(rt, x, ly, half, "Shrines", "activate", m.EventShrine, "ins:flag:eventShrine", 6);
+        ry = ToggleWide(rt, x + half + 12f, ry, half, "Breach hands", "open", m.EventBreach, "ins:flag:eventBreach", 7);
+        ly = ToggleWide(rt, x, ly, half, "Ritual altars", "starts a ritual", m.EventRitual, "ins:flag:eventRitual", 8);
+        ry = ToggleWide(rt, x + half + 12f, ry, half, "Plain chests", "open", m.EventChests, "ins:flag:eventChests", 9);
+        ly = ToggleWide(rt, x, ly, half, "Click stalled mobs", "immune rare → walk up and click", m.EventClickStalled, "ins:flag:eventClickStalled", 10);
+        y = Math.Max(ly, ry);
+        TR(rt, $"explored {m.VisitedCells:N0} cells", _tfMonoSmall!, x + w - 4f, y + 10f, PDim);
     }
 
     private void DrawMovement(DrawTarget rt, InsMenuData m, float x, float y, float w)

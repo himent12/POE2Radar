@@ -200,7 +200,7 @@ public sealed partial class RadarApp
             LastFireUtc: _combatFiredAt,
             Skills: specs,
             NextIndex: _combatNextIndex,
-            IgnoreIds: _combatWatch.IgnoredIds,
+            IgnoreIds: CombatIgnoreIds(),
             Mode: CombatAssist.ParseTargetMode(_settings.CombatTargetMode),
             PriorityOrder: string.Equals(_settings.CombatRotationMode, "Priority", StringComparison.OrdinalIgnoreCase),
             PlayerHpPct: _hpPct,
@@ -310,6 +310,53 @@ public sealed partial class RadarApp
         _macro.Clear();
         foreach (var k in _macroHeld) GameHost.KeyUp(k);
         _macroHeld.Clear();
+    }
+
+    /// <summary>Watchdog ignores ∪ essence-imprisoned monsters (immune until their crystal is clicked).</summary>
+    private IReadOnlyCollection<uint> CombatIgnoreIds()
+    {
+        var ign = _combatWatch.IgnoredIds;
+        var imp = _imprisonedIds;
+        if (imp.Count == 0) return ign;
+        if (ign.Count == 0) return imp;
+        var u = new HashSet<uint>(ign);
+        u.UnionWith(imp);
+        return u;
+    }
+
+    /// <summary>
+    /// Map-event use: when the clear routine's current target is a clickable event and we are inside
+    /// EventUseRadius, aim the cursor at it and tap interact (LMB). Each click is counted; after
+    /// EventMaxClicks with the event still pending it is blacklisted for 90 s so a broken/unreachable one
+    /// cannot hold the bot. A successful click on an essence frees the monster → the fight watchdog's
+    /// ignore list is cleared so the freed rare is fought immediately.
+    /// </summary>
+    private void TickEventUse(bool inGame, bool focused, NumVec2 player, POE2Radar.Core.Game.Vector3? playerWorld, bool inCombat)
+    {
+        if (_eventTarget is not { } ev) { _eventNote = ""; return; }
+        if (!_mapClear || !inGame || !focused || inCombat || _playerDead) { _eventNote = inCombat ? "event: waiting for fight" : ""; return; }
+        var d = NumVec2.Distance(player, ev.Grid);
+        var radius = Math.Max(1f, _settings.EventUseRadius);
+        if (d > radius) { _eventNote = $"event: {ev.Label} {d:0} away"; return; }
+        var now = DateTime.UtcNow;
+        if (now - _eventFiredAt < TimeSpan.FromMilliseconds(Math.Max(200, _settings.EventUseCooldownMs))) return;
+        if (GameHost.WouldDrop(_settings.QuestUseKey)) { _eventNote = "event: interact needs a keyboard key (background)"; return; }
+
+        var clicks = _eventClicks.GetValueOrDefault(ev.Id) + 1;
+        _eventClicks[ev.Id] = clicks;
+        if (clicks > Math.Max(1, _settings.EventMaxClicks))
+        {
+            lock (_eventBlacklist) _eventBlacklist[ev.Id] = now.AddSeconds(90);
+            _eventClicks.Remove(ev.Id);
+            _eventNote = $"event: {ev.Label} unresponsive — skipped";
+            Console.WriteLine($"\nEvent: {ev.Label} #{ev.Id} did not respond after {clicks - 1} clicks — skipping.");
+            return;
+        }
+        AimAtEntity(ev.Grid, ev.World, playerWorld);
+        GameHost.TapKey((ushort)Math.Clamp(_settings.QuestUseKey, 1, 255));
+        _eventFiredAt = now;
+        _eventNote = $"event: clicked {ev.Label} ({clicks})";
+        if (ev.Kind is MapEvents.Kind.Essence or MapEvents.Kind.Stalled) _combatWatch.Reset(); // freed rare → fight it now
     }
 
     /// <summary>Grow/shrink the per-skill last-fire clocks to match the current rotation length.</summary>

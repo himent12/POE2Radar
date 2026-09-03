@@ -242,6 +242,19 @@ public sealed class RadarSettings
     public float MapClearAggroRange { get; set; } = 80f;
     // Give up on a target (cell or mob) the bot has not gotten closer to for this long while not fighting.
     public int MapClearStuckMs { get; set; } = 8000;
+    // In-map events the clear routine walks to and clicks (essence crystals, strongboxes, shrines, breach
+    // hands, ritual altars, plain chests) + "click a monster nothing lands on" (essence-encased rares).
+    public bool EventEssence { get; set; } = true;
+    public bool EventStrongbox { get; set; } = true;
+    public bool EventShrine { get; set; } = true;
+    public bool EventBreach { get; set; } = true;
+    public bool EventRitual { get; set; }
+    public bool EventChests { get; set; }
+    public bool EventClickStalled { get; set; } = true;
+    public float EventRange { get; set; } = 120f;     // only detour to events this close (0 = any)
+    public float EventUseRadius { get; set; } = 7f;   // click when this close
+    public int EventUseCooldownMs { get; set; } = 900;
+    public int EventMaxClicks { get; set; } = 4;      // give up (blacklist 90 s) after this many clicks without effect
 
     // ── Path move (F5 in-game kill-switch). Default OFF. MoveEnabled is NOT writable
     //    via the HTTP API — same as CombatAssistEnabled / QuestFollowEnabled / BotEnabled. When armed
