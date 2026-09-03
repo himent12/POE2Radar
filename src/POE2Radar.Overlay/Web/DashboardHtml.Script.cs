@@ -202,8 +202,20 @@ function renderCombatSkills(){
     +'<input type="checkbox" class="sk-rare" '+(sk.rareOnly?'checked':'')+' title="only against rare / unique">'
     +'<input type="checkbox" class="sk-on" '+(sk.enabled===false?'':'checked')+' title="enabled">'
     +'<button type="button" class="delbtn sk-del">Remove</button></div>'
+    +'<div class="skrow skcombo" data-i="'+i+'"><span class="skn"></span>'
+    +'<label>×<input class="numin sk-rep" type="number" step="1" min="1" max="10" value="'+(sk.repeat||1)+'" title="tap the key this many times"></label>'
+    +'<label>gap<input class="numin sk-gap" type="number" step="10" min="30" max="2000" value="'+(sk.repeatGapMs||150)+'" title="ms between repeated taps"></label>'
+    +'<label>hold<input class="numin sk-hold" type="number" step="50" min="0" max="10000" value="'+(sk.holdMs||0)+'" title="ms to hold the key (0 = tap)"></label>'
+    +'<label><input type="checkbox" class="sk-dodge" '+(sk.dodgeAfter?'checked':'')+'> dodge after</label>'
+    +'<label>then wait<input class="numin sk-next" type="number" step="50" min="0" max="10000" value="'+(sk.nextDelayMs||0)+'" title="ms the whole rotation waits after this cast"></label></div>'
   ).join('');
-  $$('#combatSkills .skrow').forEach(row=>{
+  $$('#combatSkills .skcombo').forEach(row=>{
+    const i=+row.dataset.i, sk=combatSkillsData[i]; if(!sk) return;
+    const num=(cls,key,lo,hi)=>{ row.querySelector(cls).onchange=e=>{ const v=parseInt(e.target.value,10); if(!isNaN(v)){ sk[key]=Math.max(lo,Math.min(hi,v)); saveCombatSkills(); } }; };
+    num('.sk-rep','repeat',1,10); num('.sk-gap','repeatGapMs',30,2000); num('.sk-hold','holdMs',0,10000); num('.sk-next','nextDelayMs',0,10000);
+    row.querySelector('.sk-dodge').onchange=e=>{ sk.dodgeAfter=!!e.target.checked; saveCombatSkills(); };
+  });
+  $$('#combatSkills .skrow:not(.skcombo)').forEach(row=>{
     const i=+row.dataset.i, sk=combatSkillsData[i]; if(!sk) return;
     row.querySelector('.sk-key').onchange=e=>{ const vk=charToVk(e.target.value); if(vk){ sk.key=vk; saveCombatSkills(); } e.target.value=vkToChar(sk.key); };
     row.querySelector('.sk-cd').onchange=e=>{ const v=parseFloat(e.target.value); if(!isNaN(v)){ sk.cooldownMs=Math.max(0,v); saveCombatSkills(); } };

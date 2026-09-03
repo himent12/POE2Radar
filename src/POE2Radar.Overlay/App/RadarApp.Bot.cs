@@ -71,7 +71,7 @@ public sealed partial class RadarApp
     /// Auto-respawn. Returns true while the character is dead (callers suppress all other input). Any bot
     /// arm bit (bot / clear / combat / move) enables it; plain overlay users without automation are left alone.
     /// </summary>
-    private bool TickRespawn(bool inGame, bool focused)
+    private bool TickRespawn(bool inGame, bool focused, nint inGameState)
     {
         var automation = _botEnabled || _mapClear || CombatArmed || MoveArmed;
         if (!inGame || !_playerDead || !automation)
@@ -93,16 +93,30 @@ public sealed partial class RadarApp
             _deadSinceUtc = now;
             _nextRespawnTapUtc = now.AddMilliseconds(Math.Max(500, _settings.RespawnDelayMs));
             ReleaseHeldKeys();
+            AbortComboMacro();
             Console.WriteLine("\nRespawn: character died — resurrecting at checkpoint.");
         }
         _respawnNote = "dead → respawning";
         if (!_settings.AutoRespawn || !focused) { _respawnNote = _settings.AutoRespawn ? "dead (PoE2 not focused)" : "dead (auto-respawn off)"; return true; }
-        if (now >= _nextRespawnTapUtc && _settings.RespawnKey is >= 1 and <= 255)
+        if (now < _nextRespawnTapUtc) return true;
+        _nextRespawnTapUtc = now.AddSeconds(2);
+        _respawnTaps++;
+        // The death screen is a real button — find "Resurrect at Checkpoint" in the visible UI tree and click
+        // its centre. Keyboard fallback (Space/Enter) only if the element cannot be found.
+        if (inGameState != 0 && _liveRender.TryFindVisibleTextRect(inGameState, "Resurrect at Checkpoint",
+                _window.Width, _window.Height, out var bx, out var by, out var bw, out var bh, out _))
+        {
+            var cx = _window.OriginX + (int)MathF.Round(bx + bw * 0.5f);
+            var cy = _window.OriginY + (int)MathF.Round(by + bh * 0.5f);
+            GameHost.SetCursorPos(cx, cy);
+            GameHost.TapKey(0x01);
+            _respawnNote = $"dead → clicking Resurrect ({_respawnTaps})";
+            return true;
+        }
+        if (_settings.RespawnKey is >= 1 and <= 255)
         {
             GameHost.TapKey((ushort)_settings.RespawnKey);
-            _respawnTaps++;
-            _nextRespawnTapUtc = now.AddSeconds(2);
-            _respawnNote = $"dead → respawn tap {_respawnTaps}";
+            _respawnNote = $"dead → button not found, key tap {_respawnTaps}";
         }
         return true;
     }
@@ -170,8 +184,11 @@ public sealed partial class RadarApp
         for (var i = 0; i < n; i++)
         {
             var sk = src![i];
-            specs[i] = new CombatAssist.Skill(sk.Key, sk.CooldownMs, sk.Range, Math.Max(1, sk.MinTargets), sk.RareOnly, sk.HpBelowPct, sk.Enabled);
+            specs[i] = new CombatAssist.Skill(sk.Key, sk.CooldownMs, sk.Range, Math.Max(1, sk.MinTargets), sk.RareOnly, sk.HpBelowPct, sk.Enabled,
+                Math.Clamp(sk.Repeat, 1, 10), Math.Clamp(sk.RepeatGapMs, 30, 2000), Math.Clamp(sk.HoldMs, 0, 10000), sk.DodgeAfter, Math.Clamp(sk.NextDelayMs, 0, 10000));
         }
+        // A combo macro in flight owns the keyboard: advance it and skip deciding.
+        var busy = RunComboMacro(now, player, playerWorld) || now < _comboLockUntil;
         var decision = CombatAssist.Decide(new CombatAssist.Snapshot(
             Armed: CombatArmed,
             Focused: focused,
@@ -187,7 +204,8 @@ public sealed partial class RadarApp
             Mode: CombatAssist.ParseTargetMode(_settings.CombatTargetMode),
             PriorityOrder: string.Equals(_settings.CombatRotationMode, "Priority", StringComparison.OrdinalIgnoreCase),
             PlayerHpPct: _hpPct,
-            KeyboardOnly: GameHost.IsBackgroundActive && !GameHost.BackgroundSupportsMouse));
+            KeyboardOnly: GameHost.IsBackgroundActive && !GameHost.BackgroundSupportsMouse,
+            Busy: busy));
         _hostilesNear = decision.HostilesInRange;
         if (GameHost.IsBackgroundActive && !GameHost.BackgroundSupportsMouse && !decision.ShouldTap && decision.HasTarget
             && (src?.All(k => k.Key is 0x01 or 0x02 or 0x04 or 0x05 or 0x06) ?? false))
@@ -197,15 +215,101 @@ public sealed partial class RadarApp
             : watch.Stalled ? decision.Note + " (stalled, moving on)"
             : watch.Fighting ? $"{decision.Note} ({watch.Note})"
             : decision.Note;
-        if (watch.Flee) return; // running, not swinging
+        if (watch.Flee) { AbortComboMacro(); return; } // running, not swinging
         if (!decision.ShouldTap) return;
         // Aim: PoE2 fires a skill toward the cursor, so warp it onto the target first — otherwise the
         // rotation swings at wherever the last move-click left the cursor and the mob never dies.
         if (decision.HasTarget) AimAtEntity(decision.TargetGrid, decision.TargetWorld, playerWorld);
-        GameHost.TapKey(decision.Vk);
+        var spec = specs[decision.SkillIndex];
+        if (spec.Repeat > 1 || spec.HoldMs > 0 || spec.DodgeAfter || spec.NextDelayMs > 0)
+            StartComboMacro(spec, decision, now);
+        else
+            GameHost.TapKey(decision.Vk);
         if ((uint)decision.SkillIndex < (uint)_combatFiredAt.Length)
             _combatFiredAt[decision.SkillIndex] = now;
         _combatNextIndex = decision.NextIndex;
+    }
+
+    // ── Combo macro executor (render thread). One skill cast expanded into timed steps: N taps or a hold,
+    //    then an optional dodge-roll away from the target, then a rotation lockout. Non-blocking: each tick
+    //    performs whatever steps are due. ──
+    private enum MacroStep { KeyDown, KeyUp, Tap, DodgeStart, DodgeEnd, Done }
+    private readonly Queue<(MacroStep Step, ushort Vk, TimeSpan After)> _macro = new();
+    private DateTime _macroNextUtc = DateTime.MinValue;
+    private DateTime _comboLockUntil = DateTime.MinValue;
+    private NumVec2 _macroTargetGrid;
+    private readonly List<ushort> _macroHeld = new();
+
+    private void StartComboMacro(CombatAssist.Skill spec, CombatAssist.Decision d, DateTime now)
+    {
+        AbortComboMacro();
+        _macroTargetGrid = d.TargetGrid;
+        var gap = TimeSpan.FromMilliseconds(spec.RepeatGapMs);
+        for (var i = 0; i < spec.Repeat; i++)
+        {
+            var after = i == 0 ? TimeSpan.Zero : gap;
+            if (spec.HoldMs > 0)
+            {
+                _macro.Enqueue((MacroStep.KeyDown, d.Vk, after));
+                _macro.Enqueue((MacroStep.KeyUp, d.Vk, TimeSpan.FromMilliseconds(spec.HoldMs)));
+            }
+            else _macro.Enqueue((MacroStep.Tap, d.Vk, after));
+        }
+        if (spec.DodgeAfter && _settings.CombatDodgeKey is >= 1 and <= 255)
+        {
+            _macro.Enqueue((MacroStep.DodgeStart, (ushort)_settings.CombatDodgeKey, TimeSpan.FromMilliseconds(120)));
+            _macro.Enqueue((MacroStep.DodgeEnd, 0, TimeSpan.FromMilliseconds(320)));
+        }
+        _macro.Enqueue((MacroStep.Done, 0, TimeSpan.FromMilliseconds(spec.NextDelayMs)));
+        _macroNextUtc = now;
+    }
+
+    /// <summary>Advance the macro; true while steps remain.</summary>
+    private bool RunComboMacro(DateTime now, NumVec2 player, POE2Radar.Core.Game.Vector3? playerWorld)
+    {
+        while (_macro.Count > 0 && now >= _macroNextUtc)
+        {
+            var (step, vk, after) = _macro.Dequeue();
+            switch (step)
+            {
+                case MacroStep.KeyDown: GameHost.KeyDown(vk); _macroHeld.Add(vk); break;
+                case MacroStep.KeyUp: GameHost.KeyUp(vk); _macroHeld.Remove(vk); break;
+                case MacroStep.Tap: GameHost.TapKey(vk); break;
+                case MacroStep.DodgeStart:
+                {
+                    // Roll AWAY from the target: hold the opposite direction keys for the roll and aim the cursor
+                    // behind us (PoE2 rolls along held WASD, else toward the cursor — cover both).
+                    var away = player - _macroTargetGrid;
+                    if (away.LengthSquared() < 1e-3f) away = new NumVec2(1f, 0f);
+                    away = NumVec2.Normalize(away);
+                    var dir = ((int)MathF.Round(away.X), (int)MathF.Round(away.Y));
+                    if (dir == (0, 0)) dir = (MathF.Abs(away.X) > MathF.Abs(away.Y) ? MathF.Sign(away.X) : 0, MathF.Abs(away.X) > MathF.Abs(away.Y) ? 0 : MathF.Sign(away.Y));
+                    var keys = PathMove.KeysFor(dir, _settings.MoveKeyW, _settings.MoveKeyA, _settings.MoveKeyS, _settings.MoveKeyD);
+                    var aim = player + away * 8f;
+                    AimClick((int)MathF.Round(aim.X), (int)MathF.Round(aim.Y), playerWorld);
+                    foreach (var k in keys) { GameHost.KeyDown(k); _macroHeld.Add(k); }
+                    GameHost.TapKey(vk);
+                    break;
+                }
+                case MacroStep.DodgeEnd:
+                    foreach (var k in _macroHeld) GameHost.KeyUp(k);
+                    _macroHeld.Clear();
+                    break;
+                case MacroStep.Done:
+                    _comboLockUntil = now + after;
+                    break;
+            }
+            // The NEXT step's delay is measured from this step; "after" of the dequeued step already elapsed.
+            _macroNextUtc = _macro.Count > 0 ? now + _macro.Peek().After : now;
+        }
+        return _macro.Count > 0;
+    }
+
+    private void AbortComboMacro()
+    {
+        _macro.Clear();
+        foreach (var k in _macroHeld) GameHost.KeyUp(k);
+        _macroHeld.Clear();
     }
 
     /// <summary>Grow/shrink the per-skill last-fire clocks to match the current rotation length.</summary>

@@ -48,6 +48,7 @@ public sealed partial class ApiServer
         autoRespawn = _settings.AutoRespawn,
         respawnKey = _settings.RespawnKey,
         respawnDelayMs = _settings.RespawnDelayMs,
+        combatDodgeKey = _settings.CombatDodgeKey,
         combatIgnoreMs = _settings.CombatIgnoreMs,
         combatFleeHpPct = _settings.CombatFleeHpPct,
         combatFleeRecoverPct = _settings.CombatFleeRecoverPct,
@@ -154,6 +155,7 @@ public sealed partial class ApiServer
                 case "autoRespawn" when TryBool(p.Value, out var b): _settings.AutoRespawn = b; applied.Add(p.Name); break;
                 case "respawnKey" when TryInt(p.Value, out var n): _settings.RespawnKey = Math.Clamp(n, 1, 255); applied.Add(p.Name); break;
                 case "respawnDelayMs" when TryInt(p.Value, out var n): _settings.RespawnDelayMs = Math.Clamp(n, 500, 30000); applied.Add(p.Name); break;
+                case "combatDodgeKey" when TryInt(p.Value, out var n): _settings.CombatDodgeKey = Math.Clamp(n, 1, 255); applied.Add(p.Name); break;
                 case "combatSkills" when p.Value.ValueKind == JsonValueKind.Array:
                     if (TryParseCombatSkills(p.Value, out var csk)) { _settings.CombatSkills = csk; applied.Add(p.Name); }
                     break;
@@ -487,7 +489,13 @@ public sealed partial class ApiServer
                 var hpBelow = 0f;
                 if (s.TryGetProperty("hpBelowPct", out var hv) && TryFloat(hv, out var hb)) hpBelow = Math.Clamp(hb, 0f, 100f);
                 var enabled = !(s.TryGetProperty("enabled", out var ev) && TryBool(ev, out var eb)) || eb;
-                skills.Add(new CombatSkill { Key = key, CooldownMs = cd, Range = range, MinTargets = minT, RareOnly = rareOnly, HpBelowPct = hpBelow, Enabled = enabled });
+                var repeat = 1; if (s.TryGetProperty("repeat", out var rpv) && TryInt(rpv, out var rp)) repeat = Math.Clamp(rp, 1, 10);
+                var gap = 150; if (s.TryGetProperty("repeatGapMs", out var gv) && TryInt(gv, out var gp)) gap = Math.Clamp(gp, 30, 2000);
+                var hold = 0; if (s.TryGetProperty("holdMs", out var hov) && TryInt(hov, out var ho)) hold = Math.Clamp(ho, 0, 10000);
+                var dodge = s.TryGetProperty("dodgeAfter", out var dv) && TryBool(dv, out var db) && db;
+                var nextDelay = 0; if (s.TryGetProperty("nextDelayMs", out var ndv) && TryInt(ndv, out var nd)) nextDelay = Math.Clamp(nd, 0, 10000);
+                skills.Add(new CombatSkill { Key = key, CooldownMs = cd, Range = range, MinTargets = minT, RareOnly = rareOnly, HpBelowPct = hpBelow, Enabled = enabled,
+                    Repeat = repeat, RepeatGapMs = gap, HoldMs = hold, DodgeAfter = dodge, NextDelayMs = nextDelay });
                 if (skills.Count >= 8) break;
             }
             return true;

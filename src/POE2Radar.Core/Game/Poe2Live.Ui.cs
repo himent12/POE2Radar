@@ -284,6 +284,42 @@ public sealed partial class Poe2Live
         return item != 0 && ResolveComponent(item, "RenderItem") != 0 ? item : 0;
     }
 
+    /// <summary>
+    /// Find a VISIBLE UI element whose text contains <paramref name="needle"/> (case-insensitive) and return
+    /// its screen rect — e.g. the death screen's "Resurrect at Checkpoint" button so the bot can click it.
+    /// BFS over the visible tree (invisible subtrees pruned); bounded to 20k nodes. Render thread safe.
+    /// </summary>
+    public bool TryFindVisibleTextRect(nint inGameState, string needle, float winW, float winH,
+        out float x, out float y, out float w, out float h, out string text)
+    {
+        x = y = w = h = 0f; text = "";
+        var uiRoot = Ptr(inGameState + Poe2.InGameState.UiRoot);
+        if (uiRoot == 0) return false;
+        const uint visBit = 1u << Poe2.UiElement.FlagVisibleBit;
+        var queue = new Queue<nint>(); queue.Enqueue(uiRoot);
+        var visited = new HashSet<nint>();
+        while (queue.Count > 0 && visited.Count < 20000)
+        {
+            var el = queue.Dequeue();
+            if (el == 0 || !visited.Add(el)) continue;
+            var visible = _reader.TryReadStruct<uint>(el + Poe2.UiElement.Flags, out var flags) && (flags & visBit) != 0;
+            if (!visible && el != uiRoot) continue;
+            if (ChildSpan(el, out var first, out var nn))
+                for (long k = 0; k < nn; k++) queue.Enqueue(Ptr(first + (nint)(k * 8)));
+            var t = ReadStdWString(el + Poe2.UiElement.Text);
+            if (t.Length < needle.Length || !t.Contains(needle, StringComparison.OrdinalIgnoreCase)) continue;
+            // The text element may be a zero-size label inside the button — use the first ancestor with a real size.
+            var cur = el;
+            for (var up = 0; up < 4; up++)
+            {
+                if (TryUiElementRect(cur, winW, winH, out x, out y, out w, out h) && w >= 8f && h >= 8f) { text = t; return true; }
+                cur = Ptr(cur + Poe2.UiElement.Parent);
+                if (cur == 0) break;
+            }
+        }
+        return false;
+    }
+
     private bool ChildSpan(nint el, out nint first, out long n)
     {
         first = Ptr(el + Poe2.UiElement.Children); n = 0;

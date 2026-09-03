@@ -309,6 +309,7 @@ public sealed partial class RadarApp
             case "flip" when parts.Length == 5:
                 if (parts[4] == "enabled") sk.Enabled = !sk.Enabled;
                 else if (parts[4] == "rareOnly") sk.RareOnly = !sk.RareOnly;
+                else if (parts[4] == "dodgeAfter") sk.DodgeAfter = !sk.DodgeAfter;
                 else return;
                 break;
             case "adj" when parts.Length == 6 && float.TryParse(parts[5], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var d):
@@ -326,6 +327,10 @@ public sealed partial class RadarApp
                     case "range": sk.Range = Math.Clamp(sk.Range + d, 0f, 200f); break;
                     case "min": sk.MinTargets = Math.Clamp(sk.MinTargets + (int)d, 1, 20); break;
                     case "hp": sk.HpBelowPct = Math.Clamp(sk.HpBelowPct + d, 0f, 100f); break;
+                    case "repeat": sk.Repeat = Math.Clamp(sk.Repeat + (int)d, 1, 10); break;
+                    case "gap": sk.RepeatGapMs = Math.Clamp(sk.RepeatGapMs + (int)d, 30, 2000); break;
+                    case "hold": sk.HoldMs = Math.Clamp(sk.HoldMs + (int)d, 0, 10000); break;
+                    case "next": sk.NextDelayMs = Math.Clamp(sk.NextDelayMs + (int)d, 0, 10000); break;
                     default: return;
                 }
                 break;

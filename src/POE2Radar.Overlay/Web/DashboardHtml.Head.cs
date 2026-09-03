@@ -331,6 +331,9 @@ internal static partial class DashboardHtml
 .skrow .sk-min{width:64px}
 .skrow .sk-hp{width:64px}
 .skrow input[type=checkbox]{width:16px;height:16px;margin:0 10px 0 4px}
+.skcombo{padding-top:2px;border-bottom:1px dotted var(--line-soft);font-size:11px;color:var(--ink-faint)}
+.skcombo label{display:flex;align-items:center;gap:4px}
+.skcombo .numin{width:58px}
   .skhead{display:flex;align-items:center;gap:8px;padding:4px 0 2px;color:var(--ink-faint);font-size:10px;letter-spacing:.06em;text-transform:uppercase}
   .skhead span:nth-child(1){width:16px;flex:none}
   .skhead span:nth-child(2){width:44px;flex:none}

@@ -202,6 +202,8 @@ public sealed class RadarSettings
     public bool AutoRespawn { get; set; } = true;
     public int RespawnKey { get; set; } = 0x20; // Space
     public int RespawnDelayMs { get; set; } = 2500;
+    // Dodge roll key used by "dodge after" skill steps (PoE2 default: Space).
+    public int CombatDodgeKey { get; set; } = 0x20;
     public int CombatIgnoreMs { get; set; } = 20000;
     // Low-HP flee: below CombatFleeHpPct the bot stops attacking and runs CombatFleeDistance cells away
     // from the pack (most open direction), until HP is back at CombatFleeRecoverPct. 0 = never flee.

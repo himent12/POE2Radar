@@ -65,7 +65,7 @@ public sealed class InsMenuRenderTests
         {
             case 0: Assert.Contains("ins:toggle:bot", actions); Assert.Contains("ins:toggle:flask", actions); Assert.Contains("ins:flag:autoRespawn", actions); break;
             case 1: Assert.Contains("ins:slider:combatRange", actions); Assert.Contains("ins:adj:combatRange:1", actions); Assert.Contains("ins:set:combatTargetMode:Rarity", actions); break;
-            case 2: Assert.Contains("ins:skill:add", actions); Assert.Contains("ins:skill:adj:0:cd:50", actions); Assert.Contains("ins:skill:flip:1:rareOnly", actions); Assert.Contains("ins:skill:del:2", actions); break;
+            case 2: Assert.Contains("ins:skill:add", actions); Assert.Contains("ins:skill:adj:0:cd:50", actions); Assert.Contains("ins:skill:flip:1:rareOnly", actions); Assert.Contains("ins:skill:del:2", actions); Assert.Contains("ins:skill:adj:0:repeat:1", actions); Assert.Contains("ins:skill:flip:0:dodgeAfter", actions); break;
             case 3: Assert.Contains("ins:slider:mapClearAggroRange", actions); break;
             case 4: Assert.Contains("ins:set:moveMethod:Click", actions); Assert.Contains("ins:slider:moveLookAhead", actions); Assert.Contains("ins:flag:moveRunEnabled", actions); break;
         }

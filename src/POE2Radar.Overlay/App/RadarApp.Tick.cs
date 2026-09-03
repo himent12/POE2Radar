@@ -189,7 +189,7 @@ public sealed partial class RadarApp
         GameHost.SetInputDisplay(_settings.PlayInBackground ? _settings.InputDisplay : null);
         var focused = realFocused || (_settings.PlayInBackground && _gameHwnd != 0);
         // Dead: no combat / movement / interact; auto-respawn owns the input until we are alive again.
-        if (TickRespawn(inGame, focused)) focused = false;
+        if (TickRespawn(inGame, focused, inGameState)) focused = false;
         // On any real focus flip drop held keys so they are pressed fresh through the (possibly new) route.
         if (realFocused != _lastRealFocused) ReleaseHeldKeys();
         _lastRealFocused = realFocused;

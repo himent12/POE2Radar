@@ -305,7 +305,14 @@ internal static partial class DashboardHtml
               <input class="numin" type="number" step="1" min="1" max="200" data-set="combatFleeDistance"></div>
               <div class="row"><div class="rl">Auto-respawn<small>when the character dies, tap the resurrect key until alive (bot / clear / combat / move must be armed)</small></div>
                 <input type="checkbox" data-set="autoRespawn"></div>
-              <div class="row"><div class="rl">Respawn key<small>PoE2 death screen: Space or Enter = Resurrect at Checkpoint</small></div>
+              <div class="row"><div class="rl">Dodge key<small>used by "dodge after" skill steps (PoE2 default: Space)</small></div>
+                <select class="numin selin" data-set="combatDodgeKey">
+                  <option value="32">Space</option>
+                  <option value="16">Shift</option>
+                  <option value="17">Ctrl</option>
+                  <option value="18">Alt</option>
+                </select></div>
+              <div class="row"><div class="rl">Respawn key<small>fallback only — the bot clicks the "Resurrect at Checkpoint" button it finds on screen; this key is tapped if the button cannot be located</small></div>
                 <select class="numin selin" data-set="respawnKey">
                   <option value="32">Space</option>
                   <option value="13">Enter</option>

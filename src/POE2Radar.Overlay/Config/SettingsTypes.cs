@@ -18,6 +18,17 @@ public sealed class CombatSkill
     /// <summary>&gt; 0: only fire while the player's life is under this % (defensive / guard skills).</summary>
     public float HpBelowPct { get; set; }
     public bool Enabled { get; set; } = true;
+    // ── Combo controls ──
+    /// <summary>Tap the key this many times per cast (1..10).</summary>
+    public int Repeat { get; set; } = 1;
+    /// <summary>Gap between repeated taps.</summary>
+    public int RepeatGapMs { get; set; } = 150;
+    /// <summary>&gt; 0: hold the key for this long instead of tapping (channelled skills).</summary>
+    public int HoldMs { get; set; }
+    /// <summary>After the casts, dodge-roll away from the target.</summary>
+    public bool DodgeAfter { get; set; }
+    /// <summary>Block the whole rotation for this long after the cast (animation / combo timing).</summary>
+    public int NextDelayMs { get; set; }
 }
 
 /// <summary>

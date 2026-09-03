@@ -36,7 +36,7 @@ public sealed partial class OverlayRenderer
     private static readonly Color4 PTeal     = new(0.45f, 0.82f, 0.86f, 1f);
     private static readonly Color4 PInk      = new(0.08f, 0.07f, 0.06f, 1f);
 
-    private const float MenuW = 760f, MenuH = 480f, SideW = 176f, Pad = 16f, RowH = 34f, FootH = 30f;
+    private const float MenuW = 760f, MenuH = 540f, SideW = 176f, Pad = 16f, RowH = 34f, FootH = 30f;
     private static readonly string[] Sections = { "Overview", "Combat", "Skills", "Clearing", "Movement" };
 
     private DrawTextFormat? _tfTitle, _tfBody, _tfBold, _tfSmall, _tfMono, _tfMonoSmall, _tfCaps;
@@ -271,10 +271,10 @@ public sealed partial class OverlayRenderer
         HLine(rt, x, x + w, y + 18f, PLine);
         y += 22f;
 
-        for (var i = 0; i < skills.Count && y + 28f < bottom - 30f; i++)
+        for (var i = 0; i < skills.Count && y + 50f < bottom - 30f; i++)
         {
             var sk = skills[i];
-            var r = new RawRectF(x, y, x + w, y + 28f);
+            var r = new RawRectF(x, y, x + w, y + 50f);
             rt.FillRectangle(r, B(i % 2 == 0 ? PBgRow : PBgRowAlt));
             var cy = y + 14f;
             var ink = sk.Enabled ? PText : PDim;
@@ -292,7 +292,18 @@ public sealed partial class OverlayRenderer
             rt.DrawLine(new NumVec2(del.Left + 4f, del.Top + 4f), new NumVec2(del.Right - 4f, del.Bottom - 4f), B(PDim), 1.2f);
             rt.DrawLine(new NumVec2(del.Right - 4f, del.Top + 4f), new NumVec2(del.Left + 4f, del.Bottom - 4f), B(PDim), 1.2f);
             _legendRowRects.Add((del, $"ins:skill:del:{i}"));
-            y += 30f;
+
+            // Combo line: ×N taps · gap · hold · dodge after · then wait.
+            var cy2 = y + 37f;
+            cx = x + 30f;
+            T(rt, "combo", _tfCaps!, x + 30f, cy2, PDim); cx += 48f;
+            Cell(rt, cx, cy2, 70f, $"×{Math.Max(1, sk.Repeat)}", i, "repeat", 1f, ink); cx += 70f;
+            Cell(rt, cx, cy2, 92f, $"gap {sk.RepeatGapMs}", i, "gap", 50f, ink); cx += 92f;
+            Cell(rt, cx, cy2, 96f, sk.HoldMs <= 0 ? "tap" : $"hold {sk.HoldMs}", i, "hold", 100f, ink); cx += 96f;
+            Cell(rt, cx, cy2, 104f, sk.NextDelayMs <= 0 ? "then 0" : $"then {sk.NextDelayMs}", i, "next", 100f, ink); cx += 104f;
+            T(rt, "dodge", _tfSmall!, cx + 6f, cy2, PMuted);
+            Check(rt, cx + 52f, cy2, sk.DodgeAfter, $"ins:skill:flip:{i}:dodgeAfter");
+            y += 52f;
         }
 
         if (skills.Count < 8)
@@ -302,7 +313,7 @@ public sealed partial class OverlayRenderer
             TC(rt, "+ add skill", _tfSmall!, (add.Left + add.Right) * 0.5f, (add.Top + add.Bottom) * 0.5f, PGold);
             _legendRowRects.Add((add, "ins:skill:add"));
         }
-        T(rt, "‹ › step a value  ·  key cycles Q W E R T 1-5 and mouse buttons  ·  RANGE auto = attack range", _tfSmall!, x, bottom - 12f, PDim);
+        T(rt, "‹ › steps a value · combo: ×N taps, gap/hold/then in ms, dodge = roll away from the target after the cast", _tfSmall!, x, bottom - 12f, PDim);
     }
 
     private void Cell(DrawTarget rt, float x, float cy, float w, string value, int i, string field, float step, Color4 ink)

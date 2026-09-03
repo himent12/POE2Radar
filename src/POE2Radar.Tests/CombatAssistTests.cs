@@ -346,6 +346,15 @@ public sealed class CombatAssistTests
     }
 
     [Fact]
+    public void Busy_macro_blocks_new_decisions()
+    {
+        var d = CombatAssist.Decide(Base(nextIndex: 1, entities: [Monster(3, 0, reaction: 0)]) with { Busy = true });
+        Assert.False(d.ShouldTap);
+        Assert.Equal("casting", d.Note);
+        Assert.Equal(1, d.NextIndex);
+    }
+
+    [Fact]
     public void Priority_order_always_prefers_first_ready_skill()
     {
         var skills = new[] { new CombatAssist.Skill(VkQ, 400), new CombatAssist.Skill(VkW, 400) };

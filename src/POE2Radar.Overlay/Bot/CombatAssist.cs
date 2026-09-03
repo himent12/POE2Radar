@@ -21,6 +21,10 @@ public static class CombatAssist
     /// <see cref="HpBelowPct"/> &gt; 0 = only fire while the PLAYER's life is under this % (defensive skills, guard skills).
     /// <see cref="Enabled"/> false = slot kept but skipped.
     /// </summary>
+    /// <para>Combo controls: <see cref="Repeat"/> taps the key N times (<see cref="RepeatGapMs"/> apart),
+    /// <see cref="HoldMs"/> &gt; 0 holds it instead of tapping (channelled skills), <see cref="DodgeAfter"/> rolls
+    /// away from the target when the casts are done, and <see cref="NextDelayMs"/> blocks the whole rotation
+    /// for that long afterwards (animation / combo timing).</para>
     public readonly record struct Skill(
         int Key,
         int CooldownMs,
@@ -28,7 +32,12 @@ public static class CombatAssist
         int MinTargets = 1,
         bool RareOnly = false,
         float HpBelowPct = 0f,
-        bool Enabled = true);
+        bool Enabled = true,
+        int Repeat = 1,
+        int RepeatGapMs = 150,
+        int HoldMs = 0,
+        bool DodgeAfter = false,
+        int NextDelayMs = 0);
 
     public readonly record struct Snapshot(
         bool Armed,
@@ -45,7 +54,8 @@ public static class CombatAssist
         TargetMode Mode = TargetMode.Nearest,
         bool PriorityOrder = false,
         float PlayerHpPct = 100f,
-        bool KeyboardOnly = false);   // background mode on Linux: mouse-bound skills cannot be delivered
+        bool KeyboardOnly = false,    // background mode on Linux: mouse-bound skills cannot be delivered
+        bool Busy = false);           // a combo macro is still executing → no new decision
 
     /// <summary>
     /// <see cref="HasTarget"/> + <see cref="TargetGrid"/> / <see cref="TargetWorld"/> name the hostile the
@@ -76,6 +86,7 @@ public static class CombatAssist
         if (!s.Armed) return Idle(0, "OFF (F4)");
         if (!s.InGame) return Idle(0, "paused (not in game)");
         if (!s.Focused) return Idle(0, "paused (PoE2 not focused)");
+        if (s.Busy) return Idle(s.NextIndex, "casting");
 
         var skills = s.Skills;
         var n = skills?.Count ?? 0;
