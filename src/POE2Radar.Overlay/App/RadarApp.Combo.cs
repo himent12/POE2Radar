@@ -32,6 +32,9 @@ public sealed partial class RadarApp
     private readonly RollArbiter _roll = new();
     private readonly List<ushort> _rollDirHeld = new();
     private volatile string _rollNote = "";
+    private NumVec2 _rollPressGrid, _rollPlayerGrid;
+    private bool _rollRetried;
+    private const float RollMovedCells = 1.5f;   // a roll that did not move us this far was eaten by the game
 
     // ── Boss mode. ──
     private readonly BossFight _bossFight = new();
@@ -68,8 +71,9 @@ public sealed partial class RadarApp
         }
         if (spec.DodgeAfter && _settings.CombatDodgeKey is >= 1 and <= 255)
         {
-            // Wait a full cast time after the last tap so the roll does not cancel the final cast.
-            _macro.Enqueue((MacroStep.Dodge, 0, TimeSpan.FromMilliseconds(Math.Max(0, castMs - hold))));
+            // Wait a full cast time (+ the dodge-after delay: the game queues taps, so the last animation may
+            // still be playing when the gap timer says it is done) so the roll does not cancel the final cast.
+            _macro.Enqueue((MacroStep.Dodge, 0, TimeSpan.FromMilliseconds(Math.Max(0, castMs - hold) + Math.Max(0, _settings.CombatDodgeDelayMs))));
             _macro.Enqueue((MacroStep.Done, 0, TimeSpan.FromMilliseconds(_settings.RollPressMs + Math.Max(0, _settings.CombatDodgeRecoverMs) + spec.NextDelayMs)));
         }
         else
@@ -170,6 +174,7 @@ public sealed partial class RadarApp
         _roll.PressMs = Math.Clamp(_settings.RollPressMs, 30, 200);
         _roll.RecoverMs = Math.Clamp(_settings.CombatDodgeRecoverMs, 0, 3000);
         if (!_roll.TryRequest(who, dir, now, out reason)) return false;
+        _rollPressGrid = _rollPlayerGrid;
         if (who is RollArbiter.Owner.Combo or RollArbiter.Owner.Boss)
         {
             foreach (var k in PathMove.KeysFor(dir, _settings.MoveKeyW, _settings.MoveKeyA, _settings.MoveKeyS, _settings.MoveKeyD))
@@ -183,9 +188,13 @@ public sealed partial class RadarApp
         return true;
     }
 
-    /// <summary>Per-tick: release the dodge key after the press, the roll's direction keys after DirHoldMs.</summary>
-    private void TickRoll(DateTime now)
+    /// <summary>Per-tick: release the dodge key after the press, the roll's direction keys after DirHoldMs.
+    /// When a combo / boss roll's recovery ends and the character has not moved, the game ate the press
+    /// (uncancellable animation frame) — press once more.</summary>
+    private void TickRoll(DateTime now, NumVec2 player)
     {
+        _rollPlayerGrid = player;
+        var wasBusy = _roll.Busy;
         var cmd = _roll.Tick(now);
         if (cmd.Release && _settings.CombatDodgeKey is >= 1 and <= 255) GameHost.KeyUp((ushort)_settings.CombatDodgeKey);
         if (cmd.ReleaseDir)
@@ -193,8 +202,18 @@ public sealed partial class RadarApp
             foreach (var k in _rollDirHeld) if (!_heldKeys.Contains(k)) GameHost.KeyUp(k);
             _rollDirHeld.Clear();
         }
+        if (wasBusy && !_roll.Busy)
+        {
+            var moved = NumVec2.Distance(player, _rollPressGrid);
+            if (moved < RollMovedCells && cmd.Owner is RollArbiter.Owner.Combo or RollArbiter.Owner.Boss && !_rollRetried)
+            {
+                _rollRetried = true;
+                if (TryRoll(cmd.Owner, cmd.Dir, now, out _)) { _rollNote = $"roll eaten by the game → retry ({cmd.Owner})"; return; }
+            }
+            _rollRetried = false;
+        }
         if (!_roll.Busy && !_roll.InCast(now) && !_rollNote.StartsWith("combo roll", StringComparison.Ordinal)) _rollNote = "";
-        else if (_roll.Busy) _rollNote = _roll.Note(now);
+        else if (_roll.Busy && !_rollNote.StartsWith("roll eaten", StringComparison.Ordinal)) _rollNote = _roll.Note(now);
     }
 
     /// <summary>Drop the roll state and every key it holds (focus loss, death, disarm).</summary>
@@ -204,6 +223,7 @@ public sealed partial class RadarApp
         foreach (var k in _rollDirHeld) if (!_heldKeys.Contains(k)) GameHost.KeyUp(k);
         _rollDirHeld.Clear();
         _roll.Reset();
+        _rollRetried = false;
         _rollNote = "";
     }
 

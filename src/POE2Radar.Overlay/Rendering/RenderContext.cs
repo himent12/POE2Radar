@@ -296,6 +296,7 @@ public sealed record InsMenuData(
     // ── Roll arbiter / replan smoothing / per-kind arrive radius ──
     int RollPressMs = 60,
     int CombatDodgeRecoverMs = 650,
+    int CombatDodgeDelayMs = 250,
     int MoveRollIntervalMs = 900,
     float MoveRollMinCells = 6f,
     int MoveCoastMs = 400,
@@ -351,6 +352,7 @@ public readonly record struct InsSliderSpec(string Key, float Min, float Max, fl
         ["manaThresholdPct"]     = new("manaThresholdPct", 5, 95, 1, "%"),
         ["rollPressMs"]          = new("rollPressMs", 30, 200, 10, "ms"),
         ["combatDodgeRecoverMs"] = new("combatDodgeRecoverMs", 200, 1500, 50, "ms"),
+        ["combatDodgeDelayMs"]   = new("combatDodgeDelayMs", 0, 1500, 50, "ms", "none"),
         ["moveRollIntervalMs"]   = new("moveRollIntervalMs", 300, 3000, 100, "ms"),
         ["moveRollMinCells"]     = new("moveRollMinCells", 0, 20, 1, "", "always"),
         ["moveCoastMs"]          = new("moveCoastMs", 0, 2000, 50, "ms", "stop"),

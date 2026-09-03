@@ -211,6 +211,9 @@ public sealed class RadarSettings
     // Roll arbiter: ONE owner of the dodge key at a time (mover / combo / flee / boss). A roll = the key held
     // RollPressMs, then CombatDodgeRecoverMs of lockout; never inside a cast's animation window.
     public int RollPressMs { get; set; } = 60;
+    // "Dodge after": extra wait after the last cast's cast time before the roll — the game queues taps, so the
+    // final animation can still be playing when the gap timer says it is done, and a roll then cancels it.
+    public int CombatDodgeDelayMs { get; set; } = 250;
     // Don't START a multi-cast combo on a target under this HP% — a single-tap slot finishes it (0 = always).
     public float CombatComboSkipHpPct { get; set; } = 15f;
     // ── Boss mode: a unique monster inside the engage range. Tighter flee threshold, its own keep-distance,

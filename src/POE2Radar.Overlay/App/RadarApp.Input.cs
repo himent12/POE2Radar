@@ -253,6 +253,7 @@ public sealed partial class RadarApp
         "manaThresholdPct" => _settings.ManaThresholdPct,
         "rollPressMs" => _settings.RollPressMs,
         "combatDodgeRecoverMs" => _settings.CombatDodgeRecoverMs,
+        "combatDodgeDelayMs" => _settings.CombatDodgeDelayMs,
         "moveRollIntervalMs" => _settings.MoveRollIntervalMs,
         "moveRollMinCells" => _settings.MoveRollMinCells,
         "moveCoastMs" => _settings.MoveCoastMs,
@@ -292,6 +293,7 @@ public sealed partial class RadarApp
             case "manaThresholdPct": s.ManaThresholdPct = v; break;
             case "rollPressMs": s.RollPressMs = (int)v; break;
             case "combatDodgeRecoverMs": s.CombatDodgeRecoverMs = (int)v; break;
+            case "combatDodgeDelayMs": s.CombatDodgeDelayMs = (int)v; break;
             case "moveRollIntervalMs": s.MoveRollIntervalMs = (int)v; break;
             case "moveRollMinCells": s.MoveRollMinCells = v; break;
             case "moveCoastMs": s.MoveCoastMs = (int)v; break;

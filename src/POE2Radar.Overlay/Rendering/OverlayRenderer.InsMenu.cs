@@ -358,6 +358,7 @@ public sealed partial class OverlayRenderer
         y = InfoRow(rt, x, y, w, "Now", string.IsNullOrEmpty(m.RollNote) ? "idle" : m.RollNote, string.IsNullOrEmpty(m.RollNote) ? UDim : UText);
         y = Slider(rt, x, y, w, "Key press", "how long the dodge key is held", m.RollPressMs, "rollPressMs");
         y = Slider(rt, x, y, w, "Recovery", "no roll, no cast until the animation is done", m.CombatDodgeRecoverMs, "combatDodgeRecoverMs");
+        y = Slider(rt, x, y, w, "Dodge-after delay", "extra wait past the last cast's gap before rolling (queued taps)", m.CombatDodgeDelayMs, "combatDodgeDelayMs");
         y = Section(rt, x, y + 2f, "Travel rolls");
         y = Slider(rt, x, y, w, "Roll every", "gap between travel rolls while walking", m.MoveRollIntervalMs, "moveRollIntervalMs");
         y = Slider(rt, x, y, w, "Straight needed", "cells of visible route ahead before a roll", m.MoveRollMinCells, "moveRollMinCells");

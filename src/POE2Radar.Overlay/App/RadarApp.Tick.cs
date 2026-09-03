@@ -201,7 +201,7 @@ public sealed partial class RadarApp
         _combatWatch.KeepDistance = _settings.CombatKeepDistance;
         _combatWatch.BossFleeBelowPct = _settings.BossFleeHpPct;
         _combatWatch.BossKeepDistance = _settings.BossKeepDistance;
-        TickRoll(DateTime.UtcNow);
+        TickRoll(DateTime.UtcNow, player);
         var watch = CombatArmed && inGame
             ? _combatWatch.Update(combatEntities, player, _settings.CombatEngageRange, DateTime.UtcNow, _hpPct)
             : default;
@@ -380,6 +380,7 @@ public sealed partial class RadarApp
                 EventRange: _settings.EventRange,
                 RollPressMs: _settings.RollPressMs,
                 CombatDodgeRecoverMs: _settings.CombatDodgeRecoverMs,
+                CombatDodgeDelayMs: _settings.CombatDodgeDelayMs,
                 MoveRollIntervalMs: _settings.MoveRollIntervalMs,
                 MoveRollMinCells: _settings.MoveRollMinCells,
                 MoveCoastMs: _settings.MoveCoastMs,

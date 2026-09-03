@@ -174,12 +174,18 @@ public sealed partial class RadarApp
         }
         ApplyHeldKeys();
 
-        if (runIsRoll && wantsDir && !sidestepping && !hardStop && decision.Moving && !decision.Coasting)
+        // Travel rolls: WASD → along the held direction keys; Click → toward the cursor, which sits on the steer
+        // point (no direction keys are held in click mode, so the roll follows the cursor).
+        var clickMove = PathMove.IsClick(_settings.MoveMethod);
+        if (runIsRoll && (wantsDir || clickMove) && !sidestepping && !hardStop && decision.Moving && !decision.Coasting)
         {
             if (!decision.RollOk) _moveNote += " · walking (corner / goal near)";
             else if (now >= _nextTravelRollUtc)
             {
-                var dir = PathMove.DirectionOf(decision.HoldKeys!, _settings.MoveKeyW, _settings.MoveKeyA, _settings.MoveKeyS, _settings.MoveKeyD);
+                if (clickMove) AimClick(decision.TargetX, decision.TargetY, playerWorld);
+                var dir = wantsDir
+                    ? PathMove.DirectionOf(decision.HoldKeys!, _settings.MoveKeyW, _settings.MoveKeyA, _settings.MoveKeyS, _settings.MoveKeyD)
+                    : (0, 0);
                 if (TryRoll(fleeing ? RollArbiter.Owner.Flee : RollArbiter.Owner.Mover, dir, now, out var why))
                     _nextTravelRollUtc = now.AddMilliseconds(Math.Max(100, _settings.MoveRollIntervalMs));
                 else _moveNote += " · " + why;
