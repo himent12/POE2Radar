@@ -119,4 +119,17 @@ public sealed class SpeedMeterTests
         Assert.InRange(m.RunSpeed, 13f, 16f);
         Assert.False(m.RunIsFixed);
     }
+
+    [Fact]
+    public void Walk_speed_is_not_trained_right_after_a_release()
+    {
+        var m = new SpeedMeter();
+        var x = 0f;
+        var t = Walk(m, T0, 15f, 1500, true, ref x);   // running
+        // Key up, but the last roll still carries us at 15 for 300 ms → must NOT become the walk speed.
+        t = Walk(m, t.AddMilliseconds(33), 15f, 300, false, ref x);
+        Assert.False(m.HasWalk);
+        t = Walk(m, t.AddMilliseconds(33), 8f, 1000, false, ref x);
+        Assert.InRange(m.WalkSpeed, 7f, 9f);
+    }
 }

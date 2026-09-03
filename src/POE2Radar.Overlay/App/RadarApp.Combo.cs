@@ -37,7 +37,8 @@ public sealed partial class RadarApp
     // Character speed + self-calibrated walk/run classifier: tells whether a held run key is actually running us.
     private readonly SpeedMeter _speed = new();
     private DateTime _nextRunKickUtc = DateTime.MinValue;
-    private int _runKicks;
+    private DateTime _runIgnoredSince = DateTime.MinValue;
+    private int _runKicks, _runKicksInRow;
     private const float RollMovedCells = 1.5f;   // a roll that did not move us this far was eaten by the game
 
     // ── Boss mode. ──
@@ -236,14 +237,24 @@ public sealed partial class RadarApp
         if (vk is < 1 or > 255) { note += " · no dodge key bound"; return; }
         if (_roll.Holding && _roll.Current == who)
         {
-            if (_speed.RunKeyIgnored(now) && now >= _nextRunKickUtc)
+            // Re-press only when the meter has said "ignored" for a full second straight, at most every 1.5 s,
+            // and after three fruitless kicks in a row back off for 10 s — a wrong walk/run calibration must not
+            // turn into Space spam.
+            if (_speed.RunKeyIgnored(now))
             {
-                _nextRunKickUtc = now.AddMilliseconds(1500);
-                _runKicks++;
-                ReleaseRunHold(now);
-                note += $" · run key ignored ({_speed.Speed:0.0} c/s, walk {_speed.WalkSpeed:0.0}) → re-press #{_runKicks}";
-                return;
+                if (_runIgnoredSince == DateTime.MinValue) _runIgnoredSince = now;
+                if (now - _runIgnoredSince >= TimeSpan.FromSeconds(1) && now >= _nextRunKickUtc)
+                {
+                    _runKicks++;
+                    _runKicksInRow++;
+                    _nextRunKickUtc = now.AddMilliseconds(_runKicksInRow >= 3 ? 10000 : 1500);
+                    _runIgnoredSince = DateTime.MinValue;
+                    ReleaseRunHold(now);
+                    note += $" · run key ignored ({_speed.Speed:0.0} c/s, walk {_speed.WalkSpeed:0.0}) → re-press #{_runKicks}";
+                    return;
+                }
             }
+            else { _runIgnoredSince = DateTime.MinValue; if (_speed.Running) _runKicksInRow = 0; }
             note += " · " + _speed.Note;
             return;
         }

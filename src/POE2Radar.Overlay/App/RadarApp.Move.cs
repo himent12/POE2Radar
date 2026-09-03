@@ -179,9 +179,10 @@ public sealed partial class RadarApp
         if (runIsRoll)
         {
             var clickMove = PathMove.IsClick(_settings.MoveMethod);
-            var wantRun = (wantsDir || clickMove) && !sidestepping && !hardStop && decision.Moving && !decision.Coasting;
+            // Held for the WHOLE trip — no per-corner release (every release/re-press is a visible stutter and the
+            // game needs a fresh press each time). Only a real stop lets go.
+            var wantRun = (wantsDir || clickMove) && !sidestepping && !hardStop && decision.Moving;
             if (!wantRun) ReleaseRunHold(now);
-            else if (!decision.RollOk) { ReleaseRunHold(now); _moveNote += " · walking (corner / goal near)"; }
             else
             {
                 if (clickMove && _roll.Holding) AimClick(decision.TargetX, decision.TargetY, playerWorld);

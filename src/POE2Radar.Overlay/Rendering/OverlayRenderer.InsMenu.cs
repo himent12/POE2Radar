@@ -363,8 +363,7 @@ public sealed partial class OverlayRenderer
         y = Section(rt, x, y + 2f, "Run · dodge key held while travelling, re-pressed when speed says it was ignored");
         y = InfoRow(rt, x, y, w, "Speed", string.IsNullOrEmpty(m.SpeedNote) ? "learning walk / run speed" : m.SpeedNote, string.IsNullOrEmpty(m.SpeedNote) ? UDim : UText);
         y = Slider(rt, x, y, w, "Walking speed", "cells/s · auto = learned while the key is up", m.MoveWalkSpeed, "moveWalkSpeed");
-        y = Slider(rt, x, y, w, "Running speed", "cells/s · auto = learned while the key is held", m.MoveRunSpeed, "moveRunSpeed");
-        Slider(rt, x, y, w, "Straight needed", "cells of visible route ahead before holding run", m.MoveRollMinCells, "moveRollMinCells");
+        Slider(rt, x, y, w, "Running speed", "cells/s · auto = learned while the key is held", m.MoveRunSpeed, "moveRunSpeed");
     }
 
     private void DrawRoute(DrawTarget rt, InsMenuData m, float x, float y, float w)

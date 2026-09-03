@@ -31,6 +31,7 @@ public sealed class SpeedMeter
 
     private readonly List<(NumVec2 pos, DateTime at)> _hist = new();
     private DateTime _heldSince = DateTime.MinValue;
+    private DateTime _releasedAt = DateTime.MinValue;
     private bool _wasHeld;
 
     /// <summary>Current speed in grid cells per second (0 with fewer than two samples).</summary>
@@ -70,6 +71,7 @@ public sealed class SpeedMeter
     public void Push(NumVec2 grid, DateTime nowUtc, bool runHeld)
     {
         if (runHeld && !_wasHeld) _heldSince = nowUtc;
+        if (!runHeld && _wasHeld) _releasedAt = nowUtc;
         _wasHeld = runHeld;
 
         _hist.Add((grid, nowUtc));
@@ -88,7 +90,10 @@ public sealed class SpeedMeter
         const float k = 0.1f;
         if (!runHeld)
         {
-            if (!WalkIsFixed) _walk = _walk > 0f ? _walk + (Speed - _walk) * k : Speed;
+            // Rolls from the previous hold are still carrying us right after a release: only train the walk
+            // speed once the key has been up for a settle time.
+            if (!WalkIsFixed && nowUtc - _releasedAt >= TimeSpan.FromMilliseconds(RunSettleMs))
+                _walk = _walk > 0f ? _walk + (Speed - _walk) * k : Speed;
         }
         else if (!RunIsFixed && HeldFor(nowUtc) >= TimeSpan.FromMilliseconds(RunSettleMs) && (!HasWalk || Speed > WalkSpeed * RunFactor))
             _run = _run > 0f ? _run + (Speed - _run) * k : Speed;

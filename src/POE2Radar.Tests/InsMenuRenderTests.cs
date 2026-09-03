@@ -75,7 +75,7 @@ public sealed class InsMenuRenderTests
             case 3: Assert.Contains("ins:slider:mapClearAggroRange", actions); break;
             case 4: Assert.Contains("ins:set:moveMethod:Click", actions); Assert.Contains("ins:slider:moveLookAhead", actions); Assert.Contains("ins:flag:moveRunEnabled", actions); break;
             case 5: Assert.Contains("ins:slider:bossFleeHpPct", actions); Assert.Contains("ins:slider:bossDodgeSpikePct", actions); Assert.Contains("ins:flag:bossReengage", actions); Assert.Contains("ins:slider:combatComboSkipHpPct", actions); break;
-            case 6: Assert.Contains("ins:slider:rollPressMs", actions); Assert.Contains("ins:slider:moveRollMinCells", actions); Assert.Contains("ins:slider:combatDodgeDelayMs", actions); Assert.Contains("ins:slider:moveWalkSpeed", actions); Assert.Contains("ins:slider:moveRunSpeed", actions); break;
+            case 6: Assert.Contains("ins:slider:rollPressMs", actions); Assert.Contains("ins:slider:combatDodgeDelayMs", actions); Assert.Contains("ins:slider:moveWalkSpeed", actions); Assert.Contains("ins:slider:moveRunSpeed", actions); break;
             case 7: Assert.Contains("ins:slider:moveCoastMs", actions); Assert.Contains("ins:slider:moveArriveRadiusMob", actions); Assert.Contains("ins:slider:moveArriveRadiusEvent", actions); Assert.Contains("ins:slider:moveArriveRadius", actions); break;
         }
 
