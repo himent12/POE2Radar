@@ -11,6 +11,7 @@ public sealed partial class OverlayWindow
     private nint _visual;
     private int _depth = 32;
     private bool _xClickThrough = true;
+    private bool _xGrabbed;
 
     private void InitLinux()
     {
@@ -109,6 +110,19 @@ public sealed partial class OverlayWindow
         LinuxX11.SetClickThrough(_dpy, _xwin, value);
     }
 
+    private bool CapturePointerLinux(bool value)
+    {
+        if (_dpy == 0 || _xwin == 0) return false;
+        if (value)
+        {
+            if (_xGrabbed) return true;
+            _xGrabbed = LinuxX11.GrabPointer(_dpy, _xwin);
+            return _xGrabbed;
+        }
+        if (_xGrabbed) { LinuxX11.UngrabPointer(_dpy); _xGrabbed = false; }
+        return false;
+    }
+
     private bool PumpLinux()
     {
         if (_dpy == 0) return true;
@@ -117,7 +131,7 @@ public sealed partial class OverlayWindow
             while (LinuxX11.XPending(_dpy) > 0)
             {
                 LinuxX11.XNextEvent(_dpy, out var ev);
-                if (ev.Type == LinuxX11.ButtonPress && !_xClickThrough)
+                if (ev.Type == LinuxX11.ButtonPress && (!_xClickThrough || _xGrabbed) && ev.Button == 1)
                     OnClientClick?.Invoke(ev.X, ev.Y);
             }
         }
@@ -130,9 +144,10 @@ public sealed partial class OverlayWindow
 
     private void DisposeLinux()
     {
+        if (_xGrabbed && _dpy != 0) { LinuxX11.UngrabPointer(_dpy); _xGrabbed = false; }
         DestroyXImage();
         if (_gc != 0 && _dpy != 0) { LinuxX11.XFreeGC(_dpy, _gc); _gc = 0; }
         if (_xwin != 0 && _dpy != 0) { LinuxX11.XDestroyWindow(_dpy, _xwin); _xwin = 0; }
-        LinuxX11.XFlush(_dpy);
+        if (_dpy != 0) LinuxX11.XFlush(_dpy);
     }
 }

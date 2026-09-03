@@ -15,7 +15,7 @@ namespace POE2Radar.Overlay;
 /// the same isometric math the PoE Radar plugin uses. Projection scale/offset are calibratable
 /// at runtime (see <see cref="RadarApp"/>).
 /// </summary>
-public sealed class OverlayRenderer : IDisposable
+public sealed partial class OverlayRenderer : IDisposable
 {
     // Entity dot colors now live per-item in RadarSettings.Styles (these were the old hardcoded
     // values, preserved as the style defaults). Only the HUD/nav/landmark-label colors remain here.
@@ -134,7 +134,8 @@ public sealed class OverlayRenderer : IDisposable
                 DrawHoverPrice(rt, ctx);               // price chip beside the hovered item's tooltip (screen-space)
                 DrawMonolithPanel(rt, ctx);            // nearby-monolith reward list (screen-space)
                 DrawCurrencyExchange(rt, ctx);         // currency-exchange order-book depth panel (top-right, screen-space)
-                DrawBotStatus(rt, ctx);
+                if (ctx.InsMenu is null) DrawBotStatus(rt, ctx);
+                DrawInsMenu(rt, ctx);                  // INSERT menu — last so it sits on top and its click rects win
             }
         }
         finally { rt.EndDraw(); }
@@ -1272,6 +1273,8 @@ public sealed class OverlayRenderer : IDisposable
         foreach (var geo in _geoCache.Values.Where(g => g is not null).Distinct()) geo!.Dispose();
         _geoCache.Clear();
         _tf?.Dispose();
+        _tfTitle?.Dispose(); _tfBody?.Dispose(); _tfBold?.Dispose(); _tfSmall?.Dispose(); _tfCaps?.Dispose();
+        _tfMono?.Dispose(); _tfMonoSmall?.Dispose(); _bUi?.Dispose();
         _terrain?.Dispose();
         _atlasIcons?.Dispose();
     }

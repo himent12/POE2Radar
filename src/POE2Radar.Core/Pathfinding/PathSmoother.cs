@@ -14,8 +14,11 @@ public static class PathSmoother
 {
     private const float MaxSegmentLengthGrid = 100f;
 
-    /// <summary>Smooth a cell-by-cell path into a short list of LOS waypoints.</summary>
-    public static IReadOnlyList<PathCell> Smooth(ICellReader pf, IReadOnlyList<PathCell> path, int minWalkable = 1)
+    /// <summary>Smooth a cell-by-cell path into a short list of LOS waypoints. When
+    /// <paramref name="fallbackMinWalkable"/> is given (lower than <paramref name="minWalkable"/>) and the strict
+    /// pass cannot advance past the next cell, a second pass with the relaxed threshold is tried — so tight
+    /// corridors still simplify without letting open-terrain segments graze walls.</summary>
+    public static IReadOnlyList<PathCell> Smooth(ICellReader pf, IReadOnlyList<PathCell> path, int minWalkable = 1, int? fallbackMinWalkable = null)
     {
         if (path.Count <= 2) return path;
 
@@ -23,22 +26,25 @@ public static class PathSmoother
         var current = 0;
         while (current < path.Count - 1)
         {
-            var farthest = current + 1;
-            for (var i = path.Count - 1; i > current + 1; i--)
-            {
-                var dx = path[i].X - path[current].X;
-                var dy = path[i].Y - path[current].Y;
-                if (MathF.Sqrt(dx * dx + dy * dy) > MaxSegmentLengthGrid) continue;
-                if (HasLineOfSight(pf, path[current], path[i], minWalkable))
-                {
-                    farthest = i;
-                    break;
-                }
-            }
+            var farthest = Farthest(pf, path, current, minWalkable);
+            if (farthest == current + 1 && fallbackMinWalkable is { } fb && fb < minWalkable)
+                farthest = Farthest(pf, path, current, fb);
             result.Add(path[farthest]);
             current = farthest;
         }
         return result;
+    }
+
+    private static int Farthest(ICellReader pf, IReadOnlyList<PathCell> path, int current, int minWalkable)
+    {
+        for (var i = path.Count - 1; i > current + 1; i--)
+        {
+            var dx = path[i].X - path[current].X;
+            var dy = path[i].Y - path[current].Y;
+            if (MathF.Sqrt(dx * dx + dy * dy) > MaxSegmentLengthGrid) continue;
+            if (HasLineOfSight(pf, path[current], path[i], minWalkable)) return i;
+        }
+        return current + 1;
     }
 
     /// <summary>

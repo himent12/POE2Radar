@@ -335,10 +335,18 @@ internal static class DashboardHtml
   .skrow .sk-key{width:44px;text-align:center}
   .skrow .sk-cd{width:80px}
   .skrow .sk-rg{width:72px}
+.skrow .sk-min{width:64px}
+.skrow .sk-hp{width:64px}
+.skrow input[type=checkbox]{width:16px;height:16px;margin:0 10px 0 4px}
   .skhead{display:flex;align-items:center;gap:8px;padding:4px 0 2px;color:var(--ink-faint);font-size:10px;letter-spacing:.06em;text-transform:uppercase}
   .skhead span:nth-child(1){width:16px;flex:none}
   .skhead span:nth-child(2){width:44px;flex:none}
   .skhead span:nth-child(3){width:80px;flex:none}
+.skhead span:nth-child(4){width:72px;flex:none}
+.skhead span:nth-child(5){width:64px;flex:none}
+.skhead span:nth-child(6){width:64px;flex:none}
+.skhead span:nth-child(7){width:30px;flex:none}
+.skhead span:nth-child(8){width:30px;flex:none}
   .skhead span:nth-child(4){width:72px;flex:none}
 
   /* ── dashboard nav list ── */
@@ -644,8 +652,41 @@ internal static class DashboardHtml
             <div class="row"><div class="rl hint-row">F3 toggles the bot master in-game (quest follow + path move + combat). F6 while the bot is on picks one quest (last press wins). F2 toggles map-clear. F4 toggles combat assist independently. F5 toggles path move. Arm bits cannot be armed from this page. Bot: <span id="botState">&mdash;</span></div></div>
             <div class="row"><div class="rl">Attack range<small>grid units; tap only if a hostile monster is this close</small></div>
               <input class="numin" type="number" step="1" min="1" max="200" data-set="combatRange"></div>
-            <div class="row"><div class="rl">Skill rotation<small>ordered keys (QWER); skip a skill while its cooldown is running; wraps. Optional range of 0 uses the attack range above</small></div></div>
-            <div class="skhead"><span></span><span>Key</span><span>CD ms</span><span>Range</span></div>
+              <div class="row"><div class="rl">Engage range<small>grid units; the bot stops walking to fight only while a hostile is this close (skills still fire out to the attack range, and the bot keeps walking toward farther mobs)</small></div>
+              <input class="numin" type="number" step="1" min="1" max="200" data-set="combatEngageRange"></div>
+              <div class="row"><div class="rl">Flee below HP %<small>stop attacking and run away from the pack when life drops under this (0 = never flee, always attack)</small></div>
+              <input class="numin" type="number" step="1" min="0" max="100" data-set="combatFleeHpPct"></div>
+              <div class="row"><div class="rl">Resume at HP %<small>go back to attacking once life is back at this</small></div>
+              <input class="numin" type="number" step="1" min="0" max="100" data-set="combatFleeRecoverPct"></div>
+              <div class="row"><div class="rl">Flee distance<small>grid cells to run from the pack (most open direction)</small></div>
+              <input class="numin" type="number" step="1" min="1" max="200" data-set="combatFleeDistance"></div>
+              <div class="row"><div class="rl">Auto-respawn<small>when the character dies, tap the resurrect key until alive (bot / clear / combat / move must be armed)</small></div>
+                <input type="checkbox" data-set="autoRespawn"></div>
+              <div class="row"><div class="rl">Respawn key<small>PoE2 death screen: Space or Enter = Resurrect at Checkpoint</small></div>
+                <select class="numin selin" data-set="respawnKey">
+                  <option value="32">Space</option>
+                  <option value="13">Enter</option>
+                </select></div>
+              <div class="row"><div class="rl">Fight stall<small>ms; 0 = never give up. Default 6000: a monster that takes NO damage for this long is immune (essence-imprisoned, shielded) and gets skipped</small></div>
+              <input class="numin" type="number" step="100" min="0" max="60000" data-set="combatStallMs"></div>
+              <div class="row"><div class="rl">Ignore after stall<small>ms to ignore stalled monsters before trying them again</small></div>
+              <input class="numin" type="number" step="1000" min="1000" max="300000" data-set="combatIgnoreMs"></div>
+            <div class="row"><div class="rl">Target<small>which hostile the rotation aims at</small></div>
+              <select class="numin selin" data-set="combatTargetMode">
+                <option value="Nearest">Nearest</option>
+                <option value="Rarity">Rarity (unique &gt; rare &gt; magic)</option>
+                <option value="LowestHp">Weakest (lowest life)</option>
+                <option value="HighestHp">Tank (highest life)</option>
+              </select></div>
+            <div class="row"><div class="rl">Rotation<small>round-robin cycles the list; priority always fires the first ready slot</small></div>
+              <select class="numin selin" data-set="combatRotationMode">
+                <option value="RoundRobin">Round-robin</option>
+                <option value="Priority">Priority</option>
+              </select></div>
+            <div class="row"><div class="rl">Keep distance<small>grid units; ranged builds back away while a hostile is closer than this (0 = melee, never)</small></div>
+              <input class="numin" type="number" step="1" min="0" max="200" data-set="combatKeepDistance"></div>
+            <div class="row"><div class="rl">Skill rotation<small>ordered slots. Range 0 uses the attack range; Min mobs gates AoE; Life &lt; fires only under that %; Rare = rare/unique only</small></div></div>
+            <div class="skhead"><span></span><span>Key</span><span>CD ms</span><span>Range</span><span>Min mobs</span><span>Life &lt; %</span><span>Rare</span><span>On</span></div>
             <div id="combatSkills"></div>
             <div class="row"><button type="button" class="addbtn" id="combatSkillAdd">Add skill</button></div>
             <div class="row"><div class="rl hint-row">F4 toggles combat assist in-game. It cannot be armed from this page. Status: <span id="combatState">&mdash;</span></div></div>
@@ -674,8 +715,27 @@ internal static class DashboardHtml
               </select></div>
             <div class="row"><div class="rl">Arrive radius<small>grid cells; stop when this close to the remaining waypoints</small></div>
               <input class="numin" type="number" step="0.5" min="0" max="64" data-set="moveArriveRadius"></div>
-            <div class="row"><div class="rl">Cooldown<small>min ms between WASD/click taps</small></div>
+            <div class="row"><div class="rl">Cooldown<small>min ms between click taps (WASD keys are held, not tapped)</small></div>
               <input class="numin" type="number" step="10" min="0" data-set="moveCooldownMs"></div>
+              <div class="row"><div class="rl">Play in background<small>keep the bot going while PoE2 is not the active window. Windows: input is posted to the game window. Linux: run the game under gamescope (Steam launch options: <code>gamescope -f -- %command%</code>) so it has its own always-focused display; the bot sends input there</small></div>
+                <input type="checkbox" data-set="playInBackground"></div>
+              <div class="row"><div class="rl">Input display (Linux)<small>nested X display of the gamescope session, e.g. <code>:1</code>. <code>auto</code> scans for one hosting the game. Blank = main display (Wine ignores keys while unfocused)</small></div>
+                <input class="numin textin" type="text" maxlength="16" data-set="inputDisplay"></div>
+              <div class="row"><div class="rl">Run while moving<small>hold the run key whenever the bot is travelling</small></div>
+              <input type="checkbox" data-set="moveRunEnabled"></div>
+              <div class="row"><div class="rl">Run key<small>PoE2 default: Space</small></div>
+              <select class="numin selin" data-set="moveRunKey">
+                <option value="32">Space</option>
+                <option value="16">Shift</option>
+                <option value="17">Ctrl</option>
+                <option value="18">Alt</option>
+              </select></div>
+              <div class="row"><div class="rl">Look-ahead<small>grid cells; steer at the farthest visible waypoint within this — cuts corners instead of stair-stepping</small></div>
+              <input class="numin" type="number" step="1" min="1" max="60" data-set="moveLookAhead"></div>
+              <div class="row"><div class="rl">Diagonals<small>hold two keys at once for 8-way movement</small></div>
+              <input type="checkbox" data-set="moveDiagonals"></div>
+              <div class="row"><div class="rl">Axis rotation<small>degrees; rotate the grid→WASD mapping if the character walks off at an angle</small></div>
+              <input class="numin" type="number" step="15" min="-180" max="180" data-set="moveAxisRotationDeg"></div>
             <div class="row"><div class="rl">Move key W<small>grid +Y</small></div>
               <input class="numin keyin" type="text" maxlength="1" data-set="moveKeyW"></div>
             <div class="row"><div class="rl">Move key A<small>grid −X</small></div>
@@ -687,6 +747,10 @@ internal static class DashboardHtml
             <div class="row"><div class="rl hint-row">F2 toggles map-clear in-game (walks unexplored walkable cells; unique bosses and live hostiles first; pauses quest follow while on). It cannot be armed from this page. Status: <span id="mapClearState">&mdash;</span></div></div>
             <div class="row"><div class="rl">Clear stamp radius<small>grid cells marked visited around the player each tick while map-clear is on</small></div>
               <input class="numin" type="number" step="1" min="4" max="64" data-set="mapClearStampRadius"></div>
+              <div class="row"><div class="rl">Clear aggro range<small>grid units; only chase non-unique hostiles this close (0 = any distance); farther packs are reached by the frontier walk</small></div>
+              <input class="numin" type="number" step="1" min="0" max="500" data-set="mapClearAggroRange"></div>
+              <div class="row"><div class="rl">Clear stuck timeout<small>ms without getting closer to the current target (while not fighting) before it is skipped</small></div>
+              <input class="numin" type="number" step="500" min="1000" max="120000" data-set="mapClearStuckMs"></div>
             <div class="row"><div class="rl hint-row">F5 toggles path move in-game (F3 quest follow also arms it). It cannot be armed from this page. Status: <span id="pathMoveState">&mdash;</span></div></div>
           </div>
         </div>
@@ -948,6 +1012,7 @@ function wireSettings(){
     const k=el.dataset.set;
     if(el.type==='checkbox') el.onchange=()=>saveSetting(k,el.checked);
     else if(el.classList.contains('keyin')) el.onchange=()=>{ const vk=charToVk(el.value); if(vk) saveSetting(k,vk); el.value=vkToChar(vk); };
+    else if(el.classList.contains('textin')) el.onchange=()=>saveSetting(k, el.value.trim());
     else if(el.tagName==='SELECT') el.onchange=()=>{ const n=parseInt(el.value,10); saveSetting(k, (!isNaN(n) && String(n)===el.value) ? n : el.value); };
     else el.onchange=()=>{ const v=parseFloat(el.value); if(!isNaN(v)) saveSetting(k,v); };
   });
@@ -976,6 +1041,10 @@ function renderCombatSkills(){
     +'<input class="numin keyin sk-key" type="text" maxlength="1" value="'+esc(vkToChar(sk.key))+'" title="skill key">'
     +'<input class="numin sk-cd" type="number" step="50" min="0" value="'+(sk.cooldownMs??400)+'" title="cooldown ms">'
     +'<input class="numin sk-rg" type="number" step="1" min="0" max="200" value="'+(sk.range||0)+'" title="optional range (0 = global)">'
+    +'<input class="numin sk-min" type="number" step="1" min="1" max="20" value="'+(sk.minTargets||1)+'" title="only fire with at least this many hostiles in range (AoE)">'
+    +'<input class="numin sk-hp" type="number" step="5" min="0" max="100" value="'+(sk.hpBelowPct||0)+'" title="only fire while your life is under this % (0 = always)">'
+    +'<input type="checkbox" class="sk-rare" '+(sk.rareOnly?'checked':'')+' title="only against rare / unique">'
+    +'<input type="checkbox" class="sk-on" '+(sk.enabled===false?'':'checked')+' title="enabled">'
     +'<button type="button" class="delbtn sk-del">Remove</button></div>'
   ).join('');
   $$('#combatSkills .skrow').forEach(row=>{
@@ -983,6 +1052,10 @@ function renderCombatSkills(){
     row.querySelector('.sk-key').onchange=e=>{ const vk=charToVk(e.target.value); if(vk){ sk.key=vk; saveCombatSkills(); } e.target.value=vkToChar(sk.key); };
     row.querySelector('.sk-cd').onchange=e=>{ const v=parseFloat(e.target.value); if(!isNaN(v)){ sk.cooldownMs=Math.max(0,v); saveCombatSkills(); } };
     row.querySelector('.sk-rg').onchange=e=>{ const v=parseFloat(e.target.value); if(!isNaN(v)){ sk.range=Math.max(0,v); saveCombatSkills(); } };
+    row.querySelector('.sk-min').onchange=e=>{ const v=parseInt(e.target.value,10); if(!isNaN(v)){ sk.minTargets=Math.max(1,v); saveCombatSkills(); } };
+    row.querySelector('.sk-hp').onchange=e=>{ const v=parseFloat(e.target.value); if(!isNaN(v)){ sk.hpBelowPct=Math.max(0,Math.min(100,v)); saveCombatSkills(); } };
+    row.querySelector('.sk-rare').onchange=e=>{ sk.rareOnly=!!e.target.checked; saveCombatSkills(); };
+    row.querySelector('.sk-on').onchange=e=>{ sk.enabled=!!e.target.checked; saveCombatSkills(); };
     row.querySelector('.sk-del').onclick=()=>{ combatSkillsData.splice(i,1); renderCombatSkills(); saveCombatSkills(); };
   });
 }

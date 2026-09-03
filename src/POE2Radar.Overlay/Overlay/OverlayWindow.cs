@@ -32,6 +32,23 @@ public sealed partial class OverlayWindow : IDisposable
     /// </summary>
     public Action<int, int>? OnClientClick;
 
+    /// <summary>Surface-only window (no platform window) for headless rendering — previews/tests.</summary>
+    internal static OverlayWindow CreateHeadless(int width, int height)
+    {
+        var ow = new OverlayWindow();
+        ow.AllocateSurface(width, height);
+        return ow;
+    }
+
+    /// <summary>Encode the current surface as PNG (headless preview / tests).</summary>
+    internal byte[] SnapshotPng()
+    {
+        _surface!.Flush();
+        using var img = _surface.Snapshot();
+        using var data = img.Encode(SKEncodedImageFormat.Png, 100);
+        return data.ToArray();
+    }
+
     public static OverlayWindow Create()
     {
         var ow = new OverlayWindow();
@@ -40,6 +57,23 @@ public sealed partial class OverlayWindow : IDisposable
         else throw new PlatformNotSupportedException("POE2Radar overlay supports Windows and Linux.");
         ow.AllocateSurface(800, 600);
         return ow;
+    }
+
+    /// <summary>Proportional UI font (bold optional) with cross-platform sans fallbacks — for panels/menus.</summary>
+    public DrawTextFormat CreateUiTextFormat(float size, bool bold = false, bool serif = false)
+    {
+        var style = bold ? SKFontStyle.Bold : SKFontStyle.Normal;
+        SKTypeface? tf = null;
+        var families = serif
+            ? new[] { "Palatino Linotype", "Georgia", "Cambria", "DejaVu Serif", "Liberation Serif", "Noto Serif", "serif" }
+            : new[] { "Segoe UI", "Inter", "Roboto", "Noto Sans", "DejaVu Sans", "Liberation Sans", "Cantarell", "sans-serif" };
+        foreach (var fam in families)
+        {
+            tf = SKTypeface.FromFamilyName(fam, style);
+            if (tf is not null && !string.Equals(tf.FamilyName, SKTypeface.Default.FamilyName, StringComparison.OrdinalIgnoreCase)) break;
+        }
+        tf ??= SKTypeface.Default;
+        return new DrawTextFormat(new SKFont(tf, size) { Subpixel = true, Edging = SKFontEdging.SubpixelAntialias });
     }
 
     public DrawTextFormat CreateTextFormat(string family, float size)
@@ -87,6 +121,15 @@ public sealed partial class OverlayWindow : IDisposable
     }
 
     public bool PumpMessages() => OperatingSystem.IsLinux() ? PumpLinux() : PumpWindows();
+
+    /// <summary>Exclusive pointer capture while a modal overlay menu is open: clicks land on the overlay and
+    /// NOT on the game underneath. No-op on Windows (the non-transparent layered window already owns them).
+    /// Returns whether the capture is held.</summary>
+    public bool CapturePointer(bool value)
+    {
+        if (!OperatingSystem.IsLinux()) return value;
+        return CapturePointerLinux(value);
+    }
 
     private unsafe void AllocateSurface(int width, int height)
     {

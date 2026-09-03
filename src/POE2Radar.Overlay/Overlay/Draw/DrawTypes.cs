@@ -111,6 +111,54 @@ public sealed class DrawTarget
         _canvas.DrawRect(r.Left, r.Top, r.Width, r.Height, _stroke);
     }
 
+    public void FillRoundedRectangle(RawRectF r, float radius, DrawBrush brush)
+    {
+        _fill.Color = brush.Color.ToSk();
+        _fill.Shader = null;
+        _canvas.DrawRoundRect(new SKRect(r.Left, r.Top, r.Right, r.Bottom), radius, radius, _fill);
+    }
+
+    public void DrawRoundedRectangle(RawRectF r, float radius, DrawBrush brush, float strokeWidth)
+    {
+        _stroke.Color = brush.Color.ToSk();
+        _stroke.StrokeWidth = strokeWidth;
+        _canvas.DrawRoundRect(new SKRect(r.Left, r.Top, r.Right, r.Bottom), radius, radius, _stroke);
+    }
+
+    /// <summary>Rounded rect filled with a linear gradient (vertical when <paramref name="horizontal"/> is false).</summary>
+    public void FillRoundedRectangleGradient(RawRectF r, float radius, Color4 from, Color4 to, bool horizontal = false)
+    {
+        var a = new SKPoint(r.Left, r.Top);
+        var b = horizontal ? new SKPoint(r.Right, r.Top) : new SKPoint(r.Left, r.Bottom);
+        using var shader = SKShader.CreateLinearGradient(a, b, new[] { from.ToSk(), to.ToSk() }, null, SKShaderTileMode.Clamp);
+        _fill.Color = SKColors.White;
+        _fill.Shader = shader;
+        _canvas.DrawRoundRect(new SKRect(r.Left, r.Top, r.Right, r.Bottom), radius, radius, _fill);
+        _fill.Shader = null;
+    }
+
+    /// <summary>Soft drop shadow under a rounded rect (blurred dark fill, offset down).</summary>
+    public void DrawShadow(RawRectF r, float radius, float blur, float alpha)
+    {
+        using var p = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Fill, Color = new SKColor(0, 0, 0, (byte)Math.Clamp(alpha * 255f, 0f, 255f)) };
+        p.MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, blur);
+        _canvas.DrawRoundRect(new SKRect(r.Left, r.Top + blur * 0.6f, r.Right, r.Bottom + blur * 0.6f), radius, radius, p);
+    }
+
+    /// <summary>Text with its cap-height centre on <paramref name="cy"/> (uses real font metrics, not a guess).</summary>
+    public void DrawTextVCentered(string text, DrawTextFormat tf, float x, float cy, DrawBrush brush)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        _fill.Color = brush.Color.ToSk();
+        _fill.Shader = null;
+        var m = tf.Font.Metrics;
+        var cap = m.CapHeight > 0 ? m.CapHeight : -m.Ascent * 0.7f;
+        _canvas.DrawText(text, x, cy + cap * 0.5f, SKTextAlign.Left, tf.Font, _fill);
+    }
+
+    public float MeasureText(string text, DrawTextFormat tf)
+        => string.IsNullOrEmpty(text) ? 0f : tf.Font.MeasureText(text);
+
     public void FillEllipse(Ellipse e, DrawBrush brush)
     {
         _fill.Color = brush.Color.ToSk();

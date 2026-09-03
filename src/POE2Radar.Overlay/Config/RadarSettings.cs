@@ -188,6 +188,31 @@ public sealed class RadarSettings
     //    legacy one-key fields used only to seed CombatSkills when the list is empty. ──
     public bool CombatAssistEnabled { get; set; }
     public float CombatRange { get; set; } = 35f;
+    // Movement pauses only while a live hostile is inside THIS tighter radius (grid units) — skills still
+    // fire out to CombatRange, and the bot keeps walking toward farther mobs instead of standing still.
+    public float CombatEngageRange { get; set; } = 20f;
+    // Fight watchdog: if no hostile inside the engage radius loses HP for this long, give up on those
+    // monsters for CombatIgnoreMs (movement resumes, map-clear routes elsewhere), then re-consider them.
+    //    0 = never give up. Default 6 s: a monster that takes NO damage at all for that long is immune
+    //    (essence-imprisoned, phase-shielded, untargetable) and is skipped instead of holding the bot forever.
+    public int CombatStallMs { get; set; } = 6000;
+    public bool CombatStallMigrated { get; set; }
+    // Auto-respawn: when the character dies, tap the resurrect key until alive again. PoE2 death screen:
+    // Space/Enter = "Resurrect at Checkpoint".
+    public bool AutoRespawn { get; set; } = true;
+    public int RespawnKey { get; set; } = 0x20; // Space
+    public int RespawnDelayMs { get; set; } = 2500;
+    public int CombatIgnoreMs { get; set; } = 20000;
+    // Low-HP flee: below CombatFleeHpPct the bot stops attacking and runs CombatFleeDistance cells away
+    // from the pack (most open direction), until HP is back at CombatFleeRecoverPct. 0 = never flee.
+    public float CombatFleeHpPct { get; set; } = 35f;
+    public float CombatFleeRecoverPct { get; set; } = 60f;
+    public float CombatFleeDistance { get; set; } = 25f;
+    // Target pick: Nearest | Rarity | LowestHp | HighestHp. Rotation: RoundRobin | Priority (list order, first ready).
+    public string CombatTargetMode { get; set; } = "Nearest";
+    public string CombatRotationMode { get; set; } = "RoundRobin";
+    // Ranged kiting: back off while any hostile is closer than this (0 = melee, never back off).
+    public float CombatKeepDistance { get; set; } = 0f;
     public int CombatCooldownMs { get; set; } = 400;
     public int CombatAttackKey { get; set; } = 0x51; // Q
     public List<CombatSkill> CombatSkills { get; set; } = new();
@@ -206,7 +231,15 @@ public sealed class RadarSettings
     //    armed and the bot walks unexplored walkable cells (unique bosses first). F3 quest follow
     //    is paused while this is on. Stamp radius is grid cells marked visited around the player. ──
     public bool MapClearEnabled { get; set; }
-    public int MapClearStampRadius { get; set; } = 16;
+    public int MapClearStampRadius { get; set; } = 24;
+    // One-shot migration marker: pre-sweep configs carried the old 16-cell stamp, which re-walked ground the
+    // player had plainly already seen. Bumped once to the new default; user changes after that are kept.
+    public bool MapClearStampMigrated { get; set; }
+    // Only chase non-unique hostiles this close (grid units; 0 = any distance). Farther packs get
+    // reached by the frontier walk instead of a cross-map detour.
+    public float MapClearAggroRange { get; set; } = 80f;
+    // Give up on a target (cell or mob) the bot has not gotten closer to for this long while not fighting.
+    public int MapClearStuckMs { get; set; } = 8000;
 
     // ── Path move (F5 in-game kill-switch). Default OFF. MoveEnabled is NOT writable
     //    via the HTTP API — same as CombatAssistEnabled / QuestFollowEnabled / BotEnabled. When armed
@@ -221,6 +254,20 @@ public sealed class RadarSettings
     public int MoveKeyS { get; set; } = 0x53; // S
     public int MoveKeyD { get; set; } = 0x44; // D
     public int MoveClickKey { get; set; } = 0x01; // VK_LBUTTON
+    // Movement quality: hold a run key while travelling (PoE2: Space), steer at a look-ahead point on the
+    // route (string-pulled over walkable terrain), allow two keys at once (8-way), and a grid→key axis
+    // rotation for calibrating the isometric camera (degrees).
+    // Keep playing while PoE2 is NOT the foreground window (alt-tabbed): input is addressed to the game
+    // window (PostMessage / XSendEvent) instead of synthesized globally, so nothing leaks into other apps.
+    public bool PlayInBackground { get; set; }
+    // Linux only: X display of a NESTED server the game runs in (gamescope / Xephyr), e.g. ":1"; "auto" scans
+    // for one hosting a Path of Exile window. Input is sent there, where the game is always focused.
+    public string InputDisplay { get; set; } = "auto";
+    public bool MoveRunEnabled { get; set; } = true;
+    public int MoveRunKey { get; set; } = 0x20; // Space
+    public float MoveLookAhead { get; set; } = 12f;
+    public bool MoveDiagonals { get; set; } = true;
+    public float MoveAxisRotationDeg { get; set; } = 0f;
 
     // ── HTTP API. ──
     public int ApiPort { get; set; } = 7777;
@@ -323,6 +370,22 @@ public sealed class RadarSettings
         // Pre-BotEnabled configs that had quest follow on: promote to the master bot arm.
         if (QuestFollowEnabled && !BotEnabled) { BotEnabled = true; changed = true; }
 
+        // Immune-target skip: configs written while "never give up" was the default → 6 s once.
+        if (!CombatStallMigrated)
+        {
+            if (CombatStallMs == 0) CombatStallMs = 6000;
+            CombatStallMigrated = true;
+            changed = true;
+        }
+
+        // Sweep planner: old 16-cell stamp → 24 once.
+        if (!MapClearStampMigrated)
+        {
+            if (MapClearStampRadius == 16) MapClearStampRadius = 24;
+            MapClearStampMigrated = true;
+            changed = true;
+        }
+
         static bool IsBroadStrongbox(string p) => string.Equals(p, "Strongbox", StringComparison.OrdinalIgnoreCase);
 
         if (Styles?.Mechanics is { } mechanics)
@@ -411,6 +474,13 @@ public sealed class CombatSkill
     public int Key { get; set; } = 0x51; // Q
     public int CooldownMs { get; set; } = 400;
     public float Range { get; set; }
+    /// <summary>Only fire when at least this many hostiles are inside the skill's range (AoE gating).</summary>
+    public int MinTargets { get; set; } = 1;
+    /// <summary>Only fire when the target is rare or unique.</summary>
+    public bool RareOnly { get; set; }
+    /// <summary>&gt; 0: only fire while the player's life is under this % (defensive / guard skills).</summary>
+    public float HpBelowPct { get; set; }
+    public bool Enabled { get; set; } = true;
 }
 
 /// <summary>

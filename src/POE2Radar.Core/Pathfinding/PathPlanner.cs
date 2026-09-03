@@ -20,6 +20,8 @@ public sealed class PathPlanner
     private AStar? _astar;
     private int _gridWidth;
     private int _gridHeight;
+    private Poe2Live.TerrainData? _clearanceFor;
+    private ClearanceGrid? _clearance;
 
     /// <summary>
     /// Plan a smoothed, draw-only path from <paramref name="start"/> to <paramref name="goal"/>
@@ -39,17 +41,25 @@ public sealed class PathPlanner
             _gridHeight = terrain.Height;
         }
 
-        var reader = new TerrainCellReader(terrain);
+        // Wall-distance weighted grid (cached per terrain): paths prefer corridor centres and wide corners.
+        if (!ReferenceEquals(_clearanceFor, terrain) || _clearance is null)
+        {
+            _clearance = ClearanceGrid.Build(terrain);
+            _clearanceFor = terrain;
+        }
+        var reader = _clearance;
         var path = _astar.FindPath(
             reader,
             new PathCell(start.x, start.y),
             new PathCell(goal.x, goal.y),
             maxNodes,
-            flatCost: true);
+            flatCost: false);
 
         if (!path.Found || path.Cells.Count == 0) return Array.Empty<(int, int)>();
 
-        var smoothed = PathSmoother.Smooth(reader, path.Cells, minWalkable: 1);
+        // Smooth with clearance first (segments stay ≥ 1 cell off walls); where that cannot advance — a
+        // one-wide corridor — fall back to a thin line so it is still simplified rather than cell-by-cell.
+        var smoothed = PathSmoother.Smooth(reader, path.Cells, minWalkable: ClearanceGrid.Near, fallbackMinWalkable: ClearanceGrid.Hug);
 
         var result = new (int x, int y)[smoothed.Count];
         for (var i = 0; i < smoothed.Count; i++)

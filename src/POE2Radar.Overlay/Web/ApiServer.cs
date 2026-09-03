@@ -504,13 +504,35 @@ public sealed class ApiServer : IDisposable
         lifeKey = _settings.LifeKey,
         manaKey = _settings.ManaKey,
         combatRange = _settings.CombatRange,
+        combatEngageRange = _settings.CombatEngageRange,
+        combatStallMs = _settings.CombatStallMs,
+        autoRespawn = _settings.AutoRespawn,
+        respawnKey = _settings.RespawnKey,
+        respawnDelayMs = _settings.RespawnDelayMs,
+        combatIgnoreMs = _settings.CombatIgnoreMs,
+        combatFleeHpPct = _settings.CombatFleeHpPct,
+        combatFleeRecoverPct = _settings.CombatFleeRecoverPct,
+        combatFleeDistance = _settings.CombatFleeDistance,
+        combatTargetMode = _settings.CombatTargetMode,
+        combatRotationMode = _settings.CombatRotationMode,
+        combatKeepDistance = _settings.CombatKeepDistance,
         combatSkills = _settings.CombatSkills,
         questUseKey = _settings.QuestUseKey,
         questUseRadius = _settings.QuestUseRadius,
         questUseCooldownMs = _settings.QuestUseCooldownMs,
         mapClearStampRadius = _settings.MapClearStampRadius,
+        mapClearAggroRange = _settings.MapClearAggroRange,
+        mapClearStuckMs = _settings.MapClearStuckMs,
         moveMethod = _settings.MoveMethod,
         moveArriveRadius = _settings.MoveArriveRadius,
+        moveRunEnabled = _settings.MoveRunEnabled,
+        playInBackground = _settings.PlayInBackground,
+        inputDisplay = _settings.InputDisplay,
+        inputDisplayResolved = POE2Radar.Core.Native.GameHost.NestedInputDisplay,
+        moveRunKey = _settings.MoveRunKey,
+        moveLookAhead = _settings.MoveLookAhead,
+        moveDiagonals = _settings.MoveDiagonals,
+        moveAxisRotationDeg = _settings.MoveAxisRotationDeg,
         moveCooldownMs = _settings.MoveCooldownMs,
         moveKeyW = _settings.MoveKeyW,
         moveKeyA = _settings.MoveKeyA,
@@ -579,6 +601,20 @@ public sealed class ApiServer : IDisposable
                 // Bot master ARM (BotEnabled) is F3-only — never a settings POST key, never nested.
                 // Map clear ARM (MapClearEnabled) is F2-only — never a settings POST key.
                 case "combatRange" when TryFloat(p.Value, out var f): _settings.CombatRange = Math.Clamp(f, 1f, 200f); applied.Add(p.Name); break;
+                case "combatEngageRange" when TryFloat(p.Value, out var f): _settings.CombatEngageRange = Math.Clamp(f, 1f, 200f); applied.Add(p.Name); break;
+                case "combatStallMs" when TryInt(p.Value, out var n): _settings.CombatStallMs = n <= 0 ? 0 : Math.Clamp(n, 500, 60000); applied.Add(p.Name); break;
+                case "combatFleeHpPct" when TryFloat(p.Value, out var f): _settings.CombatFleeHpPct = Math.Clamp(f, 0f, 100f); applied.Add(p.Name); break;
+                case "combatFleeRecoverPct" when TryFloat(p.Value, out var f): _settings.CombatFleeRecoverPct = Math.Clamp(f, 0f, 100f); applied.Add(p.Name); break;
+                case "combatFleeDistance" when TryFloat(p.Value, out var f): _settings.CombatFleeDistance = Math.Clamp(f, 1f, 200f); applied.Add(p.Name); break;
+                case "combatTargetMode" when p.Value.ValueKind == JsonValueKind.String && p.Value.GetString() is { } tm
+                    && (tm is "Nearest" or "Rarity" or "LowestHp" or "HighestHp"): _settings.CombatTargetMode = tm; applied.Add(p.Name); break;
+                case "combatRotationMode" when p.Value.ValueKind == JsonValueKind.String && p.Value.GetString() is { } rm
+                    && (rm is "RoundRobin" or "Priority"): _settings.CombatRotationMode = rm; applied.Add(p.Name); break;
+                case "combatKeepDistance" when TryFloat(p.Value, out var f): _settings.CombatKeepDistance = Math.Clamp(f, 0f, 200f); applied.Add(p.Name); break;
+                case "combatIgnoreMs" when TryInt(p.Value, out var n): _settings.CombatIgnoreMs = Math.Clamp(n, 1000, 300000); applied.Add(p.Name); break;
+                case "autoRespawn" when TryBool(p.Value, out var b): _settings.AutoRespawn = b; applied.Add(p.Name); break;
+                case "respawnKey" when TryInt(p.Value, out var n): _settings.RespawnKey = Math.Clamp(n, 1, 255); applied.Add(p.Name); break;
+                case "respawnDelayMs" when TryInt(p.Value, out var n): _settings.RespawnDelayMs = Math.Clamp(n, 500, 30000); applied.Add(p.Name); break;
                 case "combatSkills" when p.Value.ValueKind == JsonValueKind.Array:
                     if (TryParseCombatSkills(p.Value, out var csk)) { _settings.CombatSkills = csk; applied.Add(p.Name); }
                     break;
@@ -586,9 +622,20 @@ public sealed class ApiServer : IDisposable
                 case "questUseRadius" when TryFloat(p.Value, out var f): _settings.QuestUseRadius = Math.Clamp(f, 0f, 64f); applied.Add(p.Name); break;
                 case "questUseCooldownMs" when TryInt(p.Value, out var n): _settings.QuestUseCooldownMs = Math.Clamp(n, 0, 60000); applied.Add(p.Name); break;
                 case "mapClearStampRadius" when TryInt(p.Value, out var n): _settings.MapClearStampRadius = Math.Clamp(n, 4, 64); applied.Add(p.Name); break;
+                case "mapClearAggroRange" when TryFloat(p.Value, out var f): _settings.MapClearAggroRange = Math.Clamp(f, 0f, 500f); applied.Add(p.Name); break;
+                case "mapClearStuckMs" when TryInt(p.Value, out var n): _settings.MapClearStuckMs = Math.Clamp(n, 1000, 120000); applied.Add(p.Name); break;
                 case "moveMethod" when p.Value.ValueKind == JsonValueKind.String && p.Value.GetString() is { } mm
                     && (mm is "WASD" or "Click" or "ClickToMove"): _settings.MoveMethod = mm; applied.Add(p.Name); break;
                 case "moveArriveRadius" when TryFloat(p.Value, out var f): _settings.MoveArriveRadius = Math.Clamp(f, 0f, 64f); applied.Add(p.Name); break;
+                case "moveRunEnabled" when TryBool(p.Value, out var b): _settings.MoveRunEnabled = b; applied.Add(p.Name); break;
+                case "playInBackground" when TryBool(p.Value, out var b): _settings.PlayInBackground = b; applied.Add(p.Name); break;
+                case "inputDisplay" when p.Value.ValueKind == JsonValueKind.String && p.Value.GetString() is { } idn && idn.Length <= 32
+                    && System.Text.RegularExpressions.Regex.IsMatch(idn, "^(auto|:[0-9]+(\\.[0-9]+)?)?$"):
+                    _settings.InputDisplay = idn; applied.Add(p.Name); break;
+                case "moveRunKey" when TryInt(p.Value, out var n): _settings.MoveRunKey = Math.Clamp(n, 1, 255); applied.Add(p.Name); break;
+                case "moveLookAhead" when TryFloat(p.Value, out var f): _settings.MoveLookAhead = Math.Clamp(f, 1f, 60f); applied.Add(p.Name); break;
+                case "moveDiagonals" when TryBool(p.Value, out var b): _settings.MoveDiagonals = b; applied.Add(p.Name); break;
+                case "moveAxisRotationDeg" when TryFloat(p.Value, out var f): _settings.MoveAxisRotationDeg = Math.Clamp(f, -180f, 180f); applied.Add(p.Name); break;
                 case "moveCooldownMs" when TryInt(p.Value, out var n): _settings.MoveCooldownMs = Math.Clamp(n, 0, 60000); applied.Add(p.Name); break;
                 case "moveKeyW" when TryInt(p.Value, out var n): _settings.MoveKeyW = Math.Clamp(n, 1, 255); applied.Add(p.Name); break;
                 case "moveKeyA" when TryInt(p.Value, out var n): _settings.MoveKeyA = Math.Clamp(n, 1, 255); applied.Add(p.Name); break;
@@ -1015,7 +1062,13 @@ public sealed class ApiServer : IDisposable
                 var range = 0f;
                 if (s.TryGetProperty("range", out var rv) && TryFloat(rv, out var r)) range = r;
                 range = Math.Clamp(range, 0f, 200f);
-                skills.Add(new CombatSkill { Key = key, CooldownMs = cd, Range = range });
+                var minT = 1;
+                if (s.TryGetProperty("minTargets", out var mv) && TryInt(mv, out var mt)) minT = Math.Clamp(mt, 1, 20);
+                var rareOnly = s.TryGetProperty("rareOnly", out var ro) && TryBool(ro, out var rb) && rb;
+                var hpBelow = 0f;
+                if (s.TryGetProperty("hpBelowPct", out var hv) && TryFloat(hv, out var hb)) hpBelow = Math.Clamp(hb, 0f, 100f);
+                var enabled = !(s.TryGetProperty("enabled", out var ev) && TryBool(ev, out var eb)) || eb;
+                skills.Add(new CombatSkill { Key = key, CooldownMs = cd, Range = range, MinTargets = minT, RareOnly = rareOnly, HpBelowPct = hpBelow, Enabled = enabled });
                 if (skills.Count >= 8) break;
             }
             return true;

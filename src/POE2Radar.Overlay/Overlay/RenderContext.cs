@@ -244,4 +244,78 @@ public sealed record RenderContext(
     bool PathMove = false,
     string PathMoveNote = "",
     bool MapClear = false,
-    string MapClearNote = "");
+    string MapClearNote = "",
+    // ── INSERT in-game menu (toggles + live tunables). Null = closed. ──
+    InsMenuData? InsMenu = null);
+
+/// <summary>Everything the INSERT menu draws/edits, snapshotted per frame from RadarSettings + live state.</summary>
+public sealed record InsMenuData(
+    int Tab,
+    float CombatRange,
+    float CombatEngageRange,
+    float CombatFleeHpPct,
+    float CombatFleeRecoverPct,
+    float CombatFleeDistance,
+    int CombatStallMs,
+    int MapClearStampRadius,
+    float MapClearAggroRange,
+    int MapClearStuckMs,
+    string MoveMethod,
+    float MoveArriveRadius,
+    float LifeThresholdPct,
+    float ManaThresholdPct,
+    int SkillCount,
+    int Fps,
+    float WorldMs,
+    float RenderMs,
+    string CharName,
+    int VisitedCells,
+    IReadOnlyList<CombatSkill>? Skills = null,
+    string TargetMode = "Nearest",
+    string RotationMode = "RoundRobin",
+    float KeepDistance = 0f,
+    int MoveCooldownMs = 80,
+    int HostilesNear = 0,
+    bool MoveRunEnabled = true,
+    int MoveRunKey = 0x20,
+    float MoveLookAhead = 12f,
+    bool MoveDiagonals = true,
+    float MoveAxisRotationDeg = 0f,
+    bool PlayInBackground = false,
+    string? NestedInput = null,
+    bool AutoRespawn = true,
+    string RespawnNote = "");
+
+/// <summary>Numeric tunables the INSERT menu exposes as sliders: range + step + display, shared by the
+/// renderer (fill fraction) and RadarApp (click → value). Keys match the HTTP settings names.</summary>
+public readonly record struct InsSliderSpec(string Key, float Min, float Max, float Step, string Unit, string? ZeroLabel = null)
+{
+    public float Clamp(float v) => Math.Clamp(MathF.Round(v / Step) * Step, Min, Max);
+    public float Fraction(float v) => Max > Min ? Math.Clamp((v - Min) / (Max - Min), 0f, 1f) : 0f;
+    public string Format(float v)
+    {
+        if (ZeroLabel is not null && v <= 0f) return ZeroLabel;
+        var s = Step >= 1f ? $"{v:0}" : $"{v:0.#}";
+        return Unit == "ms" && v >= 1000f ? $"{v / 1000f:0.#}s" : s + Unit;
+    }
+
+    public static readonly IReadOnlyDictionary<string, InsSliderSpec> All = new Dictionary<string, InsSliderSpec>(StringComparer.Ordinal)
+    {
+        ["combatRange"]          = new("combatRange", 1, 120, 1, ""),
+        ["combatEngageRange"]    = new("combatEngageRange", 1, 120, 1, ""),
+        ["combatKeepDistance"]   = new("combatKeepDistance", 0, 60, 1, "", "melee"),
+        ["combatFleeHpPct"]      = new("combatFleeHpPct", 0, 90, 1, "%", "never"),
+        ["combatFleeRecoverPct"] = new("combatFleeRecoverPct", 10, 100, 1, "%"),
+        ["combatFleeDistance"]   = new("combatFleeDistance", 5, 80, 1, ""),
+        ["combatStallMs"]        = new("combatStallMs", 0, 20000, 500, "ms", "never"),
+        ["mapClearStampRadius"]  = new("mapClearStampRadius", 8, 48, 1, ""),
+        ["mapClearAggroRange"]   = new("mapClearAggroRange", 0, 200, 5, "", "any"),
+        ["mapClearStuckMs"]      = new("mapClearStuckMs", 2000, 30000, 500, "ms"),
+        ["moveArriveRadius"]     = new("moveArriveRadius", 0.5f, 12, 0.5f, ""),
+        ["moveCooldownMs"]       = new("moveCooldownMs", 20, 500, 10, "ms"),
+        ["moveLookAhead"]        = new("moveLookAhead", 2, 40, 1, ""),
+        ["moveAxisRotationDeg"]  = new("moveAxisRotationDeg", -180, 180, 15, "°"),
+        ["lifeThresholdPct"]     = new("lifeThresholdPct", 10, 95, 1, "%"),
+        ["manaThresholdPct"]     = new("manaThresholdPct", 5, 95, 1, "%"),
+    };
+}

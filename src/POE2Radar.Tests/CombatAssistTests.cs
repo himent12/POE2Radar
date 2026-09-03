@@ -13,9 +13,10 @@ public sealed class CombatAssistTests
     private const int VkE = 0x45;
     private const int VkR = 0x52;
 
-    private static Poe2Live.EntityDot Monster(float x, float y, byte reaction, int hpCur = 10, int hpMax = 10)
+    private static Poe2Live.EntityDot Monster(float x, float y, byte reaction, int hpCur = 10, int hpMax = 10,
+        uint id = 1, Poe2Live.Rarity rarity = Poe2Live.Rarity.Normal)
         => new(
-            Id: 1,
+            Id: id,
             Address: 0,
             Grid: new NumVec2(x, y),
             World: default,
@@ -25,7 +26,7 @@ public sealed class CombatAssistTests
             HpMax: hpMax,
             Poi: false,
             Reaction: reaction,
-            Rarity: Poe2Live.Rarity.Normal,
+            Rarity: rarity,
             Opened: false);
 
     private static CombatAssist.Snapshot Base(
@@ -240,6 +241,148 @@ public sealed class CombatAssistTests
         Assert.True(d.ShouldTap);
         Assert.Equal((ushort)VkW, d.Vk);
         Assert.Equal(1, d.SkillIndex);
+    }
+
+    [Fact]
+    public void Decision_carries_aim_target()
+    {
+        var d = CombatAssist.Decide(Base(entities: [Monster(4, 3, reaction: 0, id: 42)]));
+        Assert.True(d.ShouldTap);
+        Assert.True(d.HasTarget);
+        Assert.Equal(42u, d.TargetId);
+        Assert.Equal(new NumVec2(4, 3), d.TargetGrid);
+    }
+
+    [Fact]
+    public void Idle_on_cooldown_still_reports_target()
+    {
+        var d = CombatAssist.Decide(Base(
+            now: T0, lastFire: T0.AddMilliseconds(-100), cooldownMs: 400,
+            entities: [Monster(4, 3, reaction: 0, id: 42)]));
+        Assert.False(d.ShouldTap);
+        Assert.True(d.HasTarget);
+        Assert.Equal(42u, d.TargetId);
+    }
+
+    [Fact]
+    public void Target_prefers_rarity_then_distance()
+    {
+        var ents = new[]
+        {
+            Monster(2, 0, reaction: 0, id: 1),
+            Monster(10, 0, reaction: 0, id: 2, rarity: Poe2Live.Rarity.Rare),
+            Monster(20, 0, reaction: 0, id: 3, rarity: Poe2Live.Rarity.Rare),
+            Monster(1, 0, reaction: 1, id: 4, rarity: Poe2Live.Rarity.Unique), // friendly unique: ignored
+        };
+        Assert.True(CombatAssist.TryPickTarget(ents, NumVec2.Zero, 35, out var t, mode: CombatAssist.TargetMode.Rarity));
+        Assert.Equal(2u, t.Id);
+        // Nearest wins among equals.
+        Assert.True(CombatAssist.TryPickTarget([Monster(9, 0, reaction: 0, id: 8), Monster(3, 0, reaction: 0, id: 9)], NumVec2.Zero, 35, out t, mode: CombatAssist.TargetMode.Rarity));
+        Assert.Equal(9u, t.Id);
+        // Default mode is plain nearest.
+        Assert.True(CombatAssist.TryPickTarget(ents, NumVec2.Zero, 35, out t));
+        Assert.Equal(1u, t.Id);
+    }
+
+    [Fact]
+    public void Target_modes_lowest_and_highest_hp()
+    {
+        var ents = new[]
+        {
+            Monster(2, 0, reaction: 0, id: 1, hpCur: 90, hpMax: 100),
+            Monster(6, 0, reaction: 0, id: 2, hpCur: 10, hpMax: 100),
+            Monster(9, 0, reaction: 0, id: 3, hpCur: 100, hpMax: 100),
+        };
+        Assert.True(CombatAssist.TryPickTarget(ents, NumVec2.Zero, 35, out var t, mode: CombatAssist.TargetMode.LowestHp));
+        Assert.Equal(2u, t.Id);
+        Assert.True(CombatAssist.TryPickTarget(ents, NumVec2.Zero, 35, out t, mode: CombatAssist.TargetMode.HighestHp));
+        Assert.Equal(3u, t.Id);
+    }
+
+    [Fact]
+    public void MinTargets_gates_aoe_skill()
+    {
+        var skills = new[] { new CombatAssist.Skill(VkQ, 0, MinTargets: 3), new CombatAssist.Skill(VkW, 0) };
+        var two = new[] { Monster(2, 0, reaction: 0, id: 1), Monster(4, 0, reaction: 0, id: 2) };
+        var d = CombatAssist.Decide(Base(skills: skills, lastFires: new[] { DateTime.MinValue, DateTime.MinValue }, entities: two));
+        Assert.Equal((ushort)VkW, d.Vk);
+        var three = two.Append(Monster(6, 0, reaction: 0, id: 3)).ToArray();
+        d = CombatAssist.Decide(Base(skills: skills, lastFires: new[] { DateTime.MinValue, DateTime.MinValue }, entities: three));
+        Assert.Equal((ushort)VkQ, d.Vk);
+        Assert.Equal(3, d.HostilesInRange);
+    }
+
+    [Fact]
+    public void RareOnly_and_HpBelow_and_Disabled_gates()
+    {
+        var skills = new[]
+        {
+            new CombatAssist.Skill(VkQ, 0, RareOnly: true),
+            new CombatAssist.Skill(VkW, 0, HpBelowPct: 40),
+            new CombatAssist.Skill(VkE, 0, Enabled: false),
+            new CombatAssist.Skill(VkR, 0),
+        };
+        var ready = new[] { DateTime.MinValue, DateTime.MinValue, DateTime.MinValue, DateTime.MinValue };
+        // Normal mob, full HP → Q (rare only) skipped, W (hp<40) skipped, E disabled → R.
+        var d = CombatAssist.Decide(Base(skills: skills, lastFires: ready, entities: [Monster(3, 0, reaction: 0)]));
+        Assert.Equal((ushort)VkR, d.Vk);
+        // Rare mob → Q fires.
+        d = CombatAssist.Decide(Base(skills: skills, lastFires: ready, entities: [Monster(3, 0, reaction: 0, rarity: Poe2Live.Rarity.Rare)]));
+        Assert.Equal((ushort)VkQ, d.Vk);
+        // Low player HP → W fires (cursor at 1).
+        d = CombatAssist.Decide(Base(skills: skills, lastFires: ready, nextIndex: 1, entities: [Monster(3, 0, reaction: 0)]) with { PlayerHpPct = 25 });
+        Assert.Equal((ushort)VkW, d.Vk);
+    }
+
+    [Fact]
+    public void KeyboardOnly_skips_mouse_bound_skills()
+    {
+        var skills = new[] { new CombatAssist.Skill(0x01, 0), new CombatAssist.Skill(VkQ, 0) };
+        var d = CombatAssist.Decide(Base(skills: skills, lastFires: new[] { DateTime.MinValue, DateTime.MinValue }, entities: [Monster(3, 0, reaction: 0)]) with { KeyboardOnly = true });
+        Assert.Equal((ushort)VkQ, d.Vk);
+        d = CombatAssist.Decide(Base(skills: new[] { new CombatAssist.Skill(0x01, 0) }, entities: [Monster(3, 0, reaction: 0)]) with { KeyboardOnly = true });
+        Assert.False(d.ShouldTap);
+        Assert.True(d.HasTarget);
+    }
+
+    [Fact]
+    public void Priority_order_always_prefers_first_ready_skill()
+    {
+        var skills = new[] { new CombatAssist.Skill(VkQ, 400), new CombatAssist.Skill(VkW, 400) };
+        var ready = new[] { DateTime.MinValue, DateTime.MinValue };
+        var host = new[] { Monster(3, 0, reaction: 0) };
+        var d = CombatAssist.Decide(Base(skills: skills, lastFires: ready, nextIndex: 1, entities: host) with { PriorityOrder = true });
+        Assert.Equal((ushort)VkQ, d.Vk);
+        // Q cooling → W, and NextIndex is untouched (no rotation cursor in priority mode).
+        d = CombatAssist.Decide(Base(now: T0, skills: skills, lastFires: new[] { T0.AddMilliseconds(-100), DateTime.MinValue }, nextIndex: 0, entities: host) with { PriorityOrder = true });
+        Assert.Equal((ushort)VkW, d.Vk);
+        Assert.Equal(0, d.NextIndex);
+    }
+
+    [Fact]
+    public void Ignored_ids_are_skipped_for_targeting()
+    {
+        var ents = new[] { Monster(2, 0, reaction: 0, id: 1), Monster(6, 0, reaction: 0, id: 2) };
+        var d = CombatAssist.Decide(Base(entities: ents) with { IgnoreIds = new HashSet<uint> { 1 } });
+        Assert.True(d.ShouldTap);
+        Assert.Equal(2u, d.TargetId);
+        var only = CombatAssist.Decide(Base(entities: [ents[0]]) with { IgnoreIds = new HashSet<uint> { 1 } });
+        Assert.False(only.ShouldTap);
+        Assert.False(only.HasTarget);
+        Assert.False(CombatAssist.HasHostileInRange([ents[0]], NumVec2.Zero, 35, new HashSet<uint> { 1 }));
+    }
+
+    [Fact]
+    public void PerSkillRange_checks_the_chosen_target()
+    {
+        // Rare at 20 outranks the normal at 3; Q (range 10) can't reach the rare → skip to W.
+        var skills = new[] { new CombatAssist.Skill(VkQ, 0, Range: 10), new CombatAssist.Skill(VkW, 0) };
+        var d = CombatAssist.Decide(Base(
+            skills: skills, lastFires: new[] { DateTime.MinValue, DateTime.MinValue },
+            entities: [Monster(3, 0, reaction: 0, id: 1), Monster(20, 0, reaction: 0, id: 2, rarity: Poe2Live.Rarity.Rare)]) with { Mode = CombatAssist.TargetMode.Rarity });
+        Assert.True(d.ShouldTap);
+        Assert.Equal((ushort)VkW, d.Vk);
+        Assert.Equal(2u, d.TargetId);
     }
 
     [Fact]

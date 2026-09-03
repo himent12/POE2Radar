@@ -1,4 +1,5 @@
 using System.Linq;
+using POE2Radar.Overlay.Draw;
 using NumVec2 = System.Numerics.Vector2;
 using POE2Radar.Core;
 using POE2Radar.Core.Game;
@@ -249,6 +250,17 @@ public sealed class RadarApp : IDisposable
     private volatile string _mapClearNote = "OFF (F2)";
     private readonly HashSet<long> _mapClearVisited = new();
     private readonly List<MapClear.MobHint> _clearMobs = new();
+    // Stuck-target watchdog (world thread): give up on a cell/mob the bot stops getting closer to.
+    private string? _clearStuckId;
+    private float _clearStuckBestD;
+    private DateTime _clearStuckSince;
+    private readonly Dictionary<uint, DateTime> _clearIgnoredMobs = new();
+    private NumVec2 _clearPrevPlayer;
+    private NumVec2 _clearHeading;
+    // Fight watchdog (render thread): pauses movement only while an engaged hostile is actually being
+    // damaged; gives up on monsters nothing lands on so the bot never stands still next to 1-2 mobs.
+    private readonly CombatWatch _combatWatch = new();
+    private volatile bool _inCombat;
     // Path move (opt-in input). Same gates as combat assist; F5 kill-switch. Default OFF.
     // Also armed while F3 bot master is on. Walks the first SelectedPath.
     private bool _moveEnabled;
@@ -312,6 +324,19 @@ public sealed class RadarApp : IDisposable
 
     // ── Collapsible "POE2Radar" navigation menu widget state (drawn always-on; persisted corner). ──
     private bool _navMenuExpanded;                                       // dropdown open? (default collapsed)
+    // INSERT in-game menu (render thread owns it; clicks arrive on the window thread → volatile).
+    private volatile bool _insMenuOpen;
+    private volatile int _insMenuTab;
+    private volatile int _hostilesNear;
+    // Death / respawn (render thread). HpCur == 0 from the Life component = dead; the game is showing the
+    // death screen. We stop all input, wait RespawnDelayMs, then tap the resurrect key every 2 s until alive.
+    private volatile bool _playerDead;
+    private DateTime _deadSinceUtc = DateTime.MinValue;
+    private DateTime _nextRespawnTapUtc = DateTime.MinValue;
+    private int _respawnTaps;
+    private volatile string _respawnNote = "";
+    private bool _lastRealFocused;
+    private DateTime _nextInsToggleAt = DateTime.MinValue;
 
     public void RequestShutdown() => _shutdown = true;
 
@@ -1245,12 +1270,37 @@ public sealed class RadarApp : IDisposable
         var monoliths = worldFresh && mr.AreaHash == _areaHash
             ? mr.Markers : (IReadOnlyList<MonolithMarker>)Array.Empty<MonolithMarker>();
 
-        var focused = _gameHwnd != 0 && GameHost.GetForegroundWindow() == _gameHwnd;
+        var realFocused = _gameHwnd != 0 && GameHost.GetForegroundWindow() == _gameHwnd;
+        // Background play: the bot logic treats the game as focused; GameHost routes input to the window.
+        GameHost.SetInputTarget(_gameHwnd, _settings.PlayInBackground);
+        GameHost.SetInputDisplay(_settings.PlayInBackground ? _settings.InputDisplay : null);
+        var focused = realFocused || (_settings.PlayInBackground && _gameHwnd != 0);
+        // Dead: no combat / movement / interact; auto-respawn owns the input until we are alive again.
+        if (TickRespawn(inGame, focused)) focused = false;
+        // On any real focus flip drop held keys so they are pressed fresh through the (possibly new) route.
+        if (realFocused != _lastRealFocused) ReleaseHeldKeys();
+        _lastRealFocused = realFocused;
         var combatEntities = worldFresh ? snap.Entities : (IReadOnlyList<Poe2Live.EntityDot>)Array.Empty<Poe2Live.EntityDot>();
-        var inCombat = CombatArmed
-            && CombatAssist.HasHostileInRange(combatEntities, player, _settings.CombatRange);
-        TickCombatAssist(inGame, focused, player, combatEntities);
-        TickPathMove(inGame, focused, player, selectedPaths, playerWorld, inCombat);
+        _combatWatch.StallAfter = _settings.CombatStallMs <= 0 ? TimeSpan.Zero : TimeSpan.FromMilliseconds(Math.Max(500, _settings.CombatStallMs));
+        _combatWatch.IgnoreFor = TimeSpan.FromMilliseconds(Math.Max(1000, _settings.CombatIgnoreMs));
+        _combatWatch.FleeBelowPct = _settings.CombatFleeHpPct;
+        _combatWatch.FleeRecoverPct = _settings.CombatFleeRecoverPct;
+        _combatWatch.KeepDistance = _settings.CombatKeepDistance;
+        var watch = CombatArmed && inGame
+            ? _combatWatch.Update(combatEntities, player, _settings.CombatEngageRange, DateTime.UtcNow, _hpPct)
+            : default;
+        var inCombat = watch.PauseMove;
+        _inCombat = inCombat || watch.Flee;
+        TickCombatAssist(inGame, focused, player, combatEntities, playerWorld, watch);
+        // Low HP: the mover runs the flee point instead of the route (attacks are held above).
+        IReadOnlyList<SelectedPath> movePaths = selectedPaths;
+        if ((watch.Flee || watch.Kite) && CombatWatch.TryFleePoint(combatEntities, player, _settings.CombatRange,
+                watch.Flee ? _settings.CombatFleeDistance : Math.Max(4f, _settings.CombatKeepDistance * 0.6f),
+                terrain?.Walkable, terrain?.Width ?? 0, terrain?.Height ?? 0, out var fleeTo))
+        {
+            movePaths = new[] { new SelectedPath(0, new List<(int x, int y)> { ((int)MathF.Round(fleeTo.X), (int)MathF.Round(fleeTo.Y)) }) };
+        }
+        TickPathMove(inGame, focused, player, movePaths, playerWorld, inCombat, watch.Flee || watch.Kite);
         TickQuestUse(inGame, focused, player, playerWorld, inCombat);
 
         _state = new RadarState(inGame, snap.AreaHash, snap.AreaLevel, map.IsVisible, map.Zoom, player,
@@ -1365,7 +1415,43 @@ public sealed class RadarApp : IDisposable
             PathMove: MoveArmed,
             PathMoveNote: _moveNote,
             MapClear: _mapClear,
-            MapClearNote: _mapClearNote);
+            MapClearNote: _mapClearNote,
+            InsMenu: _insMenuOpen ? new InsMenuData(
+                Tab: _insMenuTab,
+                CombatRange: _settings.CombatRange,
+                CombatEngageRange: _settings.CombatEngageRange,
+                CombatFleeHpPct: _settings.CombatFleeHpPct,
+                CombatFleeRecoverPct: _settings.CombatFleeRecoverPct,
+                CombatFleeDistance: _settings.CombatFleeDistance,
+                CombatStallMs: _settings.CombatStallMs,
+                MapClearStampRadius: _settings.MapClearStampRadius,
+                MapClearAggroRange: _settings.MapClearAggroRange,
+                MapClearStuckMs: _settings.MapClearStuckMs,
+                MoveMethod: _settings.MoveMethod ?? "WASD",
+                MoveArriveRadius: _settings.MoveArriveRadius,
+                LifeThresholdPct: _settings.LifeThresholdPct,
+                ManaThresholdPct: _settings.ManaThresholdPct,
+                SkillCount: _settings.CombatSkills?.Count ?? 0,
+                Fps: (int)MathF.Round(_fps),
+                WorldMs: _worldMs,
+                RenderMs: _renderMs,
+                CharName: _charName,
+                VisitedCells: _mapClearVisited.Count,
+                Skills: _settings.CombatSkills,
+                TargetMode: _settings.CombatTargetMode ?? "Nearest",
+                RotationMode: _settings.CombatRotationMode ?? "RoundRobin",
+                KeepDistance: _settings.CombatKeepDistance,
+                MoveCooldownMs: _settings.MoveCooldownMs,
+                HostilesNear: _hostilesNear,
+                MoveRunEnabled: _settings.MoveRunEnabled,
+                MoveRunKey: _settings.MoveRunKey,
+                MoveLookAhead: _settings.MoveLookAhead,
+                MoveDiagonals: _settings.MoveDiagonals,
+                MoveAxisRotationDeg: _settings.MoveAxisRotationDeg,
+                PlayInBackground: _settings.PlayInBackground,
+                NestedInput: GameHost.NestedInputDisplay,
+                AutoRespawn: _settings.AutoRespawn,
+                RespawnNote: _respawnNote) : null);
         // The overlay is only visible while PoE2 is foreground (Render draws nothing otherwise). Skip
         // the whole draw + UpdateLayeredWindow blit when unfocused — but render once on the focus-loss
         // transition so the last visible frame is cleared rather than left frozen on screen.
@@ -1541,11 +1627,39 @@ public sealed class RadarApp : IDisposable
     /// </summary>
     private void UpdateClickThrough(bool active)
     {
-        var overWidget = active
-                         && _renderer.LegendRowRects.Count > 0
-                         && GameHost.GetCursorPos(out var pt)
-                         && HitTestWidget(ScreenToClientPoint(pt)) is not null;
+        // INSERT menu open: the overlay owns the pointer outright (whole window, exclusive grab where the
+        // platform allows) — the game must not get clicks meant for the menu. Otherwise the old per-widget rule.
+        var menu = active && _insMenuOpen;
+        var overWidget = menu
+                         || (active
+                             && _renderer.LegendRowRects.Count > 0
+                             && GameHost.GetCursorPos(out var pt)
+                             && HitTestWidget(ScreenToClientPoint(pt)) is not null);
         _window.SetClickThrough(!overWidget);
+        _window.CapturePointer(menu);
+        PollMenuClick(menu);
+    }
+
+    // Fallback click detection for the INSERT menu: poll the physical button instead of relying on the window
+    // receiving ButtonPress (a fullscreen game holding a pointer grab swallows those). Rising edge of LMB while
+    // the cursor is over a menu control → dispatch. Deduped against the event path by a short window.
+    private bool _menuLmbWasDown;
+    private DateTime _lastMenuClickUtc = DateTime.MinValue;
+
+    private void PollMenuClick(bool menu)
+    {
+        if (!menu) { _menuLmbWasDown = false; return; }
+        var down = GameHost.IsMouseButtonDown(0x01);
+        var rising = down && !_menuLmbWasDown;
+        _menuLmbWasDown = down;
+        if (!rising) return;
+        if ((DateTime.UtcNow - _lastMenuClickUtc).TotalMilliseconds < 150) return;
+        if (!GameHost.GetCursorPos(out var pt)) return;
+        var c = ScreenToClientPoint(pt);
+        var hit = HitTestWidgetRect(c);
+        if (hit is null || !hit.Value.Action.StartsWith("ins:", StringComparison.Ordinal)) return;
+        _lastMenuClickUtc = DateTime.UtcNow;
+        OnInsMenuClick(hit.Value.Action, hit.Value.Rect, c.X);
     }
 
     /// <summary>Convert a screen-space cursor point to the overlay window's client coords.</summary>
@@ -1563,11 +1677,19 @@ public sealed class RadarApp : IDisposable
     /// 96 DPI into a DIB sized to the game window's physical client rect, so 1 DIP == 1 device
     /// pixel == 1 client pixel), the same space ScreenToClient yields.
     /// </summary>
-    private string? HitTestWidget((int X, int Y) p)
+    private string? HitTestWidget((int X, int Y) p) => HitTestWidgetRect(p)?.Action;
+
+    private (RawRectF Rect, string Action)? HitTestWidgetRect((int X, int Y) p)
     {
-        foreach (var (rect, action) in _renderer.LegendRowRects)
+        // Later entries are drawn on top (the INSERT menu registers its controls after its panel rect),
+        // so scan from the end to give the topmost control the click.
+        var rects = _renderer.LegendRowRects;
+        for (var i = rects.Count - 1; i >= 0; i--)
+        {
+            var (rect, action) = rects[i];
             if (p.X >= rect.Left && p.X < rect.Right && p.Y >= rect.Top && p.Y < rect.Bottom)
-                return action;
+                return (rect, action);
+        }
         return null;
     }
 
@@ -1581,8 +1703,17 @@ public sealed class RadarApp : IDisposable
     /// </summary>
     private void OnOverlayClick(int clientX, int clientY)
     {
-        var action = HitTestWidget((clientX, clientY));
-        if (action is null) return;
+        var hit = HitTestWidgetRect((clientX, clientY));
+        if (hit is null) return;
+        var (hitRect, action) = hit.Value;
+
+        if (action.StartsWith("ins:", StringComparison.Ordinal))
+        {
+            if ((DateTime.UtcNow - _lastMenuClickUtc).TotalMilliseconds < 150) return; // poll path already took it
+            _lastMenuClickUtc = DateTime.UtcNow;
+            OnInsMenuClick(action, hitRect, clientX);
+            return;
+        }
 
         if (action == "menu-toggle")
         {
@@ -1609,6 +1740,205 @@ public sealed class RadarApp : IDisposable
             _settings.CurrencyExchange.Collapsed = !_settings.CurrencyExchange.Collapsed;
             _settings.Save();
         }
+    }
+
+    /// <summary>
+    /// Auto-respawn. Returns true while the character is dead (callers suppress all other input). Any bot
+    /// arm bit (bot / clear / combat / move) enables it; plain overlay users without automation are left alone.
+    /// </summary>
+    private bool TickRespawn(bool inGame, bool focused)
+    {
+        var automation = _botEnabled || _mapClear || CombatArmed || MoveArmed;
+        if (!inGame || !_playerDead || !automation)
+        {
+            if (_deadSinceUtc != DateTime.MinValue && !_playerDead)
+            {
+                Console.WriteLine("\nRespawn: alive again.");
+                _combatWatch.Reset();
+                _clearStuckId = null;
+            }
+            _deadSinceUtc = DateTime.MinValue;
+            _respawnTaps = 0;
+            _respawnNote = "";
+            return inGame && _playerDead;
+        }
+        var now = DateTime.UtcNow;
+        if (_deadSinceUtc == DateTime.MinValue)
+        {
+            _deadSinceUtc = now;
+            _nextRespawnTapUtc = now.AddMilliseconds(Math.Max(500, _settings.RespawnDelayMs));
+            ReleaseHeldKeys();
+            Console.WriteLine("\nRespawn: character died — resurrecting at checkpoint.");
+        }
+        _respawnNote = "dead → respawning";
+        if (!_settings.AutoRespawn || !focused) { _respawnNote = _settings.AutoRespawn ? "dead (PoE2 not focused)" : "dead (auto-respawn off)"; return true; }
+        if (now >= _nextRespawnTapUtc && _settings.RespawnKey is >= 1 and <= 255)
+        {
+            GameHost.TapKey((ushort)_settings.RespawnKey);
+            _respawnTaps++;
+            _nextRespawnTapUtc = now.AddSeconds(2);
+            _respawnNote = $"dead → respawn tap {_respawnTaps}";
+        }
+        return true;
+    }
+
+    /// <summary>INSERT-menu click dispatch (see OverlayRenderer.InsMenu for the action grammar).</summary>
+    private void OnInsMenuClick(string action, RawRectF rect, int clientX)
+    {
+        switch (action)
+        {
+            case "ins:panel": return;
+            case "ins:close": _insMenuOpen = false; return;
+            case "ins:toggle:bot": ToggleBot(); return;
+            case "ins:toggle:clear": ToggleMapClear(); return;
+            case "ins:toggle:combat": ToggleCombatAssist(); return;
+            case "ins:toggle:move": TogglePathMove(); return;
+            case "ins:toggle:flask": ToggleAutoFlask(); return;
+            case "ins:skill:add": AddCombatSkill(); return;
+        }
+        var parts = action.Split(':');
+        if (parts.Length < 3) return;
+        var ci = System.Globalization.CultureInfo.InvariantCulture;
+        switch (parts[1])
+        {
+            case "tab" when int.TryParse(parts[2], out var tab):
+                _insMenuTab = Math.Clamp(tab, 0, 4);
+                return;
+            case "adj" when parts.Length == 4 && float.TryParse(parts[3], System.Globalization.NumberStyles.Float, ci, out var delta):
+                if (InsSliderSpec.All.TryGetValue(parts[2], out var spec)) SetSetting(spec, spec.Clamp(GetSetting(parts[2]) + delta));
+                return;
+            case "slider" when InsSliderSpec.All.TryGetValue(parts[2], out var sspec):
+            {
+                var t = rect.Width > 0f ? Math.Clamp((clientX - rect.Left) / rect.Width, 0f, 1f) : 0f;
+                SetSetting(sspec, sspec.Clamp(sspec.Min + t * (sspec.Max - sspec.Min)));
+                return;
+            }
+            case "set" when parts.Length == 4:
+                SetChoice(parts[2], parts[3]);
+                return;
+            case "flag":
+                if (parts[2] == "moveRunEnabled") _settings.MoveRunEnabled = !_settings.MoveRunEnabled;
+                else if (parts[2] == "moveDiagonals") _settings.MoveDiagonals = !_settings.MoveDiagonals;
+                else if (parts[2] == "playInBackground") _settings.PlayInBackground = !_settings.PlayInBackground;
+                else if (parts[2] == "autoRespawn") _settings.AutoRespawn = !_settings.AutoRespawn;
+                else return;
+                _settings.Save();
+                return;
+            case "skill":
+                OnSkillAction(parts);
+                return;
+        }
+    }
+
+    private float GetSetting(string key) => key switch
+    {
+        "combatRange" => _settings.CombatRange,
+        "combatEngageRange" => _settings.CombatEngageRange,
+        "combatKeepDistance" => _settings.CombatKeepDistance,
+        "combatFleeHpPct" => _settings.CombatFleeHpPct,
+        "combatFleeRecoverPct" => _settings.CombatFleeRecoverPct,
+        "combatFleeDistance" => _settings.CombatFleeDistance,
+        "combatStallMs" => _settings.CombatStallMs,
+        "mapClearStampRadius" => _settings.MapClearStampRadius,
+        "mapClearAggroRange" => _settings.MapClearAggroRange,
+        "mapClearStuckMs" => _settings.MapClearStuckMs,
+        "moveArriveRadius" => _settings.MoveArriveRadius,
+        "moveCooldownMs" => _settings.MoveCooldownMs,
+        "moveLookAhead" => _settings.MoveLookAhead,
+        "moveAxisRotationDeg" => _settings.MoveAxisRotationDeg,
+        "lifeThresholdPct" => _settings.LifeThresholdPct,
+        "manaThresholdPct" => _settings.ManaThresholdPct,
+        _ => 0f,
+    };
+
+    /// <summary>Write a slider tunable (already clamped to its spec) and persist.</summary>
+    private void SetSetting(InsSliderSpec spec, float v)
+    {
+        var s = _settings;
+        switch (spec.Key)
+        {
+            case "combatRange": s.CombatRange = v; break;
+            case "combatEngageRange": s.CombatEngageRange = v; break;
+            case "combatKeepDistance": s.CombatKeepDistance = v; break;
+            case "combatFleeHpPct": s.CombatFleeHpPct = v; break;
+            case "combatFleeRecoverPct": s.CombatFleeRecoverPct = v; break;
+            case "combatFleeDistance": s.CombatFleeDistance = v; break;
+            case "combatStallMs": s.CombatStallMs = (int)v; break;
+            case "mapClearStampRadius": s.MapClearStampRadius = (int)v; break;
+            case "mapClearAggroRange": s.MapClearAggroRange = v; break;
+            case "mapClearStuckMs": s.MapClearStuckMs = (int)v; break;
+            case "moveArriveRadius": s.MoveArriveRadius = v; break;
+            case "moveCooldownMs": s.MoveCooldownMs = (int)v; break;
+            case "moveLookAhead": s.MoveLookAhead = v; break;
+            case "moveAxisRotationDeg": s.MoveAxisRotationDeg = v; break;
+            case "lifeThresholdPct": s.LifeThresholdPct = v; break;
+            case "manaThresholdPct": s.ManaThresholdPct = v; break;
+            default: return;
+        }
+        s.Save();
+    }
+
+    private void SetChoice(string key, string value)
+    {
+        switch (key)
+        {
+            case "combatTargetMode" when value is "Nearest" or "Rarity" or "LowestHp" or "HighestHp": _settings.CombatTargetMode = value; break;
+            case "combatRotationMode" when value is "RoundRobin" or "Priority": _settings.CombatRotationMode = value; break;
+            case "moveMethod" when value is "WASD" or "Click": _settings.MoveMethod = value; break;
+            default: return;
+        }
+        _settings.Save();
+    }
+
+    // Keys the in-game skill editor cycles through: Q W E R T, 1-5, then mouse buttons.
+    private static readonly int[] SkillKeyCycle = { 0x51, 0x57, 0x45, 0x52, 0x54, 0x31, 0x32, 0x33, 0x34, 0x35, 0x01, 0x02, 0x04, 0x05, 0x06 };
+
+    private void AddCombatSkill()
+    {
+        _settings.CombatSkills ??= new List<CombatSkill>();
+        if (_settings.CombatSkills.Count >= 8) return;
+        var used = new HashSet<int>(_settings.CombatSkills.Select(k => k.Key));
+        var key = SkillKeyCycle.FirstOrDefault(k => !used.Contains(k), 0x51);
+        _settings.CombatSkills.Add(new CombatSkill { Key = key, CooldownMs = Math.Clamp(_settings.CombatCooldownMs, 0, 60000) });
+        _settings.Save();
+    }
+
+    private void OnSkillAction(string[] parts)
+    {
+        var list = _settings.CombatSkills;
+        if (list is null || parts.Length < 4 || !int.TryParse(parts[3], out var i) || (uint)i >= (uint)list.Count) return;
+        var sk = list[i];
+        switch (parts[2])
+        {
+            case "del":
+                list.RemoveAt(i);
+                break;
+            case "flip" when parts.Length == 5:
+                if (parts[4] == "enabled") sk.Enabled = !sk.Enabled;
+                else if (parts[4] == "rareOnly") sk.RareOnly = !sk.RareOnly;
+                else return;
+                break;
+            case "adj" when parts.Length == 6 && float.TryParse(parts[5], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var d):
+                switch (parts[4])
+                {
+                    case "key":
+                    {
+                        var idx = Array.IndexOf(SkillKeyCycle, sk.Key);
+                        var n = SkillKeyCycle.Length;
+                        idx = ((idx < 0 ? 0 : idx) + (d > 0 ? 1 : -1) + n) % n;
+                        sk.Key = SkillKeyCycle[idx];
+                        break;
+                    }
+                    case "cd": sk.CooldownMs = Math.Clamp(sk.CooldownMs + (int)d, 0, 60000); break;
+                    case "range": sk.Range = Math.Clamp(sk.Range + d, 0f, 200f); break;
+                    case "min": sk.MinTargets = Math.Clamp(sk.MinTargets + (int)d, 1, 20); break;
+                    case "hp": sk.HpBelowPct = Math.Clamp(sk.HpBelowPct + d, 0f, 100f); break;
+                    default: return;
+                }
+                break;
+            default: return;
+        }
+        _settings.Save();
     }
 
     /// <summary>Decide which monsters get an HP bar and precompute each bar's style (width + packed
@@ -1778,9 +2108,10 @@ public sealed class RadarApp : IDisposable
             return;
         }
         _hpPct = v.HpPct; _manaPct = v.ManaPct; _esPct = v.EsPct;
+        _playerDead = v.HpCur <= 0;
 
         if (!_autoFlask) { _flaskNote = "OFF (F8)"; return; }
-        if (GameHost.GetForegroundWindow() != _gameHwnd) { _flaskNote = "paused (PoE2 not focused)"; return; }
+        if (GameHost.GetForegroundWindow() != _gameHwnd && !_settings.PlayInBackground) { _flaskNote = "paused (PoE2 not focused)"; return; }
         _flaskNote = "armed";
 
         // Which pool(s) the single life-flask key watches. ES only participates when a real ES pool is
@@ -1812,7 +2143,8 @@ public sealed class RadarApp : IDisposable
     /// <see cref="CombatAssist.Decide"/>; this method only taps and updates the status note.
     /// </summary>
     private void TickCombatAssist(bool inGame, bool focused, NumVec2 player,
-        IReadOnlyList<Poe2Live.EntityDot> entities)
+        IReadOnlyList<Poe2Live.EntityDot> entities, POE2Radar.Core.Game.Vector3? playerWorld,
+        CombatWatch.Result watch)
     {
         var now = DateTime.UtcNow;
         var src = _settings.CombatSkills;
@@ -1822,7 +2154,7 @@ public sealed class RadarApp : IDisposable
         for (var i = 0; i < n; i++)
         {
             var sk = src![i];
-            specs[i] = new CombatAssist.Skill(sk.Key, sk.CooldownMs, sk.Range);
+            specs[i] = new CombatAssist.Skill(sk.Key, sk.CooldownMs, sk.Range, Math.Max(1, sk.MinTargets), sk.RareOnly, sk.HpBelowPct, sk.Enabled);
         }
         var decision = CombatAssist.Decide(new CombatAssist.Snapshot(
             Armed: CombatArmed,
@@ -1834,9 +2166,26 @@ public sealed class RadarApp : IDisposable
             NowUtc: now,
             LastFireUtc: _combatFiredAt,
             Skills: specs,
-            NextIndex: _combatNextIndex));
-        _combatNote = decision.Note;
+            NextIndex: _combatNextIndex,
+            IgnoreIds: _combatWatch.IgnoredIds,
+            Mode: CombatAssist.ParseTargetMode(_settings.CombatTargetMode),
+            PriorityOrder: string.Equals(_settings.CombatRotationMode, "Priority", StringComparison.OrdinalIgnoreCase),
+            PlayerHpPct: _hpPct,
+            KeyboardOnly: GameHost.IsBackgroundActive && !GameHost.BackgroundSupportsMouse));
+        _hostilesNear = decision.HostilesInRange;
+        if (GameHost.IsBackgroundActive && !GameHost.BackgroundSupportsMouse && !decision.ShouldTap && decision.HasTarget
+            && (src?.All(k => k.Key is 0x01 or 0x02 or 0x04 or 0x05 or 0x06) ?? false))
+            decision = decision with { Note = "background: bind skills to keys" };
+        if (_playerDead) decision = decision with { Note = _respawnNote };
+        _combatNote = watch.Flee ? watch.Note
+            : watch.Stalled ? decision.Note + " (stalled, moving on)"
+            : watch.Fighting ? $"{decision.Note} ({watch.Note})"
+            : decision.Note;
+        if (watch.Flee) return; // running, not swinging
         if (!decision.ShouldTap) return;
+        // Aim: PoE2 fires a skill toward the cursor, so warp it onto the target first — otherwise the
+        // rotation swings at wherever the last move-click left the cursor and the mob never dies.
+        if (decision.HasTarget) AimAtEntity(decision.TargetGrid, decision.TargetWorld, playerWorld);
         GameHost.TapKey(decision.Vk);
         if ((uint)decision.SkillIndex < (uint)_combatFiredAt.Length)
             _combatFiredAt[decision.SkillIndex] = now;
@@ -1861,12 +2210,13 @@ public sealed class RadarApp : IDisposable
     /// this method only taps (and aims the cursor for Click) and updates the status note.
     /// </summary>
     private void TickPathMove(bool inGame, bool focused, NumVec2 player,
-        IReadOnlyList<SelectedPath> paths, POE2Radar.Core.Game.Vector3? playerWorld, bool inCombat)
+        IReadOnlyList<SelectedPath> paths, POE2Radar.Core.Game.Vector3? playerWorld, bool inCombat, bool fleeing = false)
     {
         var now = DateTime.UtcNow;
         IReadOnlyList<(int x, int y)> waypoints = paths.Count > 0
             ? paths[0].Points
             : Array.Empty<(int x, int y)>();
+        var terrain = _terrain;
         var decision = PathMove.Decide(new PathMove.Snapshot(
             Armed: MoveArmed,
             Focused: focused,
@@ -1883,8 +2233,90 @@ public sealed class RadarApp : IDisposable
             KeyS: _settings.MoveKeyS,
             KeyD: _settings.MoveKeyD,
             ClickKey: _settings.MoveClickKey,
-            PauseForCombat: inCombat));
-        _moveNote = decision.Note;
+            PauseForCombat: inCombat,
+            LookAhead: _settings.MoveLookAhead,
+            Walkable: terrain?.Walkable,
+            Width: terrain?.Width ?? 0,
+            Height: terrain?.Height ?? 0,
+            Diagonals: _settings.MoveDiagonals,
+            AxisRotationDeg: _settings.MoveAxisRotationDeg,
+            RunKey: _settings.MoveRunKey,
+            RunEnabled: _settings.MoveRunEnabled,
+            PrevHoldKeys: _prevDirKeys));
+        _moveNote = fleeing ? "kite → " + decision.Note : decision.Note;
+
+        // Held keys: WASD direction set + run key while moving. Diff against what is currently down so a
+        // direction change is one KeyUp + one KeyDown, not a tap storm; everything is released the instant
+        // the bot stops wanting to move (arrived / combat / unfocused / disarmed).
+        // Focus / in-game regained: the game drops key state on focus loss while our bookkeeping still says
+        // "held" → nothing would ever be re-pressed. Release everything so the next tick presses afresh.
+        var live = focused && inGame;
+        if (live && !_moveWasLive) ReleaseHeldKeys();
+        _moveWasLive = live;
+
+        _wantKeys.Clear();
+        _prevDirKeys = decision.HoldKeys is { Count: > 0 } ? decision.HoldKeys : null;
+        var wantsDir = decision.HoldKeys is { Count: > 0 };
+        if (wantsDir) foreach (var k in decision.HoldKeys!) _wantKeys.Add(k);
+
+        // Stuck watchdog: direction keys held but the character has not moved. Two "kicks" (release all,
+        // re-press next tick — fixes a lost key-down / dropped run state), then a perpendicular sidestep to
+        // slide off whatever wall corner we're pressed into; alternate sides. Reset the moment we move.
+        if (wantsDir && !fleeing)
+        {
+            if (NumVec2.DistanceSquared(player, _stuckRef) > StuckMoveCellsSq)
+            {
+                _stuckRef = player; _stuckSince = now; _stuckKicks = 0;
+            }
+            else if (_stuckSince == DateTime.MinValue)
+            {
+                _stuckRef = player; _stuckSince = now;
+            }
+            else if (now < _sidestepUntil)
+            {
+                // sidestep in progress — handled below
+            }
+            else if (now - _stuckSince > StuckAfter)
+            {
+                _stuckKicks++;
+                _stuckSince = now;
+                if (_stuckKicks <= 2)
+                {
+                    ReleaseHeldKeys();
+                    _runHoldUntil = DateTime.MinValue;
+                    _moveNote = $"stuck → re-press ({_stuckKicks})";
+                    return; // keys re-pressed next tick
+                }
+                _sidestepSign = -_sidestepSign;
+                _sidestepUntil = now + SidestepFor;
+                _stuckKicks = 0;
+                Console.WriteLine("\nPath move: stuck — sidestepping.");
+            }
+        }
+        else
+        {
+            _stuckSince = DateTime.MinValue;
+            _stuckKicks = 0;
+        }
+        if (wantsDir && now < _sidestepUntil)
+        {
+            var dir = PathMove.DirectionOf(decision.HoldKeys!, _settings.MoveKeyW, _settings.MoveKeyA, _settings.MoveKeyS, _settings.MoveKeyD);
+            var perp = (x: -dir.y * _sidestepSign, y: dir.x * _sidestepSign);
+            _wantKeys.Clear();
+            foreach (var k in PathMove.KeysFor(perp, _settings.MoveKeyW, _settings.MoveKeyA, _settings.MoveKeyS, _settings.MoveKeyD)) _wantKeys.Add(k);
+            _moveNote = "stuck → sidestep";
+        }
+
+        // Run key: keep it down across the brief "no path" / "arrived" gaps between route replans and
+        // re-targets (RunLinger), so it is pressed ONCE and held for the whole trip. Hard stops (combat,
+        // unfocused, disarmed, not in game) release it immediately.
+        var hardStop = !MoveArmed || !focused || !inGame || inCombat;
+        if (decision.Moving) _runHoldUntil = now + RunLinger;
+        else if (hardStop) _runHoldUntil = DateTime.MinValue;
+        if (now < _runHoldUntil && _settings.MoveRunEnabled && _settings.MoveRunKey is >= 1 and <= 255)
+            _wantKeys.Add((ushort)_settings.MoveRunKey);
+        ApplyHeldKeys();
+
         if (!decision.ShouldTap) return;
         if (PathMove.IsClick(_settings.MoveMethod))
             AimClick(decision.TargetX, decision.TargetY, playerWorld);
@@ -1892,13 +2324,57 @@ public sealed class RadarApp : IDisposable
         _moveFiredAt = now;
     }
 
+    private readonly HashSet<ushort> _heldKeys = new();
+    private readonly HashSet<ushort> _wantKeys = new();
+    private static readonly TimeSpan RunLinger = TimeSpan.FromMilliseconds(600);
+    private IReadOnlyList<ushort>? _prevDirKeys;
+    // Stuck watchdog state (render thread).
+    private static readonly TimeSpan StuckAfter = TimeSpan.FromMilliseconds(500);
+    private static readonly TimeSpan SidestepFor = TimeSpan.FromMilliseconds(350);
+    private const float StuckMoveCellsSq = 0.75f * 0.75f;
+    private NumVec2 _stuckRef;
+    private DateTime _stuckSince = DateTime.MinValue;
+    private int _stuckKicks;
+    private DateTime _sidestepUntil = DateTime.MinValue;
+    private int _sidestepSign = 1;
+    private bool _moveWasLive;
+    private DateTime _runHoldUntil = DateTime.MinValue;
+    private readonly List<ushort> _keyScratch = new();
+
+    private void ApplyHeldKeys()
+    {
+        _keyScratch.Clear();
+        foreach (var k in _heldKeys) if (!_wantKeys.Contains(k)) _keyScratch.Add(k);
+        foreach (var k in _keyScratch) { GameHost.KeyUp(k); _heldKeys.Remove(k); }
+        foreach (var k in _wantKeys) if (_heldKeys.Add(k)) GameHost.KeyDown(k);
+    }
+
+    /// <summary>Let go of every held movement/run key (shutdown, disarm, focus loss).</summary>
+    private void ReleaseHeldKeys()
+    {
+        foreach (var k in _heldKeys) GameHost.KeyUp(k);
+        _heldKeys.Clear();
+    }
+
     /// <summary>Warp the cursor onto the projected waypoint so a click-to-move tap walks there.</summary>
     private void AimClick(int gridX, int gridY, POE2Radar.Core.Game.Vector3? playerWorld)
+        => AimWorld(
+            gridX * POE2Radar.Core.Pathfinding.GridConstants.GridToWorld,
+            gridY * POE2Radar.Core.Pathfinding.GridConstants.GridToWorld,
+            playerWorld?.Z ?? 0f);
+
+    /// <summary>Warp the cursor onto a monster: its own world position when read, else its grid at player height.</summary>
+    private void AimAtEntity(NumVec2 grid, POE2Radar.Core.Game.Vector3 world, POE2Radar.Core.Game.Vector3? playerWorld)
+    {
+        if (world.X != 0f || world.Y != 0f)
+            AimWorld(world.X, world.Y, world.Z != 0f ? world.Z : playerWorld?.Z ?? 0f);
+        else
+            AimClick((int)MathF.Round(grid.X), (int)MathF.Round(grid.Y), playerWorld);
+    }
+
+    private void AimWorld(float wx, float wy, float wz)
     {
         if (_cameraMatrix is not { } m) return;
-        var wx = gridX * POE2Radar.Core.Pathfinding.GridConstants.GridToWorld;
-        var wy = gridY * POE2Radar.Core.Pathfinding.GridConstants.GridToWorld;
-        var wz = playerWorld?.Z ?? 0f;
         if (!POE2Radar.Core.Pathfinding.MapProjection.TryWorldToScreen(m, wx, wy, wz, _window.Width, _window.Height, out var sx, out var sy))
             return;
         const float pad = 8f;
@@ -1928,6 +2404,7 @@ public sealed class RadarApp : IDisposable
             UseKey: _settings.QuestUseKey,
             PauseForCombat: inCombat));
         if (!decision.ShouldTap) return;
+        if (GameHost.WouldDrop(decision.Vk)) { _questFollowNote = "background: interact needs a keyboard key"; return; }
         if (decision.Vk is 0x01 or 0x02 or 0x04 or 0x05 or 0x06)
             AimClick((int)MathF.Round(_questFollowGx), (int)MathF.Round(_questFollowGy), playerWorld);
         GameHost.TapKey(decision.Vk);
@@ -1942,73 +2419,45 @@ public sealed class RadarApp : IDisposable
     /// Map calibration is web-config-only (no in-game keys, to avoid accidental presses).</summary>
     private void HandleHotkeys()
     {
+        // INSERT opens/closes the in-game menu (debounced). Only while PoE2 is foreground.
+        if (Down(0x2D) && DateTime.UtcNow >= _nextInsToggleAt
+            && _gameHwnd != 0 && GameHost.GetForegroundWindow() == _gameHwnd)
+        {
+            _nextInsToggleAt = DateTime.UtcNow.AddMilliseconds(300);
+            _insMenuOpen = !_insMenuOpen;
+        }
         // F8 master kill-switch for auto-flask (debounced).
         if (Down(0x77) && DateTime.UtcNow >= _nextToggleAt)
         {
-            _autoFlask = !_autoFlask;
             _nextToggleAt = DateTime.UtcNow.AddMilliseconds(300);
-            _settings.AutoFlaskEnabled = _autoFlask;   // persist so the choice survives a restart
-            _settings.Save();
-            Console.WriteLine($"\nAuto-flask: {(_autoFlask ? "ON" : "OFF")}");
+            ToggleAutoFlask();
         }
         // F4 master kill-switch for combat assist (debounced). Not writable via the dashboard.
         if (Down(0x73) && DateTime.UtcNow >= _nextCombatToggleAt)
         {
-            _combatAssist = !_combatAssist;
             _nextCombatToggleAt = DateTime.UtcNow.AddMilliseconds(300);
-            _settings.CombatAssistEnabled = _combatAssist;
-            _settings.Save();
-            Console.WriteLine($"\nCombat assist: {(_combatAssist ? "ON" : "OFF")}");
+            ToggleCombatAssist();
         }
         // F3 bot master (debounced). Arms quest follow + path move + combat. Not writable via the dashboard.
         // F4 combat stays independently toggleable (OR'd with the bot). F2 map-clear pauses quest follow.
         // F8 flask stays independent.
         if (Down(QuestFollowVk) && DateTime.UtcNow >= _nextQuestToggleAt)
         {
-            _botEnabled = !_botEnabled;
-            _questFollow = _botEnabled && !_mapClear;
             _nextQuestToggleAt = DateTime.UtcNow.AddMilliseconds(300);
-            _settings.BotEnabled = _botEnabled;
-            _settings.QuestFollowEnabled = _botEnabled;
-            _settings.Save();
-            _botNote = _botEnabled ? "armed" : "OFF (F3)";
-            _questFollowNote = _questFollow ? "armed" : (_botEnabled ? "paused (clear)" : "OFF (F3)");
-            if (_questFollow) PinLastSelection();
-            else
-            {
-                _questPinId = null;
-                if (!_mapClear) { _questFollowId = null; _questFollowHasGrid = false; }
-            }
-            _moveNote = MoveArmed ? "armed" : "OFF (F5)";
-            Console.WriteLine($"\nBot (quest follow): {(_botEnabled ? "ON" : "OFF")}");
+            ToggleBot();
         }
         // F2 map-clear (debounced). Walks unexplored cells; unique bosses + hostiles first.
         // Arms path move + combat. Pauses F3 quest follow while on. Not writable via the dashboard.
         if (Down(MapClearVk) && DateTime.UtcNow >= _nextMapClearToggleAt)
         {
-            _mapClear = !_mapClear;
-            _questFollow = _botEnabled && !_mapClear;
             _nextMapClearToggleAt = DateTime.UtcNow.AddMilliseconds(300);
-            _settings.MapClearEnabled = _mapClear;
-            _settings.Save();
-            _mapClearNote = _mapClear ? "armed" : "OFF (F2)";
-            _questFollowNote = _questFollow ? "armed" : (_botEnabled ? "paused (clear)" : "OFF (F3)");
-            _questFollowId = null;
-            _questFollowHasGrid = false;
-            if (_questFollow) PinLastSelection();
-            else _questPinId = null;
-            _moveNote = MoveArmed ? "armed" : "OFF (F5)";
-            Console.WriteLine($"\nMap clear: {(_mapClear ? "ON" : "OFF")}");
+            ToggleMapClear();
         }
         // F5 master kill-switch for path move (debounced). Not writable via the dashboard.
         if (Down(PathMoveVk) && DateTime.UtcNow >= _nextMoveToggleAt)
         {
-            _moveEnabled = !_moveEnabled;
             _nextMoveToggleAt = DateTime.UtcNow.AddMilliseconds(300);
-            _settings.MoveEnabled = _moveEnabled;
-            _settings.Save();
-            _moveNote = MoveArmed ? "armed" : "OFF (F5)";
-            Console.WriteLine($"\nPath move: {(_moveEnabled ? "ON" : "OFF")}");
+            TogglePathMove();
         }
         // F9 quits the overlay (besides the tray-icon Exit).
         if (Down(0x78)) { Console.WriteLine("\nF9 — exiting."); RequestShutdown(); }
@@ -2184,6 +2633,9 @@ public sealed class RadarApp : IDisposable
         _questFollowId = null;
         _questPinId = null;
         _mapClearVisited.Clear();
+        _clearIgnoredMobs.Clear();
+        _clearStuckId = null;
+        _combatWatch.Reset();
         lock (_navLock)
         {
             // Save what was selected in the zone we're leaving, keyed by ITS instance hash.
@@ -2292,20 +2744,75 @@ public sealed class RadarApp : IDisposable
         if (terrain is { Walkable: { } walk, Width: var w, Height: var h } && w > 0 && h > 0)
             MapClear.StampVisited(_mapClearVisited, walk, w, h, player, _settings.MapClearStampRadius);
 
+        var now = DateTime.UtcNow;
+        if (_clearIgnoredMobs.Count > 0)
+        {
+            List<uint>? expired = null;
+            foreach (var kv in _clearIgnoredMobs)
+                if (kv.Value <= now) (expired ??= new()).Add(kv.Key);
+            if (expired is not null) foreach (var k in expired) _clearIgnoredMobs.Remove(k);
+        }
+
         _clearMobs.Clear();
         foreach (var e in _entities)
         {
             if (!e.IsAlive || e.IconComplete) continue;
             if (e.Category != Poe2Live.EntityCategory.Monster || e.IsFriendly) continue;
+            // Skip monsters the fight watchdog / stuck watchdog gave up on (unreachable, untargetable).
+            if (_clearIgnoredMobs.ContainsKey(e.Id) || _combatWatch.IsIgnored(e.Id)) continue;
             _clearMobs.Add(new MapClear.MobHint(
                 "e:" + e.Id, e.Grid,
                 e.Rarity == Poe2Live.Rarity.Unique));
         }
 
+        // Smoothed heading (grid units/tick) so frontier ties keep the sweep going straight.
+        var step = player - _clearPrevPlayer;
+        _clearPrevPlayer = player;
+        if (step.LengthSquared() < 25f) _clearHeading = _clearHeading * 0.85f + step * 0.15f;
+
         var id = MapClear.PickTarget(
             areaCode, player,
             terrain?.Walkable, terrain?.Width ?? 0, terrain?.Height ?? 0,
-            _mapClearVisited, _clearMobs, _questFollowId);
+            _mapClearVisited, _clearMobs, _questFollowId, _settings.MapClearAggroRange, _clearHeading,
+            _settings.MapClearStampRadius);
+
+        // Stuck watchdog: no progress toward the target for MapClearStuckMs while not fighting → skip it.
+        if (id is not null && TryResolveTargetGrid(id, out var goal))
+        {
+            var d = NumVec2.Distance(player, goal);
+            if (!string.Equals(id, _clearStuckId, StringComparison.Ordinal))
+            {
+                _clearStuckId = id;
+                _clearStuckBestD = d;
+                _clearStuckSince = now;
+            }
+            else if (d < _clearStuckBestD - 1.5f || _inCombat)
+            {
+                _clearStuckBestD = d;
+                _clearStuckSince = now;
+            }
+            else if ((now - _clearStuckSince).TotalMilliseconds >= Math.Max(1000, _settings.MapClearStuckMs))
+            {
+                var ignoreFor = TimeSpan.FromMilliseconds(Math.Max(1000, _settings.CombatIgnoreMs));
+                if (MapClear.TryParseCell(id, out var cx, out var cy))
+                {
+                    if (terrain is { Walkable: { } wk, Width: var ww, Height: var wh })
+                        MapClear.StampDisc(_mapClearVisited, wk, ww, wh, cx, cy, Math.Max(2, _settings.MapClearStampRadius / 2));
+                }
+                else if (id.StartsWith("e:", StringComparison.Ordinal) && uint.TryParse(id.AsSpan(2), out var eid))
+                {
+                    _clearIgnoredMobs[eid] = now + ignoreFor;
+                }
+                Console.WriteLine($"\nMap clear: stuck on {TargetLabel(id)} for {(now - _clearStuckSince).TotalSeconds:F0}s — skipping.");
+                _clearStuckId = null;
+                id = null;
+            }
+        }
+        else
+        {
+            _clearStuckId = null;
+        }
+
         _mapClearNote = SetAutoNavTarget(id, terrain is null ? "armed (no terrain)" : "armed (cleared)", "Map clear");
     }
 
@@ -3218,9 +3725,73 @@ public sealed class RadarApp : IDisposable
 
     private static bool Down(int vk) => GameHost.IsKeyDown(vk);
 
+    // ── Arm-bit toggles shared by the F-key hotkeys and the INSERT menu (never the HTTP API). ──
+    private void ToggleAutoFlask()
+    {
+        _autoFlask = !_autoFlask;
+        _settings.AutoFlaskEnabled = _autoFlask;   // persist so the choice survives a restart
+        _settings.Save();
+        Console.WriteLine($"\nAuto-flask: {(_autoFlask ? "ON" : "OFF")}");
+    }
+
+    private void ToggleCombatAssist()
+    {
+        _combatAssist = !_combatAssist;
+        _settings.CombatAssistEnabled = _combatAssist;
+        _settings.Save();
+        Console.WriteLine($"\nCombat assist: {(_combatAssist ? "ON" : "OFF")}");
+    }
+
+    private void ToggleBot()
+    {
+        _botEnabled = !_botEnabled;
+        _questFollow = _botEnabled && !_mapClear;
+        _settings.BotEnabled = _botEnabled;
+        _settings.QuestFollowEnabled = _botEnabled;
+        _settings.Save();
+        _botNote = _botEnabled ? "armed" : "OFF (F3)";
+        _questFollowNote = _questFollow ? "armed" : (_botEnabled ? "paused (clear)" : "OFF (F3)");
+        if (_questFollow) PinLastSelection();
+        else
+        {
+            _questPinId = null;
+            if (!_mapClear) { _questFollowId = null; _questFollowHasGrid = false; }
+        }
+        _moveNote = MoveArmed ? "armed" : "OFF (F5)";
+        Console.WriteLine($"\nBot (quest follow): {(_botEnabled ? "ON" : "OFF")}");
+    }
+
+    private void ToggleMapClear()
+    {
+        _mapClear = !_mapClear;
+        _questFollow = _botEnabled && !_mapClear;
+        _settings.MapClearEnabled = _mapClear;
+        _settings.Save();
+        _mapClearNote = _mapClear ? "armed" : "OFF (F2)";
+        _questFollowNote = _questFollow ? "armed" : (_botEnabled ? "paused (clear)" : "OFF (F3)");
+        _questFollowId = null;
+        _questFollowHasGrid = false;
+        if (_questFollow) PinLastSelection();
+        else _questPinId = null;
+        _moveNote = MoveArmed ? "armed" : "OFF (F5)";
+        Console.WriteLine($"\nMap clear: {(_mapClear ? "ON" : "OFF")}");
+    }
+
+    private void TogglePathMove()
+    {
+        _moveEnabled = !_moveEnabled;
+        if (!MoveArmed) ReleaseHeldKeys();
+        _settings.MoveEnabled = _moveEnabled;
+        _settings.Save();
+        _moveNote = MoveArmed ? "armed" : "OFF (F5)";
+        Console.WriteLine($"\nPath move: {(_moveEnabled ? "ON" : "OFF")}");
+    }
+
     public void Dispose()
     {
         _shutdown = true;
+        ReleaseHeldKeys();          // never leave W/Space pressed in the game after we exit
+        GameHost.RestoreInputState();
         _worldThread?.Join(1000);   // let the background world loop observe _shutdown and exit
         _modCatalog.Flush(); // persist any mods seen since the last debounced write
         _replanner.Dispose();
