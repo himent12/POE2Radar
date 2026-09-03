@@ -76,7 +76,7 @@ public sealed class CombatAssistTests
     {
         var d = CombatAssist.Decide(Base(entities: [Monster(5, 0, reaction: 1)]));
         Assert.False(d.ShouldTap);
-        Assert.Equal("armed", d.Note);
+        Assert.Equal("armed: no hostile in range", d.Note);
     }
 
     [Fact]
@@ -84,7 +84,7 @@ public sealed class CombatAssistTests
     {
         var d = CombatAssist.Decide(Base(range: 35, entities: [Monster(100, 0, reaction: 0)]));
         Assert.False(d.ShouldTap);
-        Assert.Equal("armed", d.Note);
+        Assert.Equal("armed: no hostile in range", d.Note);
     }
 
     [Fact]
@@ -112,7 +112,7 @@ public sealed class CombatAssistTests
             cooldownMs: 400,
             entities: [Monster(1, 0, reaction: 0)]));
         Assert.False(d.ShouldTap);
-        Assert.Equal("armed", d.Note);
+        Assert.Equal("waiting: cooldowns / range", d.Note);
     }
 
     [Fact]
@@ -220,7 +220,7 @@ public sealed class CombatAssistTests
             entities: [Monster(1, 0, reaction: 0)]));
         Assert.False(d.ShouldTap);
         Assert.Equal(0, d.Vk);
-        Assert.Equal("armed", d.Note);
+        Assert.Equal("waiting: cooldowns / range", d.Note);
     }
 
     [Fact]
@@ -425,5 +425,81 @@ public sealed class CombatAssistTests
             [Monster(5, 0, reaction: 1)], new NumVec2(0, 0), 35));
         Assert.False(CombatAssist.HasHostileInRange(
             [Monster(100, 0, reaction: 0)], new NumVec2(0, 0), 35));
+    }
+
+    // ── Pack smoothness: slot preference + combo gating ──
+
+    [Fact]
+    public void Aoe_slot_is_preferred_when_a_real_pack_meets_MinTargets()
+    {
+        // Round-robin cursor sits on Q (single target); W is AoE with MinTargets 3 and the pack has 3 → W first.
+        var skills = new[] { new CombatAssist.Skill(VkQ, 0), new CombatAssist.Skill(VkW, 0, MinTargets: 3) };
+        var ready = new[] { DateTime.MinValue, DateTime.MinValue };
+        var pack = new[] { Monster(3, 0, reaction: 0, id: 1), Monster(5, 0, reaction: 0, id: 2), Monster(6, 0, reaction: 0, id: 3) };
+        var d = CombatAssist.Decide(Base(skills: skills, lastFires: ready, nextIndex: 0, entities: pack));
+        Assert.Equal((ushort)VkW, d.Vk);
+        Assert.Equal(0, d.NextIndex); // cursor moves past W → wraps to Q
+        // Alone: the AoE slot is gated out, Q fires.
+        d = CombatAssist.Decide(Base(skills: skills, lastFires: ready, nextIndex: 0, entities: [pack[0]]));
+        Assert.Equal((ushort)VkQ, d.Vk);
+    }
+
+    [Fact]
+    public void Rare_only_slot_finishes_a_rare_ahead_of_the_rotation()
+    {
+        var skills = new[] { new CombatAssist.Skill(VkQ, 0), new CombatAssist.Skill(VkE, 0, RareOnly: true) };
+        var ready = new[] { DateTime.MinValue, DateTime.MinValue };
+        var rare = new[] { Monster(4, 0, reaction: 0, id: 1, rarity: Poe2Live.Rarity.Rare) };
+        var d = CombatAssist.Decide(Base(skills: skills, lastFires: ready, nextIndex: 0, entities: rare));
+        Assert.Equal((ushort)VkE, d.Vk);
+        // Priority mode too (list order is Q first, but the rare nuke outranks it).
+        d = CombatAssist.Decide(Base(skills: skills, lastFires: ready, nextIndex: 0, entities: rare) with { PriorityOrder = true });
+        Assert.Equal((ushort)VkE, d.Vk);
+        // Normal mob: the rare-only slot is skipped, Q fires.
+        d = CombatAssist.Decide(Base(skills: skills, lastFires: ready, nextIndex: 1, entities: [Monster(4, 0, reaction: 0)]));
+        Assert.Equal((ushort)VkQ, d.Vk);
+    }
+
+    [Fact]
+    public void Long_combo_is_not_started_on_a_nearly_dead_target()
+    {
+        var combo = new CombatAssist.Skill(VkR, 0, Repeat: 3);
+        var quick = new CombatAssist.Skill(VkQ, 0);
+        var ready = new[] { DateTime.MinValue, DateTime.MinValue };
+        var dying = new[] { Monster(4, 0, reaction: 0, hpCur: 10, hpMax: 100) };
+        // Cursor on the combo; target at 10 % → the quick slot is taken instead.
+        var d = CombatAssist.Decide(Base(skills: new[] { combo, quick }, lastFires: ready, nextIndex: 0, entities: dying));
+        Assert.Equal((ushort)VkQ, d.Vk);
+        Assert.Equal("fired", d.Note);
+        // Healthy target: the combo fires as the rotation says.
+        d = CombatAssist.Decide(Base(skills: new[] { combo, quick }, lastFires: ready, nextIndex: 0, entities: [Monster(4, 0, reaction: 0, hpCur: 60, hpMax: 100)]));
+        Assert.Equal((ushort)VkR, d.Vk);
+        // Only the combo is ready → it still fires (never idle with a live target), note says why.
+        d = CombatAssist.Decide(Base(skills: new[] { combo }, lastFires: new[] { DateTime.MinValue }, entities: dying));
+        Assert.True(d.ShouldTap);
+        Assert.Contains("combo held", d.Note);
+        Assert.Contains("nothing quicker", d.Note);
+        // Threshold off → combos always allowed.
+        d = CombatAssist.Decide(Base(skills: new[] { combo, quick }, lastFires: ready, nextIndex: 0, entities: dying) with { ComboSkipHpPct = 0f });
+        Assert.Equal((ushort)VkR, d.Vk);
+    }
+
+    [Fact]
+    public void Busy_reason_is_surfaced_in_the_note()
+    {
+        var d = CombatAssist.Decide(Base(entities: [Monster(3, 0, reaction: 0)]) with { Busy = true, BusyReason = "roll recovery 400 ms (combo)" });
+        Assert.False(d.ShouldTap);
+        Assert.Equal("roll recovery 400 ms (combo)", d.Note);
+    }
+
+    [Fact]
+    public void Equal_slots_still_rotate_in_order()
+    {
+        var skills = new[] { new CombatAssist.Skill(VkQ, 0), new CombatAssist.Skill(VkW, 0), new CombatAssist.Skill(VkE, 0) };
+        var ready = new[] { DateTime.MinValue, DateTime.MinValue, DateTime.MinValue };
+        var host = new[] { Monster(3, 0, reaction: 0) };
+        var d = CombatAssist.Decide(Base(skills: skills, lastFires: ready, nextIndex: 1, entities: host));
+        Assert.Equal((ushort)VkW, d.Vk);
+        Assert.Equal(2, d.NextIndex);
     }
 }
