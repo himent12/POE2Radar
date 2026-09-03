@@ -362,6 +362,7 @@ public sealed partial class OverlayRenderer
         y = Slider(rt, x, y, w, "Dodge-after delay", "extra wait past the last cast's gap before rolling (queued taps)", m.CombatDodgeDelayMs, "combatDodgeDelayMs");
         y = Section(rt, x, y + 2f, "Run · dodge key held while travelling, re-pressed when speed says it was ignored");
         y = InfoRow(rt, x, y, w, "Speed", string.IsNullOrEmpty(m.SpeedNote) ? "learning walk / run speed" : m.SpeedNote, string.IsNullOrEmpty(m.SpeedNote) ? UDim : UText);
+        y = Toggle(rt, x, y, w, "Walk near hostiles", "let go of run inside attack range — rolls cancel casts", m.MoveRunStopNearHostiles, "ins:flag:moveRunStopNearHostiles");
         y = Slider(rt, x, y, w, "Walking speed", "cells/s · auto = learned while the key is up", m.MoveWalkSpeed, "moveWalkSpeed");
         Slider(rt, x, y, w, "Running speed", "cells/s · auto = learned while the key is held", m.MoveRunSpeed, "moveRunSpeed");
     }

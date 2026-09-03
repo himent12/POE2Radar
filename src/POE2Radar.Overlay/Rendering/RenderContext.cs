@@ -306,6 +306,7 @@ public sealed record InsMenuData(
     string SpeedNote = "",
     float MoveWalkSpeed = 0f,
     float MoveRunSpeed = 0f,
+    bool MoveRunStopNearHostiles = true,
     // ── Boss mode ──
     float CombatComboSkipHpPct = 15f,
     float BossFleeHpPct = 50f,

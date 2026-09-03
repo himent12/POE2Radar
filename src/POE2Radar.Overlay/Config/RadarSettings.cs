@@ -311,6 +311,9 @@ public sealed class RadarSettings
     // them when auto-learning is off for a build (the "run key ignored" re-press compares against these).
     public float MoveWalkSpeed { get; set; } = 0f;
     public float MoveRunSpeed { get; set; } = 0f;
+    // Let go of the run key while any hostile is inside the attack range: a held dodge key chains rolls, and a
+    // roll cancels every cast — running INTO a pack meant swinging at nothing. Walk the last stretch instead.
+    public bool MoveRunStopNearHostiles { get; set; } = true;
     public float MoveRollMinCells { get; set; } = 6f;
     // Replan smoothing: keep last tick's direction keys this long when the route list is momentarily empty.
     public int MoveCoastMs { get; set; } = 400;

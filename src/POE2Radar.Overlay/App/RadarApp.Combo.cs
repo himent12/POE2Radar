@@ -39,7 +39,7 @@ public sealed partial class RadarApp
     private DateTime _nextRunKickUtc = DateTime.MinValue;
     private DateTime _runIgnoredSince = DateTime.MinValue;
     private int _runKicks, _runKicksInRow;
-    private const float RollMovedCells = 1.5f;   // a roll that did not move us this far was eaten by the game
+    private const float RollMovedCells = 0.5f;   // a roll that did not move us even this far was eaten by the game
 
     // ── Boss mode. ──
     private readonly BossFight _bossFight = new();

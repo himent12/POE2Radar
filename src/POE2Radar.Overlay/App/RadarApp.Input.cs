@@ -222,6 +222,7 @@ public sealed partial class RadarApp
                 else if (parts[2] == "eventChests") _settings.EventChests = !_settings.EventChests;
                 else if (parts[2] == "eventClickStalled") _settings.EventClickStalled = !_settings.EventClickStalled;
                 else if (parts[2] == "bossReengage") _settings.BossReengage = !_settings.BossReengage;
+                else if (parts[2] == "moveRunStopNearHostiles") _settings.MoveRunStopNearHostiles = !_settings.MoveRunStopNearHostiles;
                 else return;
                 _settings.Save();
                 return;

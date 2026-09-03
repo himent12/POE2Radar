@@ -182,7 +182,9 @@ public sealed partial class RadarApp
             // Held for the WHOLE trip — no per-corner release (every release/re-press is a visible stutter and the
             // game needs a fresh press each time). Only a real stop lets go.
             var wantRun = (wantsDir || clickMove) && !sidestepping && !hardStop && decision.Moving;
+            var nearHostiles = _settings.MoveRunStopNearHostiles && _hostilesNear > 0 && !fleeing;
             if (!wantRun) ReleaseRunHold(now);
+            else if (nearHostiles) { ReleaseRunHold(now); _moveNote += $" · walking ({_hostilesNear} hostile in range)"; }
             else
             {
                 if (clickMove && _roll.Holding) AimClick(decision.TargetX, decision.TargetY, playerWorld);

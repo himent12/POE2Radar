@@ -390,6 +390,7 @@ public sealed partial class RadarApp
                 SpeedNote: SpeedSummary(),
                 MoveWalkSpeed: _settings.MoveWalkSpeed,
                 MoveRunSpeed: _settings.MoveRunSpeed,
+                MoveRunStopNearHostiles: _settings.MoveRunStopNearHostiles,
                 CombatComboSkipHpPct: _settings.CombatComboSkipHpPct,
                 BossFleeHpPct: _settings.BossFleeHpPct,
                 BossKeepDistance: _settings.BossKeepDistance,
