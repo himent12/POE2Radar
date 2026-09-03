@@ -87,4 +87,36 @@ public sealed class SpeedMeterTests
         Assert.InRange(m.Speed, 7f, 9f);
         Assert.InRange(m.WalkSpeed, 7f, 9f);
     }
+
+    [Fact]
+    public void Fixed_speeds_replace_learning()
+    {
+        var m = new SpeedMeter { FixedWalkSpeed = 10f, FixedRunSpeed = 20f };
+        var x = 0f;
+        var t = Walk(m, T0, 8f, 1000, false, ref x);
+        Assert.Equal(10f, m.WalkSpeed);     // not overwritten by the measured 8
+        Assert.Equal(20f, m.RunSpeed);
+        Assert.True(m.WalkIsFixed);
+        // Held key, still moving at 8 (< 10 × 1.2) → ignored.
+        t = Walk(m, t.AddMilliseconds(33), 8f, 800, true, ref x);
+        Assert.True(m.RunKeyIgnored(t));
+        // Held key at 18 → running (above the 15 midpoint), not ignored.
+        t = Walk(m, t.AddMilliseconds(33), 18f, 800, true, ref x);
+        Assert.True(m.Running);
+        Assert.False(m.RunKeyIgnored(t));
+        // Clearing a fixed value falls back to what was learned meanwhile (nothing for run: it never trained).
+        m.FixedRunSpeed = 0f;
+        Assert.False(m.HasRun);
+    }
+
+    [Fact]
+    public void Only_walk_fixed_still_learns_run()
+    {
+        var m = new SpeedMeter { FixedWalkSpeed = 8f };
+        var x = 0f;
+        var t = Walk(m, T0, 15f, 1500, true, ref x);
+        Assert.True(m.HasRun);
+        Assert.InRange(m.RunSpeed, 13f, 16f);
+        Assert.False(m.RunIsFixed);
+    }
 }

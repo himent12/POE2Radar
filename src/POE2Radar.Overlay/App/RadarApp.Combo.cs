@@ -199,6 +199,8 @@ public sealed partial class RadarApp
     private void TickRoll(DateTime now, NumVec2 player)
     {
         _rollPlayerGrid = player;
+        _speed.FixedWalkSpeed = _settings.MoveWalkSpeed;
+        _speed.FixedRunSpeed = _settings.MoveRunSpeed;
         _speed.Push(player, now, _roll.Holding);
         var wasBusy = _roll.Busy;
         var cmd = _roll.Tick(now);
@@ -259,8 +261,8 @@ public sealed partial class RadarApp
     {
         if (!_speed.HasWalk && !_speed.HasRun) return "";
         var s = _speed.Note;
-        if (_speed.HasWalk) s += $" · walk {_speed.WalkSpeed:0.0}";
-        if (_speed.HasRun) s += $" · run {_speed.RunSpeed:0.0}";
+        if (_speed.HasWalk) s += $" · walk {_speed.WalkSpeed:0.0}{(_speed.WalkIsFixed ? " (set)" : "")}";
+        if (_speed.HasRun) s += $" · run {_speed.RunSpeed:0.0}{(_speed.RunIsFixed ? " (set)" : "")}";
         if (_runKicks > 0) s += $" · re-pressed ×{_runKicks}";
         return s;
     }

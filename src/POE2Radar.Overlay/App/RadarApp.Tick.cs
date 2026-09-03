@@ -388,6 +388,8 @@ public sealed partial class RadarApp
                 MoveArriveRadiusEvent: _settings.MoveArriveRadiusEvent,
                 RollNote: _rollNote,
                 SpeedNote: SpeedSummary(),
+                MoveWalkSpeed: _settings.MoveWalkSpeed,
+                MoveRunSpeed: _settings.MoveRunSpeed,
                 CombatComboSkipHpPct: _settings.CombatComboSkipHpPct,
                 BossFleeHpPct: _settings.BossFleeHpPct,
                 BossKeepDistance: _settings.BossKeepDistance,

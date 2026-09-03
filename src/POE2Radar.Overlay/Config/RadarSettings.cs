@@ -307,6 +307,10 @@ public sealed class RadarSettings
     // through the roll arbiter, and only with MoveRollMinCells of straight visible route ahead (no rolling into
     // corners / past the goal). A different run key is simply held while moving.
     public int MoveRollIntervalMs { get; set; } = 900;
+    // Walk / run speed in grid cells per second. 0 = learn automatically from the character's movement; set
+    // them when auto-learning is off for a build (the "run key ignored" re-press compares against these).
+    public float MoveWalkSpeed { get; set; } = 0f;
+    public float MoveRunSpeed { get; set; } = 0f;
     public float MoveRollMinCells { get; set; } = 6f;
     // Replan smoothing: keep last tick's direction keys this long when the route list is momentarily empty.
     public int MoveCoastMs { get; set; } = 400;

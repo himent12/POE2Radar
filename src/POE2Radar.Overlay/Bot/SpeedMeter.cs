@@ -23,6 +23,12 @@ public sealed class SpeedMeter
     /// <summary>Held run counts as ignored when speed is under walk × this (once a walk speed is known).</summary>
     public float RunFactor { get; set; } = 1.2f;
 
+    /// <summary>Fixed walking speed (cells/s) — when &gt; 0 it replaces the learned value and learning stops.</summary>
+    public float FixedWalkSpeed { get; set; }
+
+    /// <summary>Fixed running speed (cells/s) — when &gt; 0 it replaces the learned value and learning stops.</summary>
+    public float FixedRunSpeed { get; set; }
+
     private readonly List<(NumVec2 pos, DateTime at)> _hist = new();
     private DateTime _heldSince = DateTime.MinValue;
     private bool _wasHeld;
@@ -30,11 +36,17 @@ public sealed class SpeedMeter
     /// <summary>Current speed in grid cells per second (0 with fewer than two samples).</summary>
     public float Speed { get; private set; }
 
-    /// <summary>Learned walking speed (cells/s); 0 until seen.</summary>
-    public float WalkSpeed { get; private set; }
+    private float _walk, _run;
 
-    /// <summary>Learned running speed (cells/s); 0 until seen.</summary>
-    public float RunSpeed { get; private set; }
+    /// <summary>Walking speed in use (fixed when set, else learned; 0 until seen).</summary>
+    public float WalkSpeed => FixedWalkSpeed > 0f ? FixedWalkSpeed : _walk;
+
+    /// <summary>Running speed in use (fixed when set, else learned; 0 until seen).</summary>
+    public float RunSpeed => FixedRunSpeed > 0f ? FixedRunSpeed : _run;
+
+    public bool WalkIsFixed => FixedWalkSpeed > 0f;
+
+    public bool RunIsFixed => FixedRunSpeed > 0f;
 
     public bool HasWalk => WalkSpeed > 0f;
 
@@ -75,9 +87,11 @@ public sealed class SpeedMeter
         if (!Moving) return;
         const float k = 0.1f;
         if (!runHeld)
-            WalkSpeed = HasWalk ? WalkSpeed + (Speed - WalkSpeed) * k : Speed;
-        else if (HeldFor(nowUtc) >= TimeSpan.FromMilliseconds(RunSettleMs) && (!HasWalk || Speed > WalkSpeed * RunFactor))
-            RunSpeed = HasRun ? RunSpeed + (Speed - RunSpeed) * k : Speed;
+        {
+            if (!WalkIsFixed) _walk = _walk > 0f ? _walk + (Speed - _walk) * k : Speed;
+        }
+        else if (!RunIsFixed && HeldFor(nowUtc) >= TimeSpan.FromMilliseconds(RunSettleMs) && (!HasWalk || Speed > WalkSpeed * RunFactor))
+            _run = _run > 0f ? _run + (Speed - _run) * k : Speed;
     }
 
     /// <summary>Forget the learned speeds (new character / zone with different movement speed is fine to keep; call on request).</summary>
@@ -85,8 +99,8 @@ public sealed class SpeedMeter
     {
         _hist.Clear();
         Speed = 0f;
-        WalkSpeed = 0f;
-        RunSpeed = 0f;
+        _walk = 0f;
+        _run = 0f;
         _wasHeld = false;
     }
 

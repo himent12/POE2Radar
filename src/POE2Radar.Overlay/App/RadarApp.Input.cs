@@ -256,6 +256,8 @@ public sealed partial class RadarApp
         "combatDodgeDelayMs" => _settings.CombatDodgeDelayMs,
         "moveRollIntervalMs" => _settings.MoveRollIntervalMs,
         "moveRollMinCells" => _settings.MoveRollMinCells,
+        "moveWalkSpeed" => _settings.MoveWalkSpeed,
+        "moveRunSpeed" => _settings.MoveRunSpeed,
         "moveCoastMs" => _settings.MoveCoastMs,
         "moveArriveRadiusMob" => _settings.MoveArriveRadiusMob,
         "moveArriveRadiusEvent" => _settings.MoveArriveRadiusEvent,
@@ -296,6 +298,8 @@ public sealed partial class RadarApp
             case "combatDodgeDelayMs": s.CombatDodgeDelayMs = (int)v; break;
             case "moveRollIntervalMs": s.MoveRollIntervalMs = (int)v; break;
             case "moveRollMinCells": s.MoveRollMinCells = v; break;
+            case "moveWalkSpeed": s.MoveWalkSpeed = v; break;
+            case "moveRunSpeed": s.MoveRunSpeed = v; break;
             case "moveCoastMs": s.MoveCoastMs = (int)v; break;
             case "moveArriveRadiusMob": s.MoveArriveRadiusMob = v; break;
             case "moveArriveRadiusEvent": s.MoveArriveRadiusEvent = v; break;

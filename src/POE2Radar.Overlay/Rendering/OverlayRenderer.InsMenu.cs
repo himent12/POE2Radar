@@ -35,7 +35,7 @@ public sealed partial class OverlayRenderer
     private static readonly Color4 UInk    = new(0.10f, 0.09f, 0.07f, 1f);
 
     private const float MW = 820f, MH = 640f, PadX = 24f, TopH = 56f, TabsH = 44f, FootH = 40f, Row = 44f, R = 5f;
-    private static readonly string[] Tabs = { "Overview", "Combat", "Skills", "Clearing", "Movement", "Boss", "Roll" };
+    private static readonly string[] Tabs = { "Overview", "Combat", "Skills", "Clearing", "Movement", "Boss", "Roll", "Route" };
     static OverlayRenderer() => System.Diagnostics.Debug.Assert(Tabs.Length == InsMenuData.TabCount);
 
     private DrawTextFormat? _tfTitle, _tfBody, _tfBold, _tfSmall, _tfMono, _tfMonoSmall, _tfCaps;
@@ -129,6 +129,7 @@ public sealed partial class OverlayRenderer
             case 3: DrawClearing(rt, m, cx, cy, cw); break;
             case 5: DrawBoss(rt, m, cx, cy, cw); break;
             case 6: DrawRoll(rt, m, cx, cy, cw); break;
+            case 7: DrawRoute(rt, m, cx, cy, cw); break;
             default: DrawMovement(rt, m, cx, cy, cw); break;
         }
 
@@ -361,11 +362,19 @@ public sealed partial class OverlayRenderer
         y = Slider(rt, x, y, w, "Dodge-after delay", "extra wait past the last cast's gap before rolling (queued taps)", m.CombatDodgeDelayMs, "combatDodgeDelayMs");
         y = Section(rt, x, y + 2f, "Run · dodge key held while travelling, re-pressed when speed says it was ignored");
         y = InfoRow(rt, x, y, w, "Speed", string.IsNullOrEmpty(m.SpeedNote) ? "learning walk / run speed" : m.SpeedNote, string.IsNullOrEmpty(m.SpeedNote) ? UDim : UText);
-        y = Slider(rt, x, y, w, "Straight needed", "cells of visible route ahead before holding run", m.MoveRollMinCells, "moveRollMinCells");
-        y = Section(rt, x, y + 2f, "Route");
+        y = Slider(rt, x, y, w, "Walking speed", "cells/s · auto = learned while the key is up", m.MoveWalkSpeed, "moveWalkSpeed");
+        y = Slider(rt, x, y, w, "Running speed", "cells/s · auto = learned while the key is held", m.MoveRunSpeed, "moveRunSpeed");
+        Slider(rt, x, y, w, "Straight needed", "cells of visible route ahead before holding run", m.MoveRollMinCells, "moveRollMinCells");
+    }
+
+    private void DrawRoute(DrawTarget rt, InsMenuData m, float x, float y, float w)
+    {
+        y = Section(rt, x, y, "Replans");
         y = Slider(rt, x, y, w, "Coast on replan", "keep walking while the route is rebuilt", m.MoveCoastMs, "moveCoastMs");
-        y = Slider(rt, x, y, w, "Arrive at monsters", "close enough to attack", m.MoveArriveRadiusMob, "moveArriveRadiusMob");
-        Slider(rt, x, y, w, "Arrive at events", "close enough to click", m.MoveArriveRadiusEvent, "moveArriveRadiusEvent");
+        y = Section(rt, x, y + 2f, "Arrive radius by target");
+        y = Slider(rt, x, y, w, "Swept cells", "waypoint counts as reached inside", m.MoveArriveRadius, "moveArriveRadius");
+        y = Slider(rt, x, y, w, "Monsters", "close enough to attack", m.MoveArriveRadiusMob, "moveArriveRadiusMob");
+        Slider(rt, x, y, w, "Events / landmarks", "close enough to click", m.MoveArriveRadiusEvent, "moveArriveRadiusEvent");
     }
 
     // ── Skills: one card per slot ──

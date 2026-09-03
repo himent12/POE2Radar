@@ -304,6 +304,8 @@ public sealed record InsMenuData(
     float MoveArriveRadiusEvent = 5f,
     string RollNote = "",
     string SpeedNote = "",
+    float MoveWalkSpeed = 0f,
+    float MoveRunSpeed = 0f,
     // ── Boss mode ──
     float CombatComboSkipHpPct = 15f,
     float BossFleeHpPct = 50f,
@@ -313,9 +315,9 @@ public sealed record InsMenuData(
     bool BossReengage = true,
     string BossNote = "")
 {
-    /// <summary>Number of tabs the menu draws (Overview · Combat · Skills · Clearing · Movement · Boss · Roll); the
-    /// click handler clamps ins:tab:N to this.</summary>
-    public const int TabCount = 7;
+    /// <summary>Number of tabs the menu draws (Overview · Combat · Skills · Clearing · Movement · Boss · Roll · Route);
+    /// the click handler clamps ins:tab:N to this.</summary>
+    public const int TabCount = 8;
 }
 
 /// <summary>Numeric tunables the INSERT menu exposes as sliders: range + step + display, shared by the
@@ -356,6 +358,8 @@ public readonly record struct InsSliderSpec(string Key, float Min, float Max, fl
         ["combatDodgeDelayMs"]   = new("combatDodgeDelayMs", 0, 1500, 50, "ms", "none"),
         ["moveRollIntervalMs"]   = new("moveRollIntervalMs", 300, 3000, 100, "ms"),
         ["moveRollMinCells"]     = new("moveRollMinCells", 0, 20, 1, "", "always"),
+        ["moveWalkSpeed"]        = new("moveWalkSpeed", 0, 40, 0.5f, " c/s", "auto"),
+        ["moveRunSpeed"]         = new("moveRunSpeed", 0, 60, 0.5f, " c/s", "auto"),
         ["moveCoastMs"]          = new("moveCoastMs", 0, 2000, 50, "ms", "stop"),
         ["moveArriveRadiusMob"]  = new("moveArriveRadiusMob", 1, 30, 1, ""),
         ["moveArriveRadiusEvent"] = new("moveArriveRadiusEvent", 1, 20, 1, ""),
