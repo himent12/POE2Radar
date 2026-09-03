@@ -359,9 +359,9 @@ public sealed partial class OverlayRenderer
         y = Slider(rt, x, y, w, "Key press", "how long the dodge key is held", m.RollPressMs, "rollPressMs");
         y = Slider(rt, x, y, w, "Recovery", "no roll, no cast until the animation is done", m.CombatDodgeRecoverMs, "combatDodgeRecoverMs");
         y = Slider(rt, x, y, w, "Dodge-after delay", "extra wait past the last cast's gap before rolling (queued taps)", m.CombatDodgeDelayMs, "combatDodgeDelayMs");
-        y = Section(rt, x, y + 2f, "Travel rolls");
-        y = Slider(rt, x, y, w, "Roll every", "gap between travel rolls while walking", m.MoveRollIntervalMs, "moveRollIntervalMs");
-        y = Slider(rt, x, y, w, "Straight needed", "cells of visible route ahead before a roll", m.MoveRollMinCells, "moveRollMinCells");
+        y = Section(rt, x, y + 2f, "Run · dodge key held while travelling, re-pressed when speed says it was ignored");
+        y = InfoRow(rt, x, y, w, "Speed", string.IsNullOrEmpty(m.SpeedNote) ? "learning walk / run speed" : m.SpeedNote, string.IsNullOrEmpty(m.SpeedNote) ? UDim : UText);
+        y = Slider(rt, x, y, w, "Straight needed", "cells of visible route ahead before holding run", m.MoveRollMinCells, "moveRollMinCells");
         y = Section(rt, x, y + 2f, "Route");
         y = Slider(rt, x, y, w, "Coast on replan", "keep walking while the route is rebuilt", m.MoveCoastMs, "moveCoastMs");
         y = Slider(rt, x, y, w, "Arrive at monsters", "close enough to attack", m.MoveArriveRadiusMob, "moveArriveRadiusMob");

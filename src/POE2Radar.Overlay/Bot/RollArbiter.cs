@@ -15,7 +15,9 @@ public sealed class RollArbiter
 {
     public enum Owner { None, Mover, Combo, Flee, Boss }
 
-    public enum Phase { Idle, Pressed, Recovering }
+    /// <summary><see cref="Held"/>: the mover / flee keeps the key DOWN to run (PoE2 chains rolls while it is held).
+    /// Not a lockout — casts may fire — but a tap owner must ask for <see cref="ReleaseHold"/> first.</summary>
+    public enum Phase { Idle, Pressed, Recovering, Held }
 
     /// <summary>What the executor must do this tick. <see cref="Release"/> = let go of the dodge key now;
     /// <see cref="ReleaseDir"/> = let go of the direction keys held for this roll (non-mover owners).</summary>
@@ -31,6 +33,9 @@ public sealed class RollArbiter
     /// <summary>How long the roll's direction keys stay held after the press (the roll follows held WASD).</summary>
     public int DirHoldMs { get; set; } = 300;
 
+    /// <summary>Minimum key-up → key-down gap so the game sees a NEW press rather than a continued hold.</summary>
+    public int MinGapMs { get; set; } = 50;
+
     private Phase _phase;
     private Owner _owner;
     private (int x, int y) _dir;
@@ -38,15 +43,22 @@ public sealed class RollArbiter
     private DateTime _lockUntil;
     private DateTime _castUntil;
     private bool _dirHeld;
+    private DateTime _releasedAt = DateTime.MinValue;
+    private DateTime _heldSince = DateTime.MinValue;
 
     public Phase State => _phase;
 
     public Owner Current => _owner;
 
-    /// <summary>Pressed or recovering — nobody else may roll and no cast should start.</summary>
-    public bool Busy => _phase != Phase.Idle;
+    /// <summary>Pressed or recovering — nobody else may roll and no cast should start. A run hold is NOT busy.</summary>
+    public bool Busy => _phase is Phase.Pressed or Phase.Recovering;
 
-    public bool KeyHeld => _phase == Phase.Pressed;
+    /// <summary>The dodge key is physically down (tap in progress or run hold).</summary>
+    public bool KeyHeld => _phase is Phase.Pressed or Phase.Held;
+
+    public bool Holding => _phase == Phase.Held;
+
+    public TimeSpan HeldFor(DateTime nowUtc) => _phase == Phase.Held ? nowUtc - _heldSince : TimeSpan.Zero;
 
     /// <summary>Direction sign pair of the roll in flight (or the last one).</summary>
     public (int x, int y) Direction => _dir;
@@ -77,10 +89,18 @@ public sealed class RollArbiter
             case Phase.Recovering:
                 reason = $"roll recovery {Math.Max(0, (_lockUntil - nowUtc).TotalMilliseconds):0} ms ({_owner})";
                 return false;
+            case Phase.Held:
+                reason = $"run key held by {_owner} — release first";
+                return false;
         }
         if (nowUtc < _castUntil)
         {
             reason = $"cast animation {(_castUntil - nowUtc).TotalMilliseconds:0} ms";
+            return false;
+        }
+        if (nowUtc - _releasedAt < TimeSpan.FromMilliseconds(Math.Max(0, MinGapMs)))
+        {
+            reason = "key just released";
             return false;
         }
         _phase = Phase.Pressed;
@@ -90,6 +110,41 @@ public sealed class RollArbiter
         _lockUntil = nowUtc.AddMilliseconds(Math.Max(0, PressMs) + Math.Max(0, RecoverMs));
         _dirHeld = who is Owner.Combo or Owner.Boss && dir != (0, 0);
         reason = $"roll ({who})";
+        return true;
+    }
+
+    /// <summary>
+    /// Hold the key down to RUN (mover / flee). Granted when idle (or already held by the same owner); refused
+    /// during a tap / recovery, inside a cast window, or right after a release (the game needs a fresh press).
+    /// The caller presses the key on a fresh grant and keeps it down until <see cref="ReleaseHold"/>.
+    /// </summary>
+    public bool TryHold(Owner who, DateTime nowUtc, out string reason)
+    {
+        if (who == Owner.None) { reason = "no owner"; return false; }
+        if (_phase == Phase.Held)
+        {
+            if (_owner == who) { reason = $"running ({who})"; return true; }
+            reason = $"run key held by {_owner}";
+            return false;
+        }
+        if (_phase != Phase.Idle) { reason = $"roll in flight ({_owner})"; return false; }
+        if (nowUtc < _castUntil) { reason = $"cast animation {(_castUntil - nowUtc).TotalMilliseconds:0} ms"; return false; }
+        if (nowUtc - _releasedAt < TimeSpan.FromMilliseconds(Math.Max(0, MinGapMs))) { reason = "key just released"; return false; }
+        _phase = Phase.Held;
+        _owner = who;
+        _dir = (0, 0);
+        _heldSince = nowUtc;
+        reason = $"run ({who})";
+        return true;
+    }
+
+    /// <summary>End a run hold. True when the key was held (caller releases it). Starts the MinGap clock.</summary>
+    public bool ReleaseHold(DateTime nowUtc)
+    {
+        if (_phase != Phase.Held) return false;
+        _phase = Phase.Idle;
+        _owner = Owner.None;
+        _releasedAt = nowUtc;
         return true;
     }
 
@@ -105,6 +160,7 @@ public sealed class RollArbiter
                 if (nowUtc - _pressedAt >= TimeSpan.FromMilliseconds(Math.Max(0, PressMs)))
                 {
                     _phase = Phase.Recovering;
+                    _releasedAt = nowUtc;
                     release = true;
                 }
                 break;
@@ -137,6 +193,7 @@ public sealed class RollArbiter
     public string Note(DateTime nowUtc) => _phase switch
     {
         Phase.Pressed => $"rolling ({_owner})",
+        Phase.Held => $"running ({_owner}) {HeldFor(nowUtc).TotalSeconds:0.0}s",
         Phase.Recovering => $"roll recovery {Math.Max(0, (_lockUntil - nowUtc).TotalMilliseconds):0} ms ({_owner})",
         _ => nowUtc < _castUntil ? $"cast animation {(_castUntil - nowUtc).TotalMilliseconds:0} ms" : "",
     };

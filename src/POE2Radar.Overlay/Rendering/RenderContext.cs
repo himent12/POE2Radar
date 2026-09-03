@@ -303,6 +303,7 @@ public sealed record InsMenuData(
     float MoveArriveRadiusMob = 12f,
     float MoveArriveRadiusEvent = 5f,
     string RollNote = "",
+    string SpeedNote = "",
     // ── Boss mode ──
     float CombatComboSkipHpPct = 15f,
     float BossFleeHpPct = 50f,

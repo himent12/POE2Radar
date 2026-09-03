@@ -126,4 +126,64 @@ public sealed class RollArbiterTests
         // Shallow angle: rounds to the dominant axis rather than (0,0).
         Assert.Equal((-1, 0), RollArbiter.AwayFrom(new NumVec2(0, 0), new NumVec2(10, 1)));
     }
+
+    // ── Run hold (key kept down to chain rolls) ──
+
+    [Fact]
+    public void Hold_is_granted_when_idle_and_is_not_busy()
+    {
+        var a = New();
+        Assert.True(a.TryHold(RollArbiter.Owner.Mover, T0, out var why));
+        Assert.Equal("run (Mover)", why);
+        Assert.True(a.Holding);
+        Assert.True(a.KeyHeld);
+        Assert.False(a.Busy); // casts may still fire while running
+        Assert.True(a.TryHold(RollArbiter.Owner.Mover, T0.AddSeconds(1), out _)); // idempotent for the same owner
+        Assert.Equal(TimeSpan.FromSeconds(1), a.HeldFor(T0.AddSeconds(1)));
+        Assert.False(a.Tick(T0.AddSeconds(5)).Release); // no timer ends a hold
+        Assert.True(a.Holding);
+    }
+
+    [Fact]
+    public void Tap_owner_must_release_the_hold_first_then_wait_the_gap()
+    {
+        var a = New();
+        a.TryHold(RollArbiter.Owner.Mover, T0, out _);
+        Assert.False(a.TryRequest(RollArbiter.Owner.Combo, (1, 0), T0.AddSeconds(1), out var why));
+        Assert.Contains("release first", why);
+        Assert.True(a.ReleaseHold(T0.AddSeconds(1)));
+        Assert.False(a.ReleaseHold(T0.AddSeconds(1)));
+        Assert.False(a.TryRequest(RollArbiter.Owner.Combo, (1, 0), T0.AddSeconds(1.02), out why)); // < MinGap
+        Assert.Equal("key just released", why);
+        Assert.True(a.TryRequest(RollArbiter.Owner.Combo, (1, 0), T0.AddSeconds(1.05), out _));
+    }
+
+    [Fact]
+    public void Hold_refused_during_tap_recovery_cast_window_and_by_another_owner()
+    {
+        var a = New();
+        a.TryRequest(RollArbiter.Owner.Combo, (1, 0), T0, out _);
+        Assert.False(a.TryHold(RollArbiter.Owner.Mover, T0.AddMilliseconds(100), out var why));
+        Assert.Contains("roll in flight", why);
+        a.Tick(T0.AddMilliseconds(60)); a.Tick(T0.AddMilliseconds(710));
+        a.NoteCast(T0.AddMilliseconds(710), 300);
+        Assert.False(a.TryHold(RollArbiter.Owner.Mover, T0.AddMilliseconds(800), out why));
+        Assert.Contains("cast animation", why);
+        Assert.True(a.TryHold(RollArbiter.Owner.Flee, T0.AddMilliseconds(1100), out _));
+        Assert.False(a.TryHold(RollArbiter.Owner.Mover, T0.AddMilliseconds(1200), out why));
+        Assert.Contains("held by Flee", why);
+    }
+
+    [Fact]
+    public void Tap_release_also_starts_the_gap_clock()
+    {
+        var a = New(); a.RecoverMs = 0;
+        a.TryRequest(RollArbiter.Owner.Combo, (1, 0), T0, out _);
+        a.Tick(T0.AddMilliseconds(60)); // release
+        a.Tick(T0.AddMilliseconds(61)); // recovery (0 ms) over
+        Assert.False(a.Busy);
+        Assert.False(a.TryHold(RollArbiter.Owner.Mover, T0.AddMilliseconds(80), out var why));
+        Assert.Equal("key just released", why);
+        Assert.True(a.TryHold(RollArbiter.Owner.Mover, T0.AddMilliseconds(120), out _));
+    }
 }

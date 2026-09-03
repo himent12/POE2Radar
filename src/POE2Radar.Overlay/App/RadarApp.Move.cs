@@ -20,8 +20,6 @@ public sealed partial class RadarApp
 
     private DateTime _lastMovingUtc;
 
-    private DateTime _nextTravelRollUtc = DateTime.MinValue;
-
     // Stuck watchdog state (render thread).
     private static readonly TimeSpan StuckAfter = TimeSpan.FromMilliseconds(500);
 
@@ -174,21 +172,20 @@ public sealed partial class RadarApp
         }
         ApplyHeldKeys();
 
-        // Travel rolls: WASD → along the held direction keys; Click → toward the cursor, which sits on the steer
-        // point (no direction keys are held in click mode, so the roll follows the cursor).
-        var clickMove = PathMove.IsClick(_settings.MoveMethod);
-        if (runIsRoll && (wantsDir || clickMove) && !sidestepping && !hardStop && decision.Moving && !decision.Coasting)
+        // Run = the dodge key HELD through the arbiter (PoE2 chains rolls while it stays down). WASD: the
+        // roll follows the held direction keys; Click: it follows the cursor, which sits on the steer point.
+        // Released the instant we stop wanting to move, near corners / the goal (RollOk), while stuck, and for
+        // any combat pause — a tap owner (combo / boss) asks for the release itself.
+        if (runIsRoll)
         {
-            if (!decision.RollOk) _moveNote += " · walking (corner / goal near)";
-            else if (now >= _nextTravelRollUtc)
+            var clickMove = PathMove.IsClick(_settings.MoveMethod);
+            var wantRun = (wantsDir || clickMove) && !sidestepping && !hardStop && decision.Moving && !decision.Coasting;
+            if (!wantRun) ReleaseRunHold(now);
+            else if (!decision.RollOk) { ReleaseRunHold(now); _moveNote += " · walking (corner / goal near)"; }
+            else
             {
-                if (clickMove) AimClick(decision.TargetX, decision.TargetY, playerWorld);
-                var dir = wantsDir
-                    ? PathMove.DirectionOf(decision.HoldKeys!, _settings.MoveKeyW, _settings.MoveKeyA, _settings.MoveKeyS, _settings.MoveKeyD)
-                    : (0, 0);
-                if (TryRoll(fleeing ? RollArbiter.Owner.Flee : RollArbiter.Owner.Mover, dir, now, out var why))
-                    _nextTravelRollUtc = now.AddMilliseconds(Math.Max(100, _settings.MoveRollIntervalMs));
-                else _moveNote += " · " + why;
+                if (clickMove && _roll.Holding) AimClick(decision.TargetX, decision.TargetY, playerWorld);
+                TryRunHold(fleeing ? RollArbiter.Owner.Flee : RollArbiter.Owner.Mover, now, ref _moveNote);
             }
         }
 

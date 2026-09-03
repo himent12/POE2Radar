@@ -34,6 +34,10 @@ public sealed partial class RadarApp
     private volatile string _rollNote = "";
     private NumVec2 _rollPressGrid, _rollPlayerGrid;
     private bool _rollRetried;
+    // Character speed + self-calibrated walk/run classifier: tells whether a held run key is actually running us.
+    private readonly SpeedMeter _speed = new();
+    private DateTime _nextRunKickUtc = DateTime.MinValue;
+    private int _runKicks;
     private const float RollMovedCells = 1.5f;   // a roll that did not move us this far was eaten by the game
 
     // ── Boss mode. ──
@@ -118,6 +122,7 @@ public sealed partial class RadarApp
                     var dir = RollArbiter.AwayFrom(player, _macroTargetGrid);
                     var aim = player + new NumVec2(dir.x, dir.y) * 8f;
                     AimClick((int)MathF.Round(aim.X), (int)MathF.Round(aim.Y), playerWorld);
+                    ReleaseRunHold(now); // a held run key is not a new press — let go, the retry below re-presses
                     if (!TryRoll(RollArbiter.Owner.Combo, dir, now, out var why))
                     {
                         if (_macroDodgeRetries++ < 20)
@@ -194,6 +199,7 @@ public sealed partial class RadarApp
     private void TickRoll(DateTime now, NumVec2 player)
     {
         _rollPlayerGrid = player;
+        _speed.Push(player, now, _roll.Holding);
         var wasBusy = _roll.Busy;
         var cmd = _roll.Tick(now);
         if (cmd.Release && _settings.CombatDodgeKey is >= 1 and <= 255) GameHost.KeyUp((ushort)_settings.CombatDodgeKey);
@@ -212,8 +218,58 @@ public sealed partial class RadarApp
             }
             _rollRetried = false;
         }
-        if (!_roll.Busy && !_roll.InCast(now) && !_rollNote.StartsWith("combo roll", StringComparison.Ordinal)) _rollNote = "";
+        if (_roll.Holding) _rollNote = $"{_roll.Note(now)} · {_speed.Note}";
+        else if (!_roll.Busy && !_roll.InCast(now) && !_rollNote.StartsWith("combo roll", StringComparison.Ordinal)) _rollNote = "";
         else if (_roll.Busy && !_rollNote.StartsWith("roll eaten", StringComparison.Ordinal)) _rollNote = _roll.Note(now);
+    }
+
+    /// <summary>
+    /// Hold the dodge key to RUN (PoE2 chains rolls while it stays down). Fresh grant → key down. While held,
+    /// the speed meter checks that we are actually running; a held key that only walks us (press eaten by the
+    /// game on an animation frame, focus flip) is released and re-pressed, at most every 1.5 s.
+    /// </summary>
+    private void TryRunHold(RollArbiter.Owner who, DateTime now, ref string note)
+    {
+        var vk = _settings.CombatDodgeKey;
+        if (vk is < 1 or > 255) { note += " · no dodge key bound"; return; }
+        if (_roll.Holding && _roll.Current == who)
+        {
+            if (_speed.RunKeyIgnored(now) && now >= _nextRunKickUtc)
+            {
+                _nextRunKickUtc = now.AddMilliseconds(1500);
+                _runKicks++;
+                ReleaseRunHold(now);
+                note += $" · run key ignored ({_speed.Speed:0.0} c/s, walk {_speed.WalkSpeed:0.0}) → re-press #{_runKicks}";
+                return;
+            }
+            note += " · " + _speed.Note;
+            return;
+        }
+        var wasHolding = _roll.Holding;
+        if (_roll.TryHold(who, now, out var why))
+        {
+            if (!wasHolding) GameHost.KeyDown((ushort)vk);
+            note += " · run";
+        }
+        else note += " · run wait: " + why;
+    }
+
+    /// <summary>"walking 7.9 c/s · walk 8.1 · run 14.6 (learned)" for the menu.</summary>
+    private string SpeedSummary()
+    {
+        if (!_speed.HasWalk && !_speed.HasRun) return "";
+        var s = _speed.Note;
+        if (_speed.HasWalk) s += $" · walk {_speed.WalkSpeed:0.0}";
+        if (_speed.HasRun) s += $" · run {_speed.RunSpeed:0.0}";
+        if (_runKicks > 0) s += $" · re-pressed ×{_runKicks}";
+        return s;
+    }
+
+    /// <summary>End the run hold (arrived / combat / combo / roll request / stop). Idempotent.</summary>
+    private void ReleaseRunHold(DateTime now)
+    {
+        if (_roll.ReleaseHold(now) && _settings.CombatDodgeKey is >= 1 and <= 255)
+            GameHost.KeyUp((ushort)_settings.CombatDodgeKey);
     }
 
     /// <summary>Drop the roll state and every key it holds (focus loss, death, disarm).</summary>
@@ -255,6 +311,7 @@ public sealed partial class RadarApp
         var dir = RollArbiter.AwayFrom(player, watch.BossGrid);
         var aim = player + new NumVec2(dir.x, dir.y) * 8f;
         AimClick((int)MathF.Round(aim.X), (int)MathF.Round(aim.Y), playerWorld);
+        ReleaseRunHold(now);
         if (TryRoll(RollArbiter.Owner.Boss, dir, now, out var granted))
         {
             _bossFight.Rolled(now);
