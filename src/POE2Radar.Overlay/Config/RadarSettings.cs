@@ -204,6 +204,10 @@ public sealed class RadarSettings
     public int RespawnDelayMs { get; set; } = 2500;
     // Dodge roll key used by "dodge after" skill steps (PoE2 default: Space).
     public int CombatDodgeKey { get; set; } = 0x20;
+    // Combo timing: how long a "tap" is physically held (the game polls per frame — 0-length presses are
+    // missed) and how long a dodge roll locks the rotation afterwards (roll animation).
+    public int CombatTapHoldMs { get; set; } = 60;
+    public int CombatDodgeRecoverMs { get; set; } = 650;
     public int CombatIgnoreMs { get; set; } = 20000;
     // Low-HP flee: below CombatFleeHpPct the bot stops attacking and runs CombatFleeDistance cells away
     // from the pack (most open direction), until HP is back at CombatFleeRecoverPct. 0 = never flee.

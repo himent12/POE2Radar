@@ -369,7 +369,7 @@ public sealed partial class OverlayRenderer
 
             fx = x + 66f;
             fx = Field(rt, fx, l2, "Taps", $"×{Math.Max(1, sk.Repeat)}", i, "repeat", 1f, ink);
-            fx = Field(rt, fx, l2, "Gap", $"{sk.RepeatGapMs} ms", i, "gap", 50f, ink);
+            fx = Field(rt, fx, l2, "Cast time", $"{sk.RepeatGapMs} ms", i, "gap", 50f, ink);
             fx = Field(rt, fx, l2, "Hold", sk.HoldMs <= 0 ? "tap" : $"{sk.HoldMs} ms", i, "hold", 100f, ink);
             fx = Field(rt, fx, l2, "Then wait", sk.NextDelayMs <= 0 ? "0" : $"{sk.NextDelayMs} ms", i, "next", 100f, ink);
             Check(rt, fx + 8f, l2, "Dodge after", sk.DodgeAfter, $"ins:skill:flip:{i}:dodgeAfter");
@@ -390,7 +390,7 @@ public sealed partial class OverlayRenderer
             _legendRowRects.Add((add, "ins:skill:add"));
         }
         if (shown < skills.Count) T(rt, $"{skills.Count - shown} more not shown", _tfSmall!, x + 136f, y + 15f, UDim);
-        T(rt, "Key badge: left half = previous key, right half = next  ·  ‹ › on any field steps its value", _tfSmall!, x, bottom - 10f, UDim);
+        T(rt, "Taps ×N with Cast time between them (also the wait before a dodge, so the last cast finishes) · Hold = keep the key down instead", _tfSmall!, x, bottom - 10f, UDim);
     }
 
     /// <summary>Small labelled field: caption above, "‹ value ›" below. Returns the x after it.</summary>

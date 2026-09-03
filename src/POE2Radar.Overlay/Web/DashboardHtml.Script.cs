@@ -204,7 +204,7 @@ function renderCombatSkills(){
     +'<button type="button" class="delbtn sk-del">Remove</button></div>'
     +'<div class="skrow skcombo" data-i="'+i+'"><span class="skn"></span>'
     +'<label>×<input class="numin sk-rep" type="number" step="1" min="1" max="10" value="'+(sk.repeat||1)+'" title="tap the key this many times"></label>'
-    +'<label>gap<input class="numin sk-gap" type="number" step="10" min="30" max="2000" value="'+(sk.repeatGapMs||150)+'" title="ms between repeated taps"></label>'
+    +'<label>cast ms<input class="numin sk-gap" type="number" step="10" min="60" max="2000" value="'+(sk.repeatGapMs||150)+'" title="ms between repeated casts — also the wait before a dodge so the last cast finishes"></label>'
     +'<label>hold<input class="numin sk-hold" type="number" step="50" min="0" max="10000" value="'+(sk.holdMs||0)+'" title="ms to hold the key (0 = tap)"></label>'
     +'<label><input type="checkbox" class="sk-dodge" '+(sk.dodgeAfter?'checked':'')+'> dodge after</label>'
     +'<label>then wait<input class="numin sk-next" type="number" step="50" min="0" max="10000" value="'+(sk.nextDelayMs||0)+'" title="ms the whole rotation waits after this cast"></label></div>'

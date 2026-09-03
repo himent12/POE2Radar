@@ -49,6 +49,8 @@ public sealed partial class ApiServer
         respawnKey = _settings.RespawnKey,
         respawnDelayMs = _settings.RespawnDelayMs,
         combatDodgeKey = _settings.CombatDodgeKey,
+        combatTapHoldMs = _settings.CombatTapHoldMs,
+        combatDodgeRecoverMs = _settings.CombatDodgeRecoverMs,
         combatIgnoreMs = _settings.CombatIgnoreMs,
         combatFleeHpPct = _settings.CombatFleeHpPct,
         combatFleeRecoverPct = _settings.CombatFleeRecoverPct,
@@ -166,6 +168,8 @@ public sealed partial class ApiServer
                 case "respawnKey" when TryInt(p.Value, out var n): _settings.RespawnKey = Math.Clamp(n, 1, 255); applied.Add(p.Name); break;
                 case "respawnDelayMs" when TryInt(p.Value, out var n): _settings.RespawnDelayMs = Math.Clamp(n, 500, 30000); applied.Add(p.Name); break;
                 case "combatDodgeKey" when TryInt(p.Value, out var n): _settings.CombatDodgeKey = Math.Clamp(n, 1, 255); applied.Add(p.Name); break;
+                case "combatTapHoldMs" when TryInt(p.Value, out var n): _settings.CombatTapHoldMs = Math.Clamp(n, 30, 200); applied.Add(p.Name); break;
+                case "combatDodgeRecoverMs" when TryInt(p.Value, out var n): _settings.CombatDodgeRecoverMs = Math.Clamp(n, 0, 3000); applied.Add(p.Name); break;
                 case "combatSkills" when p.Value.ValueKind == JsonValueKind.Array:
                     if (TryParseCombatSkills(p.Value, out var csk)) { _settings.CombatSkills = csk; applied.Add(p.Name); }
                     break;

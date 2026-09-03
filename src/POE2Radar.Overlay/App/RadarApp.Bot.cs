@@ -188,7 +188,7 @@ public sealed partial class RadarApp
                 Math.Clamp(sk.Repeat, 1, 10), Math.Clamp(sk.RepeatGapMs, 30, 2000), Math.Clamp(sk.HoldMs, 0, 10000), sk.DodgeAfter, Math.Clamp(sk.NextDelayMs, 0, 10000));
         }
         // A combo macro in flight owns the keyboard: advance it and skip deciding.
-        var busy = RunComboMacro(now, player, playerWorld) || now < _comboLockUntil;
+        var busy = RunComboMacro(now, player, playerWorld, entities) || now < _comboLockUntil;
         var decision = CombatAssist.Decide(new CombatAssist.Snapshot(
             Armed: CombatArmed,
             Focused: focused,
@@ -233,45 +233,74 @@ public sealed partial class RadarApp
     // ── Combo macro executor (render thread). One skill cast expanded into timed steps: N taps or a hold,
     //    then an optional dodge-roll away from the target, then a rotation lockout. Non-blocking: each tick
     //    performs whatever steps are due. ──
-    private enum MacroStep { KeyDown, KeyUp, Tap, DodgeStart, DodgeEnd, Done }
+    private enum MacroStep { Aim, KeyDown, KeyUp, Tap, DodgeStart, DodgeEnd, Done }
+    private uint _macroTargetId;
+    private POE2Radar.Core.Game.Vector3 _macroTargetWorld;
     private readonly Queue<(MacroStep Step, ushort Vk, TimeSpan After)> _macro = new();
     private DateTime _macroNextUtc = DateTime.MinValue;
     private DateTime _comboLockUntil = DateTime.MinValue;
     private NumVec2 _macroTargetGrid;
     private readonly List<ushort> _macroHeld = new();
 
+    /// <summary>
+    /// Expand one cast into timed steps. Timeline for "×3, cast time 330, dodge after":
+    /// R↓ … R↑(+60) · 330 · R↓ … R↑ · 330 · R↓ … R↑ · 330 (let the LAST cast finish — a roll cancels it) ·
+    /// dir↓ + Space↓ … Space↑(+60) · 300 · dir↑ · roll recovery 650 · then-wait → rotation free.
+    /// Taps are real DOWN/UP pairs with a held duration (a zero-length press is missed by a game that polls
+    /// key state per frame — that is why "×3" used to land once). Each cast re-aims at the target's live position.
+    /// </summary>
     private void StartComboMacro(CombatAssist.Skill spec, CombatAssist.Decision d, DateTime now)
     {
         AbortComboMacro();
+        _macroTargetId = d.TargetId;
         _macroTargetGrid = d.TargetGrid;
-        var gap = TimeSpan.FromMilliseconds(spec.RepeatGapMs);
+        _macroTargetWorld = d.TargetWorld;
+        var castMs = Math.Max(60, spec.RepeatGapMs);
+        var tapMs = Math.Clamp(_settings.CombatTapHoldMs, 30, 200);
         for (var i = 0; i < spec.Repeat; i++)
         {
-            var after = i == 0 ? TimeSpan.Zero : gap;
-            if (spec.HoldMs > 0)
-            {
-                _macro.Enqueue((MacroStep.KeyDown, d.Vk, after));
-                _macro.Enqueue((MacroStep.KeyUp, d.Vk, TimeSpan.FromMilliseconds(spec.HoldMs)));
-            }
-            else _macro.Enqueue((MacroStep.Tap, d.Vk, after));
+            var after = i == 0 ? TimeSpan.Zero : TimeSpan.FromMilliseconds(castMs);
+            _macro.Enqueue((MacroStep.Aim, 0, after));
+            _macro.Enqueue((MacroStep.KeyDown, d.Vk, TimeSpan.Zero));
+            _macro.Enqueue((MacroStep.KeyUp, d.Vk, TimeSpan.FromMilliseconds(spec.HoldMs > 0 ? spec.HoldMs : tapMs)));
         }
         if (spec.DodgeAfter && _settings.CombatDodgeKey is >= 1 and <= 255)
         {
-            _macro.Enqueue((MacroStep.DodgeStart, (ushort)_settings.CombatDodgeKey, TimeSpan.FromMilliseconds(120)));
-            _macro.Enqueue((MacroStep.DodgeEnd, 0, TimeSpan.FromMilliseconds(320)));
+            // Wait a full cast time after the last tap so the roll does not cancel the final cast.
+            _macro.Enqueue((MacroStep.DodgeStart, (ushort)_settings.CombatDodgeKey, TimeSpan.FromMilliseconds(Math.Max(0, castMs - (spec.HoldMs > 0 ? spec.HoldMs : tapMs)))));
+            _macro.Enqueue((MacroStep.KeyUp, (ushort)_settings.CombatDodgeKey, TimeSpan.FromMilliseconds(tapMs)));
+            _macro.Enqueue((MacroStep.DodgeEnd, 0, TimeSpan.FromMilliseconds(300)));
+            _macro.Enqueue((MacroStep.Done, 0, TimeSpan.FromMilliseconds(Math.Max(0, _settings.CombatDodgeRecoverMs - 300) + spec.NextDelayMs)));
         }
-        _macro.Enqueue((MacroStep.Done, 0, TimeSpan.FromMilliseconds(spec.NextDelayMs)));
+        else
+        {
+            _macro.Enqueue((MacroStep.Done, 0, TimeSpan.FromMilliseconds(spec.NextDelayMs)));
+        }
         _macroNextUtc = now;
     }
 
     /// <summary>Advance the macro; true while steps remain.</summary>
-    private bool RunComboMacro(DateTime now, NumVec2 player, POE2Radar.Core.Game.Vector3? playerWorld)
+    /// <summary>Advance the macro; true while steps remain.</summary>
+    private bool RunComboMacro(DateTime now, NumVec2 player, POE2Radar.Core.Game.Vector3? playerWorld,
+        IReadOnlyList<Poe2Live.EntityDot> entities)
     {
-        while (_macro.Count > 0 && now >= _macroNextUtc)
+        // One step per tick at most for DOWN/UP pairs: never collapse a press and its release into the same
+        // instant even after a frame hitch.
+        var steps = 0;
+        while (_macro.Count > 0 && now >= _macroNextUtc && steps++ < 2)
         {
-            var (step, vk, after) = _macro.Dequeue();
+            var (step, vk, _) = _macro.Dequeue();
             switch (step)
             {
+                case MacroStep.Aim:
+                {
+                    // Live target position when it is still listed; else the position at macro start.
+                    var grid = _macroTargetGrid; var world = _macroTargetWorld;
+                    foreach (var e in entities) if (e.Id == _macroTargetId) { grid = e.Grid; world = e.World; break; }
+                    _macroTargetGrid = grid;
+                    AimAtEntity(grid, world, playerWorld);
+                    break;
+                }
                 case MacroStep.KeyDown: GameHost.KeyDown(vk); _macroHeld.Add(vk); break;
                 case MacroStep.KeyUp: GameHost.KeyUp(vk); _macroHeld.Remove(vk); break;
                 case MacroStep.Tap: GameHost.TapKey(vk); break;
@@ -287,8 +316,11 @@ public sealed partial class RadarApp
                     var keys = PathMove.KeysFor(dir, _settings.MoveKeyW, _settings.MoveKeyA, _settings.MoveKeyS, _settings.MoveKeyD);
                     var aim = player + away * 8f;
                     AimClick((int)MathF.Round(aim.X), (int)MathF.Round(aim.Y), playerWorld);
+                    // If the mover still holds the dodge key as "run", let go first — a press on an already-held
+                    // key is not a new roll.
+                    if (_heldKeys.Remove(vk)) GameHost.KeyUp(vk);
                     foreach (var k in keys) { GameHost.KeyDown(k); _macroHeld.Add(k); }
-                    GameHost.TapKey(vk);
+                    GameHost.KeyDown(vk); _macroHeld.Add(vk);
                     break;
                 }
                 case MacroStep.DodgeEnd:
@@ -296,11 +328,14 @@ public sealed partial class RadarApp
                     _macroHeld.Clear();
                     break;
                 case MacroStep.Done:
-                    _comboLockUntil = now + after;
                     break;
             }
-            // The NEXT step's delay is measured from this step; "after" of the dequeued step already elapsed.
-            _macroNextUtc = _macro.Count > 0 ? now + _macro.Peek().After : now;
+            if (_macro.Count > 0)
+            {
+                var next = _macro.Peek();
+                _macroNextUtc = now + next.After;
+                if (next.Step == MacroStep.Done) { _comboLockUntil = _macroNextUtc; _macro.Dequeue(); }
+            }
         }
         return _macro.Count > 0;
     }
