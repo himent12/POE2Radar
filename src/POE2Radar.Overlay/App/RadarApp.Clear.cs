@@ -91,8 +91,6 @@ public sealed partial class RadarApp
         _clearIgnoredMobs.Clear();
         _clearStuckId = null;
         _combatWatch.Reset();
-        _bossFight.Reset();
-        _bossReturnUntilUtc = DateTime.MinValue;
         lock (_eventBlacklist) _eventBlacklist.Clear();
         _eventTarget = null;
         _imprisonedIds = new HashSet<uint>();
@@ -181,12 +179,7 @@ public sealed partial class RadarApp
             _questPinId = null;
 
         var id = QuestFollow.PickTarget(areaCode, notes, _questLm, _questEnt, player, _questPinId);
-        var uniqueVisible = false;
-        foreach (var e in _questEnt) if (e.UniqueMonster) { uniqueVisible = true; break; }
-        var bossReturn = BossReturnTarget(player, uniqueVisible, DateTime.UtcNow);
-        if (bossReturn is not null) id = bossReturn;
         var note = SetAutoNavTarget(id, "armed (no target)", "Quest follow");
-        if (bossReturn is not null) note = "→ boss arena (re-engage)";
         if (_questPinId is not null && id == _questPinId && note.StartsWith("→ ", StringComparison.Ordinal))
             note += " (F6)";
         _questFollowNote = note;
@@ -257,11 +250,6 @@ public sealed partial class RadarApp
             terrain?.Walkable, terrain?.Width ?? 0, terrain?.Height ?? 0,
             _mapClearVisited, _clearMobs, _questFollowId, _settings.MapClearAggroRange, _clearHeading,
             _settings.MapClearStampRadius, events, _settings.EventRange);
-        // After a death in a boss fight: walk back to the arena before anything else (until a unique is visible).
-        var uniqueVisible = false;
-        foreach (var m in _clearMobs) if (m.Unique) { uniqueVisible = true; break; }
-        var bossReturn = BossReturnTarget(player, uniqueVisible, now);
-        if (bossReturn is not null) id = bossReturn;
 
         // Publish the event under the picked id (if any) for the render thread's use/click tick.
         _eventTarget = null;
@@ -306,7 +294,6 @@ public sealed partial class RadarApp
         }
 
         _mapClearNote = SetAutoNavTarget(id, terrain is null ? "armed (no terrain)" : "armed (cleared)", "Map clear");
-        if (bossReturn is not null) _mapClearNote = "→ boss arena (re-engage)";
         if (_eventTarget is { } evt && !string.IsNullOrEmpty(_eventNote)) _mapClearNote = _eventNote;
         else if (_eventTarget is { } evt2) _mapClearNote = $"→ {evt2.Label}";
     }

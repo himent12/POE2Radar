@@ -195,7 +195,7 @@ public sealed partial class RadarApp
         switch (parts[1])
         {
             case "tab" when int.TryParse(parts[2], out var tab):
-                _insMenuTab = Math.Clamp(tab, 0, InsMenuData.TabCount - 1);
+                _insMenuTab = Math.Clamp(tab, 0, 4);
                 return;
             case "adj" when parts.Length == 4 && float.TryParse(parts[3], System.Globalization.NumberStyles.Float, ci, out var delta):
                 if (InsSliderSpec.All.TryGetValue(parts[2], out var spec)) SetSetting(spec, spec.Clamp(GetSetting(parts[2]) + delta));
@@ -221,8 +221,6 @@ public sealed partial class RadarApp
                 else if (parts[2] == "eventRitual") _settings.EventRitual = !_settings.EventRitual;
                 else if (parts[2] == "eventChests") _settings.EventChests = !_settings.EventChests;
                 else if (parts[2] == "eventClickStalled") _settings.EventClickStalled = !_settings.EventClickStalled;
-                else if (parts[2] == "bossReengage") _settings.BossReengage = !_settings.BossReengage;
-                else if (parts[2] == "moveRunStopNearHostiles") _settings.MoveRunStopNearHostiles = !_settings.MoveRunStopNearHostiles;
                 else return;
                 _settings.Save();
                 return;
@@ -252,21 +250,6 @@ public sealed partial class RadarApp
         "moveAxisRotationDeg" => _settings.MoveAxisRotationDeg,
         "lifeThresholdPct" => _settings.LifeThresholdPct,
         "manaThresholdPct" => _settings.ManaThresholdPct,
-        "rollPressMs" => _settings.RollPressMs,
-        "combatDodgeRecoverMs" => _settings.CombatDodgeRecoverMs,
-        "combatDodgeDelayMs" => _settings.CombatDodgeDelayMs,
-        "moveRollIntervalMs" => _settings.MoveRollIntervalMs,
-        "moveRollMinCells" => _settings.MoveRollMinCells,
-        "moveWalkSpeed" => _settings.MoveWalkSpeed,
-        "moveRunSpeed" => _settings.MoveRunSpeed,
-        "moveCoastMs" => _settings.MoveCoastMs,
-        "moveArriveRadiusMob" => _settings.MoveArriveRadiusMob,
-        "moveArriveRadiusEvent" => _settings.MoveArriveRadiusEvent,
-        "combatComboSkipHpPct" => _settings.CombatComboSkipHpPct,
-        "bossFleeHpPct" => _settings.BossFleeHpPct,
-        "bossKeepDistance" => _settings.BossKeepDistance,
-        "bossDodgeIntervalMs" => _settings.BossDodgeIntervalMs,
-        "bossDodgeSpikePct" => _settings.BossDodgeSpikePct,
         _ => 0f,
     };
 
@@ -294,21 +277,6 @@ public sealed partial class RadarApp
             case "moveAxisRotationDeg": s.MoveAxisRotationDeg = v; break;
             case "lifeThresholdPct": s.LifeThresholdPct = v; break;
             case "manaThresholdPct": s.ManaThresholdPct = v; break;
-            case "rollPressMs": s.RollPressMs = (int)v; break;
-            case "combatDodgeRecoverMs": s.CombatDodgeRecoverMs = (int)v; break;
-            case "combatDodgeDelayMs": s.CombatDodgeDelayMs = (int)v; break;
-            case "moveRollIntervalMs": s.MoveRollIntervalMs = (int)v; break;
-            case "moveRollMinCells": s.MoveRollMinCells = v; break;
-            case "moveWalkSpeed": s.MoveWalkSpeed = v; break;
-            case "moveRunSpeed": s.MoveRunSpeed = v; break;
-            case "moveCoastMs": s.MoveCoastMs = (int)v; break;
-            case "moveArriveRadiusMob": s.MoveArriveRadiusMob = v; break;
-            case "moveArriveRadiusEvent": s.MoveArriveRadiusEvent = v; break;
-            case "combatComboSkipHpPct": s.CombatComboSkipHpPct = v; break;
-            case "bossFleeHpPct": s.BossFleeHpPct = v; break;
-            case "bossKeepDistance": s.BossKeepDistance = v; break;
-            case "bossDodgeIntervalMs": s.BossDodgeIntervalMs = (int)v; break;
-            case "bossDodgeSpikePct": s.BossDodgeSpikePct = v; break;
             default: return;
         }
         s.Save();

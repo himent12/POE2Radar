@@ -26,10 +26,7 @@ public sealed class CombatWatch
     /// </summary>
     /// <summary><see cref="Kite"/>: a hostile is closer than <see cref="KeepDistance"/> — back off while still
     /// attacking (ranged builds). Movement is not paused; the caller feeds it the flee point.</summary>
-    /// <summary><see cref="Boss"/>: a unique monster is inside the engage range — boss mode (tighter flee threshold,
-    /// its own keep-distance, never stall-skipped). <see cref="BossId"/> / <see cref="BossGrid"/> name it.</summary>
-    public readonly record struct Result(bool PauseMove, bool Fighting, bool Stalled, int InRange, string Note, bool Flee = false, bool Kite = false,
-        bool Boss = false, uint BossId = 0, NumVec2 BossGrid = default);
+    public readonly record struct Result(bool PauseMove, bool Fighting, bool Stalled, int InRange, string Note, bool Flee = false, bool Kite = false);
 
     private readonly object _lock = new();
     private readonly Dictionary<uint, int> _hp = new();
@@ -50,12 +47,6 @@ public sealed class CombatWatch
 
     /// <summary>Back off when any hostile is closer than this many cells (0 = melee, never kite).</summary>
     public float KeepDistance { get; set; } = 0f;
-
-    /// <summary>Boss mode: flee under this life % instead of <see cref="FleeBelowPct"/> (0 = same as normal).</summary>
-    public float BossFleeBelowPct { get; set; } = 50f;
-
-    /// <summary>Boss mode: keep-distance used instead of <see cref="KeepDistance"/> (0 = same as normal).</summary>
-    public float BossKeepDistance { get; set; } = 0f;
 
     public bool IsFleeing { get { lock (_lock) return _fleeing; } }
 
@@ -107,13 +98,10 @@ public sealed class CombatWatch
 
             var r = Math.Max(0f, engageRange);
             var rSq = r * r;
+            var keepSq = KeepDistance > 0f ? KeepDistance * KeepDistance : -1f;
             var inRange = 0;
+            var tooClose = false;
             var progress = false;
-            var minDSq = float.MaxValue;
-            var boss = false;
-            uint bossId = 0;
-            var bossGrid = default(NumVec2);
-            var bossDSq = float.MaxValue;
             _seen.Clear();
 
             if (entities is not null)
@@ -135,11 +123,7 @@ public sealed class CombatWatch
                     var dy = e.Grid.Y - player.Y;
                     var dSq = dx * dx + dy * dy;
                     if (dSq > rSq) continue;
-                    if (dSq < minDSq) minDSq = dSq;
-                    if (e.Rarity == Poe2Live.Rarity.Unique && dSq < bossDSq)
-                    {
-                        boss = true; bossId = e.Id; bossGrid = e.Grid; bossDSq = dSq;
-                    }
+                    if (keepSq > 0f && dSq < keepSq) tooClose = true;
 
                     inRange++;
                     _seen.Add(e.Id);
@@ -180,26 +164,19 @@ public sealed class CombatWatch
                 return new(false, false, false, 0, "clear");
             }
 
-            // Boss mode: a unique in range tightens the flee threshold and may widen keep-distance.
-            var fleeAt = boss && BossFleeBelowPct > 0f ? Math.Max(FleeBelowPct, BossFleeBelowPct) : FleeBelowPct;
-            var keep = boss && BossKeepDistance > 0f ? BossKeepDistance : KeepDistance;
-            var tooClose = keep > 0f && minDSq < keep * keep;
-            var tag = boss ? "boss" : "";
-
-            // Low-HP flee with hysteresis: start under fleeAt, stop at FleeRecoverPct.
+            // Low-HP flee with hysteresis: start under FleeBelowPct, stop at FleeRecoverPct.
             if (_fleeing)
             {
-                if (playerHpPct >= Math.Max(fleeAt, FleeRecoverPct)) _fleeing = false;
+                if (playerHpPct >= Math.Max(FleeBelowPct, FleeRecoverPct)) _fleeing = false;
             }
-            else if (fleeAt > 0f && playerHpPct < fleeAt)
+            else if (FleeBelowPct > 0f && playerHpPct < FleeBelowPct)
             {
                 _fleeing = true;
             }
             if (_fleeing)
             {
                 _fighting = false;
-                return new(false, false, false, inRange, $"fleeing{(boss ? " boss" : "")} (hp {playerHpPct:F0}% < {fleeAt:F0}%)", Flee: true,
-                    Boss: boss, BossId: bossId, BossGrid: bossGrid);
+                return new(false, false, false, inRange, $"fleeing (hp {playerHpPct:F0}%)", Flee: true);
             }
 
             if (!_fighting)
@@ -213,13 +190,9 @@ public sealed class CombatWatch
             }
 
             if (tooClose)
-                return new(false, true, false, inRange, boss ? $"kiting boss (keep {keep:0})" : $"kiting ({inRange} in range)", Kite: true,
-                    Boss: boss, BossId: bossId, BossGrid: bossGrid);
+                return new(false, true, false, inRange, $"kiting ({inRange} in range)", Kite: true);
 
-            // A boss is never stall-skipped: phase transitions make it immune for long stretches and walking
-            // away from the arena just lets it reset. Progress stays "now" so no ignore builds up either.
-            if (boss) _lastProgressUtc = nowUtc;
-            if (!boss && StallAfter > TimeSpan.Zero && nowUtc - _lastProgressUtc >= StallAfter)
+            if (StallAfter > TimeSpan.Zero && nowUtc - _lastProgressUtc >= StallAfter)
             {
                 // Nothing in range has taken damage for a while: give up on THESE monsters for now.
                 var until = nowUtc + IgnoreFor;
@@ -233,8 +206,7 @@ public sealed class CombatWatch
                 return new(false, false, true, inRange, $"stalled → skipping {inRange}");
             }
 
-            return new(true, true, false, inRange, boss ? $"boss fight ({inRange} in range)" : $"fighting {inRange}",
-                Boss: boss, BossId: bossId, BossGrid: bossGrid);
+            return new(true, true, false, inRange, $"fighting {inRange}");
         }
     }
 

@@ -208,22 +208,6 @@ public sealed class RadarSettings
     // missed) and how long a dodge roll locks the rotation afterwards (roll animation).
     public int CombatTapHoldMs { get; set; } = 60;
     public int CombatDodgeRecoverMs { get; set; } = 650;
-    // Roll arbiter: ONE owner of the dodge key at a time (mover / combo / flee / boss). A roll = the key held
-    // RollPressMs, then CombatDodgeRecoverMs of lockout; never inside a cast's animation window.
-    public int RollPressMs { get; set; } = 60;
-    // "Dodge after": extra wait after the last cast's cast time before the roll — the game queues taps, so the
-    // final animation can still be playing when the gap timer says it is done, and a roll then cancels it.
-    public int CombatDodgeDelayMs { get; set; } = 250;
-    // Don't START a multi-cast combo on a target under this HP% — a single-tap slot finishes it (0 = always).
-    public float CombatComboSkipHpPct { get; set; } = 15f;
-    // ── Boss mode: a unique monster inside the engage range. Tighter flee threshold, its own keep-distance,
-    //    never stall-skipped, a dodge roll on a timer and on a player-life spike (no telegraph data in memory),
-    //    and after a death the bot walks back to where the boss was. ──
-    public float BossFleeHpPct { get; set; } = 50f;          // 0 = same as CombatFleeHpPct
-    public float BossKeepDistance { get; set; } = 0f;        // 0 = same as CombatKeepDistance
-    public int BossDodgeIntervalMs { get; set; } = 4000;     // 0 = no timed rolls
-    public float BossDodgeSpikePct { get; set; } = 12f;      // life lost within ~0.6 s that triggers a roll (0 = off)
-    public bool BossReengage { get; set; } = true;
     public int CombatIgnoreMs { get; set; } = 20000;
     // Low-HP flee: below CombatFleeHpPct the bot stops attacking and runs CombatFleeDistance cells away
     // from the pack (most open direction), until HP is back at CombatFleeRecoverPct. 0 = never flee.
@@ -303,24 +287,6 @@ public sealed class RadarSettings
     public float MoveLookAhead { get; set; } = 12f;
     public bool MoveDiagonals { get; set; } = true;
     public float MoveAxisRotationDeg { get; set; } = 0f;
-    // Travel rolls: when the run key IS the dodge key (PoE2: Space) "run" means rolling every MoveRollIntervalMs
-    // through the roll arbiter, and only with MoveRollMinCells of straight visible route ahead (no rolling into
-    // corners / past the goal). A different run key is simply held while moving.
-    public int MoveRollIntervalMs { get; set; } = 900;
-    // Walk / run speed in grid cells per second. 0 = learn automatically from the character's movement; set
-    // them when auto-learning is off for a build (the "run key ignored" re-press compares against these).
-    public float MoveWalkSpeed { get; set; } = 0f;
-    public float MoveRunSpeed { get; set; } = 0f;
-    // Let go of the run key while any hostile is inside the attack range: a held dodge key chains rolls, and a
-    // roll cancels every cast — running INTO a pack meant swinging at nothing. Walk the last stretch instead.
-    public bool MoveRunStopNearHostiles { get; set; } = true;
-    public float MoveRollMinCells { get; set; } = 6f;
-    // Replan smoothing: keep last tick's direction keys this long when the route list is momentarily empty.
-    public int MoveCoastMs { get; set; } = 400;
-    // Arrive radius by target kind (MoveArriveRadius = swept cells): a monster only needs to be inside attack
-    // reach, an event / landmark inside its click radius.
-    public float MoveArriveRadiusMob { get; set; } = 12f;
-    public float MoveArriveRadiusEvent { get; set; } = 5f;
 
     // ── HTTP API. ──
     public int ApiPort { get; set; } = 7777;

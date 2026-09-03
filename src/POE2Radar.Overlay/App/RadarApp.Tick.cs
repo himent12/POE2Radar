@@ -199,9 +199,6 @@ public sealed partial class RadarApp
         _combatWatch.FleeBelowPct = _settings.CombatFleeHpPct;
         _combatWatch.FleeRecoverPct = _settings.CombatFleeRecoverPct;
         _combatWatch.KeepDistance = _settings.CombatKeepDistance;
-        _combatWatch.BossFleeBelowPct = _settings.BossFleeHpPct;
-        _combatWatch.BossKeepDistance = _settings.BossKeepDistance;
-        TickRoll(DateTime.UtcNow, player);
         var watch = CombatArmed && inGame
             ? _combatWatch.Update(combatEntities, player, _settings.CombatEngageRange, DateTime.UtcNow, _hpPct)
             : default;
@@ -211,13 +208,13 @@ public sealed partial class RadarApp
         // Low HP: the mover runs the flee point instead of the route (attacks are held above).
         IReadOnlyList<SelectedPath> movePaths = selectedPaths;
         if ((watch.Flee || watch.Kite) && CombatWatch.TryFleePoint(combatEntities, player, _settings.CombatRange,
-                watch.Flee ? _settings.CombatFleeDistance : Math.Max(4f, (watch.Boss && _settings.BossKeepDistance > 0f ? _settings.BossKeepDistance : _settings.CombatKeepDistance) * 0.6f),
+                watch.Flee ? _settings.CombatFleeDistance : Math.Max(4f, _settings.CombatKeepDistance * 0.6f),
                 terrain?.Walkable, terrain?.Width ?? 0, terrain?.Height ?? 0, out var fleeTo))
         {
             movePaths = new[] { new SelectedPath(0, new List<(int x, int y)> { ((int)MathF.Round(fleeTo.X), (int)MathF.Round(fleeTo.Y)) }) };
         }
         // A running combo pauses movement (and kiting) — a roll or run press mid-cast cancels the cast.
-        TickPathMove(inGame, focused, player, movePaths, playerWorld, inCombat, (watch.Flee || watch.Kite) && !_comboBusy);
+        TickPathMove(inGame, focused, player, movePaths, playerWorld, inCombat || _comboBusy, (watch.Flee || watch.Kite) && !_comboBusy);
         TickQuestUse(inGame, focused, player, playerWorld, inCombat);
         TickEventUse(inGame, focused, player, playerWorld, inCombat);
 
@@ -377,27 +374,7 @@ public sealed partial class RadarApp
                 EventRitual: _settings.EventRitual,
                 EventChests: _settings.EventChests,
                 EventClickStalled: _settings.EventClickStalled,
-                EventRange: _settings.EventRange,
-                RollPressMs: _settings.RollPressMs,
-                CombatDodgeRecoverMs: _settings.CombatDodgeRecoverMs,
-                CombatDodgeDelayMs: _settings.CombatDodgeDelayMs,
-                MoveRollIntervalMs: _settings.MoveRollIntervalMs,
-                MoveRollMinCells: _settings.MoveRollMinCells,
-                MoveCoastMs: _settings.MoveCoastMs,
-                MoveArriveRadiusMob: _settings.MoveArriveRadiusMob,
-                MoveArriveRadiusEvent: _settings.MoveArriveRadiusEvent,
-                RollNote: _rollNote,
-                SpeedNote: SpeedSummary(),
-                MoveWalkSpeed: _settings.MoveWalkSpeed,
-                MoveRunSpeed: _settings.MoveRunSpeed,
-                MoveRunStopNearHostiles: _settings.MoveRunStopNearHostiles,
-                CombatComboSkipHpPct: _settings.CombatComboSkipHpPct,
-                BossFleeHpPct: _settings.BossFleeHpPct,
-                BossKeepDistance: _settings.BossKeepDistance,
-                BossDodgeIntervalMs: _settings.BossDodgeIntervalMs,
-                BossDodgeSpikePct: _settings.BossDodgeSpikePct,
-                BossReengage: _settings.BossReengage,
-                BossNote: _bossNote) : null);
+                EventRange: _settings.EventRange) : null);
         // The overlay is only visible while PoE2 is foreground (Render draws nothing otherwise). Skip
         // the whole draw + UpdateLayeredWindow blit when unfocused — but render once on the focus-loss
         // transition so the last visible frame is cleared rather than left frozen on screen.

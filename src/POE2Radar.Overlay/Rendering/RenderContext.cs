@@ -19,7 +19,7 @@ public readonly record struct LegendEntry(NavTarget Target, int ColorSlot, bool 
 
 /// <summary>One selected target's smoothed A* route: the selection-order color slot (0..7) used to pick
 /// its draw/legend color and the smoothed grid-cell waypoints. Empty <see cref="Points"/> = no path.</summary>
-public readonly record struct SelectedPath(int ColorSlot, IReadOnlyList<(int x, int y)> Points, string Kind = "");
+public readonly record struct SelectedPath(int ColorSlot, IReadOnlyList<(int x, int y)> Points);
 
 /// <summary>A monster HP bar to draw, with everything expensive already decided at world rate: the style
 /// (width + packed 0xAARRGGBB fill/border colors) was resolved once when the entity set was built; only
@@ -292,34 +292,7 @@ public sealed record InsMenuData(
     bool EventRitual = false,
     bool EventChests = false,
     bool EventClickStalled = true,
-    float EventRange = 120f,
-    // ── Roll arbiter / replan smoothing / per-kind arrive radius ──
-    int RollPressMs = 60,
-    int CombatDodgeRecoverMs = 650,
-    int CombatDodgeDelayMs = 250,
-    int MoveRollIntervalMs = 900,
-    float MoveRollMinCells = 6f,
-    int MoveCoastMs = 400,
-    float MoveArriveRadiusMob = 12f,
-    float MoveArriveRadiusEvent = 5f,
-    string RollNote = "",
-    string SpeedNote = "",
-    float MoveWalkSpeed = 0f,
-    float MoveRunSpeed = 0f,
-    bool MoveRunStopNearHostiles = true,
-    // ── Boss mode ──
-    float CombatComboSkipHpPct = 15f,
-    float BossFleeHpPct = 50f,
-    float BossKeepDistance = 0f,
-    int BossDodgeIntervalMs = 4000,
-    float BossDodgeSpikePct = 12f,
-    bool BossReengage = true,
-    string BossNote = "")
-{
-    /// <summary>Number of tabs the menu draws (Overview · Combat · Skills · Clearing · Movement · Boss · Roll · Route);
-    /// the click handler clamps ins:tab:N to this.</summary>
-    public const int TabCount = 8;
-}
+    float EventRange = 120f);
 
 /// <summary>Numeric tunables the INSERT menu exposes as sliders: range + step + display, shared by the
 /// renderer (fill fraction) and RadarApp (click → value). Keys match the HTTP settings names.</summary>
@@ -354,20 +327,5 @@ public readonly record struct InsSliderSpec(string Key, float Min, float Max, fl
         ["moveAxisRotationDeg"]  = new("moveAxisRotationDeg", -180, 180, 15, "°"),
         ["lifeThresholdPct"]     = new("lifeThresholdPct", 10, 95, 1, "%"),
         ["manaThresholdPct"]     = new("manaThresholdPct", 5, 95, 1, "%"),
-        ["rollPressMs"]          = new("rollPressMs", 30, 200, 10, "ms"),
-        ["combatDodgeRecoverMs"] = new("combatDodgeRecoverMs", 200, 1500, 50, "ms"),
-        ["combatDodgeDelayMs"]   = new("combatDodgeDelayMs", 0, 1500, 50, "ms", "none"),
-        ["moveRollIntervalMs"]   = new("moveRollIntervalMs", 300, 3000, 100, "ms"),
-        ["moveRollMinCells"]     = new("moveRollMinCells", 0, 20, 1, "", "always"),
-        ["moveWalkSpeed"]        = new("moveWalkSpeed", 0, 40, 0.5f, " c/s", "auto"),
-        ["moveRunSpeed"]         = new("moveRunSpeed", 0, 60, 0.5f, " c/s", "auto"),
-        ["moveCoastMs"]          = new("moveCoastMs", 0, 2000, 50, "ms", "stop"),
-        ["moveArriveRadiusMob"]  = new("moveArriveRadiusMob", 1, 30, 1, ""),
-        ["moveArriveRadiusEvent"] = new("moveArriveRadiusEvent", 1, 20, 1, ""),
-        ["combatComboSkipHpPct"] = new("combatComboSkipHpPct", 0, 50, 1, "%", "always"),
-        ["bossFleeHpPct"]        = new("bossFleeHpPct", 0, 90, 1, "%", "as normal"),
-        ["bossKeepDistance"]     = new("bossKeepDistance", 0, 60, 1, "", "as normal"),
-        ["bossDodgeIntervalMs"]  = new("bossDodgeIntervalMs", 0, 10000, 500, "ms", "off"),
-        ["bossDodgeSpikePct"]    = new("bossDodgeSpikePct", 0, 50, 1, "%", "off"),
     };
 }

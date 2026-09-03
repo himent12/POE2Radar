@@ -42,19 +42,12 @@ public static class PathMove
         float AxisRotationDeg = 0f,      // rotate grid→key mapping (calibration for the isometric camera)
         int RunKey = 0,                  // held while moving (0 = none)
         bool RunEnabled = false,
-        IReadOnlyList<ushort>? PrevHoldKeys = null, // last tick's direction keys → sector hysteresis
-        // ── Replan smoothing ──
-        (int x, int y)? PrevTarget = null,   // last tick's steer point: never regress to a nearer one while it is still ahead + visible
-        DateTime LastMovingUtc = default,    // when we last wanted to move; an empty route inside CoastMs keeps the previous keys
-        int CoastMs = 0,                     // 0 = stop dead on an empty route (legacy)
-        float RollMinCells = 6f);            // a run-roll is only OK with at least this much straight, visible route ahead
+        IReadOnlyList<ushort>? PrevHoldKeys = null); // last tick's direction keys → sector hysteresis
 
     /// <summary>
     /// WASD: <see cref="HoldKeys"/> is the exact set to keep pressed this tick (empty = release
     /// everything); <see cref="ShouldTap"/> stays false. Click: <see cref="ShouldTap"/>/<see cref="Vk"/> as
-    /// before. <see cref="Moving"/> = the bot wants to be travelling. <see cref="RollOk"/> = enough straight,
-    /// visible route ahead that a dodge-roll (travel burst) will not slam into a corner or overshoot the goal.
-    /// <see cref="Coasting"/> = the route was empty (replan in flight) and we are holding last tick's keys.
+    /// before. <see cref="Moving"/> = the bot wants to be travelling (run key held).
     /// </summary>
     public readonly record struct Decision(
         bool ShouldTap,
@@ -63,9 +56,7 @@ public static class PathMove
         int TargetX = 0,
         int TargetY = 0,
         IReadOnlyList<ushort>? HoldKeys = null,
-        bool Moving = false,
-        bool RollOk = false,
-        bool Coasting = false);
+        bool Moving = false);
 
     private static readonly ushort[] NoKeys = Array.Empty<ushort>();
 
@@ -81,15 +72,7 @@ public static class PathMove
         if (s.PauseForCombat) return new(false, 0, "combat", HoldKeys: NoKeys);
 
         var pts = s.Waypoints;
-        if (pts is not { Count: > 0 })
-        {
-            // A replan swaps the route out for a tick or two; stopping dead there is the "stutter at every
-            // replan". Keep last tick's keys for a short grace window instead.
-            if (s.CoastMs > 0 && s.PrevHoldKeys is { Count: > 0 } keep && s.LastMovingUtc != default
-                && s.NowUtc - s.LastMovingUtc <= TimeSpan.FromMilliseconds(s.CoastMs))
-                return new(false, keep[0], "replanning → holding course", HoldKeys: keep, Moving: true, Coasting: true);
-            return new(false, 0, "no path", HoldKeys: NoKeys);
-        }
+        if (pts is not { Count: > 0 }) return new(false, 0, "no path", HoldKeys: NoKeys);
 
         var radius = Math.Max(0f, s.ArriveRadius);
         var radiusSq = radius * radius;
@@ -110,16 +93,12 @@ public static class PathMove
         if (nextIdx < 0) return new(false, 0, "arrived", HoldKeys: NoKeys);
 
         var wp = LookAheadPoint(s, pts, nextIdx);
-        wp = KeepFartherPrevTarget(s, pts, nextIdx, wp);
-        var goalD = NumVec2.Distance(player, new NumVec2(pts[pts.Count - 1].x, pts[pts.Count - 1].y));
-        var rollOk = s.RollMinCells <= 0f
-            || (NumVec2.Distance(player, new NumVec2(wp.x, wp.y)) >= s.RollMinCells && goalD >= s.RollMinCells);
 
         if (IsClick(s.Method))
         {
             var cooldown = TimeSpan.FromMilliseconds(Math.Max(0, s.CooldownMs));
-            if (s.NowUtc - s.LastFireUtc < cooldown) return new(false, 0, "armed", wp.x, wp.y, NoKeys, Moving: true, RollOk: rollOk);
-            return new(true, (ushort)Math.Clamp(s.ClickKey, 1, 255), "click", wp.x, wp.y, NoKeys, Moving: true, RollOk: rollOk);
+            if (s.NowUtc - s.LastFireUtc < cooldown) return new(false, 0, "armed", wp.x, wp.y, NoKeys, Moving: true);
+            return new(true, (ushort)Math.Clamp(s.ClickKey, 1, 255), "click", wp.x, wp.y, NoKeys, Moving: true);
         }
 
         if (!IsWasd(s.Method)) return new(false, 0, "armed", HoldKeys: NoKeys);
@@ -168,44 +147,8 @@ public static class PathMove
         var (dirX, dirY) = SectorDirection(sectorIdx, s.Diagonals);
         if (dirY != 0) { keys.Add(Vk(dirY > 0 ? s.KeyW : s.KeyS)); note += dirY > 0 ? "W" : "S"; }
         if (dirX != 0) { keys.Add(Vk(dirX > 0 ? s.KeyD : s.KeyA)); note += dirX > 0 ? "D" : "A"; }
-        return new(false, keys[0], note, wp.x, wp.y, keys, Moving: true, RollOk: rollOk);
+        return new(false, keys[0], note, wp.x, wp.y, keys, Moving: true);
     }
-
-    /// <summary>
-    /// Replan anti-jitter: a fresh route starts at the position the plan was REQUESTED from (a world tick or
-    /// more behind a rolling character), so its early nodes can sit behind or beside us and the projection
-    /// briefly picks a steer point NEARER than last tick's — the character turns back for a frame. If the previous
-    /// steer point still lies on the route ahead of <paramref name="nextIdx"/>, is farther than the new one, is
-    /// within the look-ahead and (with terrain) in thick line of sight, keep it.
-    /// </summary>
-    private static (int x, int y) KeepFartherPrevTarget(in Snapshot s, IReadOnlyList<(int x, int y)> pts, int nextIdx, (int x, int y) wp)
-    {
-        if (s.PrevTarget is not { } prev || prev == wp) return wp;
-        var player = s.PlayerGrid;
-        var prevV = new NumVec2(prev.x, prev.y);
-        var dPrev = NumVec2.Distance(player, prevV);
-        if (dPrev <= NumVec2.Distance(player, new NumVec2(wp.x, wp.y))) return wp;
-        if (dPrev > Math.Max(1f, s.LookAhead) * 1.25f) return wp;
-        var onRoute = false;
-        for (var i = nextIdx; i < pts.Count; i++)
-        {
-            var dx = pts[i].x - prev.x; var dy = pts[i].y - prev.y;
-            if (dx * dx + dy * dy <= 1.5f * 1.5f) { onRoute = true; break; }
-        }
-        if (!onRoute) return wp;
-        if (s.Walkable is not null && s.Width > 0 && s.Height > 0
-            && !HasLineOfSight(s.Walkable, s.Width, s.Height, player, prev, 1)) return wp;
-        return prev;
-    }
-
-    /// <summary>Arrive radius by target kind: a swept cell must be reached exactly-ish, a monster only needs to
-    /// be inside attack reach, an event/landmark inside its click radius. Unknown kinds use the cell radius.</summary>
-    public static float ArriveRadiusFor(string? kind, float cell, float mob, float ev) => kind switch
-    {
-        "mob" => mob > 0f ? mob : cell,
-        "event" or "landmark" => ev > 0f ? ev : cell,
-        _ => cell,
-    };
 
     private const float HysteresisRad = 8f * MathF.PI / 180f;
     private const float DitherRad = 12f * MathF.PI / 180f;

@@ -55,10 +55,8 @@ public static class CombatAssist
         bool PriorityOrder = false,
         float PlayerHpPct = 100f,
         bool KeyboardOnly = false,    // background mode on Linux: mouse-bound skills cannot be delivered
-        bool Busy = false,            // a combo macro / roll is still executing → no new decision
-        uint PreferredTargetId = 0,   // stick to this target while it is alive and in range (no hopping between mobs)
-        string? BusyReason = null,    // why Busy (status note): "casting", "roll recovery 400 ms", …
-        float ComboSkipHpPct = 15f);  // don't START a multi-cast combo on a target under this HP% (a quick slot finishes it)
+        bool Busy = false,            // a combo macro is still executing → no new decision
+        uint PreferredTargetId = 0);  // stick to this target while it is alive and in range (no hopping between mobs)
 
     /// <summary>
     /// <see cref="HasTarget"/> + <see cref="TargetGrid"/> / <see cref="TargetWorld"/> name the hostile the
@@ -89,7 +87,7 @@ public static class CombatAssist
         if (!s.Armed) return Idle(0, "OFF (F4)");
         if (!s.InGame) return Idle(0, "paused (not in game)");
         if (!s.Focused) return Idle(0, "paused (PoE2 not focused)");
-        if (s.Busy) return Idle(s.NextIndex, string.IsNullOrEmpty(s.BusyReason) ? "casting" : s.BusyReason!);
+        if (s.Busy) return Idle(s.NextIndex, "casting");
 
         var skills = s.Skills;
         var n = skills?.Count ?? 0;
@@ -100,7 +98,7 @@ public static class CombatAssist
 
         var globalRange = Math.Max(0f, s.Range);
         if (!TryPickTarget(s.Entities, s.PlayerGrid, globalRange, out var target, s.IgnoreIds, s.Mode))
-            return Idle(cursor, "armed: no hostile in range");
+            return Idle(cursor, "armed");
         // Stickiness: keep hitting the mob we were hitting while it is alive and in range — hopping to the
         // nearest one every tick re-aims mid-combo and wastes casts. Rarity mode may still upgrade to a rarer mob.
         if (s.PreferredTargetId != 0 && s.PreferredTargetId != target.Id
@@ -116,13 +114,6 @@ public static class CombatAssist
 
         var last = s.LastFireUtc;
         var lastN = last?.Count ?? 0;
-        var targetLow = s.ComboSkipHpPct > 0f && target.HpFraction * 100f < s.ComboSkipHpPct;
-        // Walk the rotation once; every READY slot gets a preference rank and the best rank wins, ties in
-        // rotation order (so a rotation of equal slots still cycles exactly as before):
-        //   +3 rare-only slot on a rare/unique (finish the rare with the single-target nukes),
-        //   +2 an AoE slot whose MinTargets is met by a real pack (≥ 2 hostiles),
-        //   −5 a multi-cast combo on a target about to die (only chosen when nothing quicker is ready).
-        var bestIdx = -1; var bestRank = int.MinValue; var skipped = "";
         for (var i = 0; i < n; i++)
         {
             var idx = s.PriorityOrder ? i : (cursor + i) % n;
@@ -134,10 +125,9 @@ public static class CombatAssist
             if (targetDistSq > skillRange * skillRange) continue;
             if (sk.RareOnly && !targetIsRare) continue;
             if (sk.HpBelowPct > 0f && s.PlayerHpPct >= sk.HpBelowPct) continue;
-            var count = inGlobal;
             if (sk.MinTargets > 1)
             {
-                count = sk.Range > 0f && sk.Range < globalRange
+                var count = sk.Range > 0f && sk.Range < globalRange
                     ? CountHostilesInRange(s.Entities, s.PlayerGrid, skillRange, s.IgnoreIds)
                     : inGlobal;
                 if (count < sk.MinTargets) continue;
@@ -145,26 +135,14 @@ public static class CombatAssist
             var firedAt = idx < lastN ? last![idx] : DateTime.MinValue;
             var cooldown = TimeSpan.FromMilliseconds(Math.Max(0, sk.CooldownMs));
             if (s.NowUtc - firedAt < cooldown) continue;
-
-            var rank = 0;
-            if (sk.RareOnly && targetIsRare) rank += 3;
-            if (sk.MinTargets > 1 && count >= 2) rank += 2;
-            if (IsLongCombo(sk) && targetLow) { rank -= 5; skipped = $"combo held: target at {target.HpFraction * 100f:0}%"; }
-            if (rank > bestRank) { bestRank = rank; bestIdx = idx; }
-        }
-        if (bestIdx >= 0)
-        {
-            var next = s.PriorityOrder ? cursor : (bestIdx + 1) % n;
-            return new(true, (ushort)skills![bestIdx].Key, bestIdx, next, bestRank < 0 ? "fired (" + skipped + ", nothing quicker)" : "fired",
+            var next = s.PriorityOrder ? cursor : (idx + 1) % n;
+            return new(true, (ushort)sk.Key, idx, next, "fired",
                 HasTarget: true, TargetGrid: target.Grid, TargetWorld: target.World, TargetId: target.Id, HostilesInRange: inGlobal);
         }
 
-        return new(false, 0, 0, cursor, "waiting: cooldowns / range",
+        return new(false, 0, 0, cursor, "armed",
             HasTarget: true, TargetGrid: target.Grid, TargetWorld: target.World, TargetId: target.Id, HostilesInRange: inGlobal);
     }
-
-    /// <summary>A slot that commits the character for more than one cast (repeat / channel / dodge chain).</summary>
-    public static bool IsLongCombo(in Skill sk) => sk.Repeat > 1 || sk.HoldMs > 0;
 
     private static Decision Idle(int next, string note) => new(false, 0, 0, next, note);
 
