@@ -288,4 +288,90 @@ public sealed class PathMoveTests
         Assert.Equal(0, d.Vk);
         Assert.Equal("armed", d.Note);
     }
+
+    // ── Replan smoothing ──
+
+    [Fact]
+    public void Empty_route_inside_coast_window_holds_last_keys()
+    {
+        var prev = new List<ushort> { PathMove.VkW, PathMove.VkD };
+        var d = PathMove.Decide(Base() with { PrevHoldKeys = prev, LastMovingUtc = T0.AddMilliseconds(-200), CoastMs = 400 });
+        Assert.True(d.Moving);
+        Assert.True(d.Coasting);
+        Assert.Equal(prev, d.HoldKeys);
+        Assert.Equal("replanning → holding course", d.Note);
+        // Past the window → stop.
+        d = PathMove.Decide(Base() with { PrevHoldKeys = prev, LastMovingUtc = T0.AddMilliseconds(-600), CoastMs = 400 });
+        Assert.False(d.Moving);
+        Assert.Equal("no path", d.Note);
+        // Coast disabled → stop (legacy).
+        d = PathMove.Decide(Base() with { PrevHoldKeys = prev, LastMovingUtc = T0.AddMilliseconds(-100), CoastMs = 0 });
+        Assert.Equal("no path", d.Note);
+    }
+
+    [Fact]
+    public void Steer_point_never_regresses_to_a_nearer_node_after_a_replan()
+    {
+        // Last tick we steered at (12,0). The replanned route starts behind us at (-3,0) and its projection
+        // yields a nearer node; (12,0) is still on the new route, ahead and visible → keep it.
+        var route = new[] { (-3, 0), (2, 0), (6, 0), (12, 0), (20, 0) };
+        var d = PathMove.Decide(Base(playerX: 0, playerY: 0, waypoints: route) with { LookAhead = 10f, PrevTarget = (12, 0) });
+        Assert.Equal((12, 0), (d.TargetX, d.TargetY));
+        // Without the memory the 10-cell look-ahead stops at (6,0).
+        d = PathMove.Decide(Base(playerX: 0, playerY: 0, waypoints: route) with { LookAhead = 10f });
+        Assert.Equal((6, 0), (d.TargetX, d.TargetY));
+        // A previous target that is no longer on the route is dropped.
+        d = PathMove.Decide(Base(playerX: 0, playerY: 0, waypoints: route) with { LookAhead = 10f, PrevTarget = (12, 9) });
+        Assert.Equal((6, 0), (d.TargetX, d.TargetY));
+        // Beyond 1.25 × look-ahead it is dropped too.
+        d = PathMove.Decide(Base(playerX: 0, playerY: 0, waypoints: route) with { LookAhead = 10f, PrevTarget = (20, 0) });
+        Assert.Equal((6, 0), (d.TargetX, d.TargetY));
+    }
+
+    [Fact]
+    public void Previous_target_behind_a_wall_is_not_kept()
+    {
+        // 30×5 map, wall column at x=8 except y=4; route bends around it.
+        const int w = 30, h = 5;
+        var walk = new byte[w * h];
+        Array.Fill(walk, (byte)1);
+        for (var y = 0; y < 4; y++) walk[y * w + 8] = 0;
+        var route = new[] { (0, 0), (4, 0), (7, 4), (9, 4), (12, 0) };
+        var d = PathMove.Decide(Base(playerX: 1, playerY: 0, waypoints: route) with
+        {
+            LookAhead = 14f, Walkable = walk, Width = w, Height = h, PrevTarget = (12, 0),
+        });
+        Assert.NotEqual((12, 0), (d.TargetX, d.TargetY));
+    }
+
+    // ── Travel rolls ──
+
+    [Fact]
+    public void RollOk_needs_straight_visible_route_and_distance_to_goal()
+    {
+        var far = PathMove.Decide(Base(waypoints: new[] { (0, 0), (10, 0), (20, 0) }) with { RollMinCells = 6f });
+        Assert.True(far.Moving);
+        Assert.True(far.RollOk);
+        // Steer point only 4 cells away (short look-ahead) → no roll.
+        var corner = PathMove.Decide(Base(waypoints: new[] { (0, 0), (4, 0), (4, 12) }) with { LookAhead = 4f, RollMinCells = 6f });
+        Assert.True(corner.Moving);
+        Assert.False(corner.RollOk);
+        // Goal 5 cells away → a roll would overshoot.
+        var near = PathMove.Decide(Base(arrive: 1, waypoints: new[] { (0, 0), (5, 0) }) with { RollMinCells = 6f });
+        Assert.True(near.Moving);
+        Assert.False(near.RollOk);
+        // 0 = always.
+        Assert.True(PathMove.Decide(Base(arrive: 1, waypoints: new[] { (0, 0), (5, 0) }) with { RollMinCells = 0f }).RollOk);
+    }
+
+    [Fact]
+    public void Arrive_radius_depends_on_target_kind()
+    {
+        Assert.Equal(3f, PathMove.ArriveRadiusFor("cell", 3f, 12f, 5f));
+        Assert.Equal(3f, PathMove.ArriveRadiusFor("", 3f, 12f, 5f));
+        Assert.Equal(12f, PathMove.ArriveRadiusFor("mob", 3f, 12f, 5f));
+        Assert.Equal(5f, PathMove.ArriveRadiusFor("event", 3f, 12f, 5f));
+        Assert.Equal(5f, PathMove.ArriveRadiusFor("landmark", 3f, 12f, 5f));
+        Assert.Equal(3f, PathMove.ArriveRadiusFor("mob", 3f, 0f, 5f)); // unset → cell radius
+    }
 }
