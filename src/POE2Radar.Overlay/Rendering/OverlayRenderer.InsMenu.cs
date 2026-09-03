@@ -36,6 +36,7 @@ public sealed partial class OverlayRenderer
 
     private const float MW = 820f, MH = 640f, PadX = 24f, TopH = 56f, TabsH = 44f, FootH = 40f, Row = 44f, R = 5f;
     private static readonly string[] Tabs = { "Overview", "Combat", "Skills", "Clearing", "Movement", "Boss", "Roll" };
+    static OverlayRenderer() => System.Diagnostics.Debug.Assert(Tabs.Length == InsMenuData.TabCount);
 
     private DrawTextFormat? _tfTitle, _tfBody, _tfBold, _tfSmall, _tfMono, _tfMonoSmall, _tfCaps;
     private DrawBrush? _bUi;

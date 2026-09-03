@@ -309,7 +309,12 @@ public sealed record InsMenuData(
     int BossDodgeIntervalMs = 4000,
     float BossDodgeSpikePct = 12f,
     bool BossReengage = true,
-    string BossNote = "");
+    string BossNote = "")
+{
+    /// <summary>Number of tabs the menu draws (Overview · Combat · Skills · Clearing · Movement · Boss · Roll); the
+    /// click handler clamps ins:tab:N to this.</summary>
+    public const int TabCount = 7;
+}
 
 /// <summary>Numeric tunables the INSERT menu exposes as sliders: range + step + display, shared by the
 /// renderer (fill fraction) and RadarApp (click → value). Keys match the HTTP settings names.</summary>

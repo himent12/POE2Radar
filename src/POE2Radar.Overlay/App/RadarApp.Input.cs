@@ -195,7 +195,7 @@ public sealed partial class RadarApp
         switch (parts[1])
         {
             case "tab" when int.TryParse(parts[2], out var tab):
-                _insMenuTab = Math.Clamp(tab, 0, 4);
+                _insMenuTab = Math.Clamp(tab, 0, InsMenuData.TabCount - 1);
                 return;
             case "adj" when parts.Length == 4 && float.TryParse(parts[3], System.Globalization.NumberStyles.Float, ci, out var delta):
                 if (InsSliderSpec.All.TryGetValue(parts[2], out var spec)) SetSetting(spec, spec.Clamp(GetSetting(parts[2]) + delta));

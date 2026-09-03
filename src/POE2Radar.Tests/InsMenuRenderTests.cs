@@ -64,6 +64,8 @@ public sealed class InsMenuRenderTests
         Assert.Contains("ins:tab:0", actions);
         Assert.Contains("ins:tab:4", actions);
         Assert.Contains("ins:tab:6", actions);
+        Assert.Contains("ins:tab:" + (InsMenuData.TabCount - 1), actions);
+        Assert.DoesNotContain("ins:tab:" + InsMenuData.TabCount, actions);
         switch (tab)
         {
             case 0: Assert.Contains("ins:toggle:bot", actions); Assert.Contains("ins:toggle:flask", actions); Assert.Contains("ins:flag:autoRespawn", actions); break;
