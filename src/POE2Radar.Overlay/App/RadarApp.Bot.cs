@@ -81,6 +81,7 @@ public sealed partial class RadarApp
                 Console.WriteLine("\nRespawn: alive again.");
                 _combatWatch.Reset();
                 _clearStuckId = null;
+                ArmBossReturn(DateTime.UtcNow);
             }
             _deadSinceUtc = DateTime.MinValue;
             _respawnTaps = 0;
@@ -94,6 +95,7 @@ public sealed partial class RadarApp
             _nextRespawnTapUtc = now.AddMilliseconds(Math.Max(500, _settings.RespawnDelayMs));
             ReleaseHeldKeys();
             AbortComboMacro();
+            AbortRoll();
             Console.WriteLine("\nRespawn: character died — resurrecting at checkpoint.");
         }
         _respawnNote = "dead → respawning";
@@ -187,8 +189,12 @@ public sealed partial class RadarApp
             specs[i] = new CombatAssist.Skill(sk.Key, sk.CooldownMs, sk.Range, Math.Max(1, sk.MinTargets), sk.RareOnly, sk.HpBelowPct, sk.Enabled,
                 Math.Clamp(sk.Repeat, 1, 10), Math.Clamp(sk.RepeatGapMs, 30, 2000), Math.Clamp(sk.HoldMs, 0, 10000), sk.DodgeAfter, Math.Clamp(sk.NextDelayMs, 0, 10000));
         }
-        // A combo macro in flight owns the keyboard: advance it and skip deciding.
-        var busy = RunComboMacro(now, player, playerWorld, entities) || now < _comboLockUntil;
+        // Boss mode first: a life spike may abort the combo in flight and roll instead.
+        TickBossDodge(watch, player, playerWorld, now);
+        // A combo macro in flight owns the keyboard, and so does a roll (press + recovery): advance the macro
+        // and skip deciding — a cast inside the roll recovery is eaten by the game.
+        var macroBusy = RunComboMacro(now, player, playerWorld, entities);
+        var busy = macroBusy || now < _comboLockUntil || _roll.Busy;
         var decision = CombatAssist.Decide(new CombatAssist.Snapshot(
             Armed: CombatArmed,
             Focused: focused,
@@ -206,9 +212,12 @@ public sealed partial class RadarApp
             PlayerHpPct: _hpPct,
             KeyboardOnly: GameHost.IsBackgroundActive && !GameHost.BackgroundSupportsMouse,
             Busy: busy,
-            PreferredTargetId: _lastTargetId));
-        _comboBusy = busy;
-        _lastTargetId = decision.HasTarget ? decision.TargetId : 0;
+            PreferredTargetId: macroBusy ? _macroTargetId : _lastTargetId,
+            BusyReason: busy ? ComboBusyReason(now) : null,
+            ComboSkipHpPct: _settings.CombatComboSkipHpPct));
+        _comboBusy = macroBusy || now < _comboLockUntil;
+        // Sticky target survives the combo: while busy the decision carries no target, so keep the macro's.
+        _lastTargetId = decision.HasTarget ? decision.TargetId : (busy ? (macroBusy ? _macroTargetId : _lastTargetId) : 0);
         _hostilesNear = decision.HostilesInRange;
         if (GameHost.IsBackgroundActive && !GameHost.BackgroundSupportsMouse && !decision.ShouldTap && decision.HasTarget
             && (src?.All(k => k.Key is 0x01 or 0x02 or 0x04 or 0x05 or 0x06) ?? false))
@@ -218,6 +227,7 @@ public sealed partial class RadarApp
             : watch.Stalled ? decision.Note + " (stalled, moving on)"
             : watch.Fighting ? $"{decision.Note} ({watch.Note})"
             : decision.Note;
+        if (!string.IsNullOrEmpty(_bossNote)) _combatNote += " · " + _bossNote;
         if (watch.Flee) { AbortComboMacro(); return; } // running, not swinging
         if (!decision.ShouldTap) return;
         // Aim: PoE2 fires a skill toward the cursor, so warp it onto the target first — otherwise the
@@ -237,130 +247,14 @@ public sealed partial class RadarApp
             }
             StartComboMacro(spec, decision, now);
         }
-        else GameHost.TapKey(decision.Vk);
+        else
+        {
+            GameHost.TapKey(decision.Vk);
+            _roll.NoteCast(now, Math.Max(0, spec.RepeatGapMs)); // cast animation: no roll until it lands
+        }
         if ((uint)decision.SkillIndex < (uint)_combatFiredAt.Length)
             _combatFiredAt[decision.SkillIndex] = now;
         _combatNextIndex = decision.NextIndex;
-    }
-
-    // ── Combo macro executor (render thread). One skill cast expanded into timed steps: N taps or a hold,
-    //    then an optional dodge-roll away from the target, then a rotation lockout. Non-blocking: each tick
-    //    performs whatever steps are due. ──
-    private enum MacroStep { Aim, KeyDown, KeyUp, Tap, DodgeStart, DodgeEnd, Done }
-    private uint _macroTargetId;
-    private POE2Radar.Core.Game.Vector3 _macroTargetWorld;
-    private uint _lastTargetId;
-    // A combo in flight owns the character: the mover (and its run/dodge key) must stay idle until it ends.
-    private volatile bool _comboBusy;
-    private readonly Queue<(MacroStep Step, ushort Vk, TimeSpan After)> _macro = new();
-    private DateTime _macroNextUtc = DateTime.MinValue;
-    private DateTime _comboLockUntil = DateTime.MinValue;
-    private NumVec2 _macroTargetGrid;
-    private readonly List<ushort> _macroHeld = new();
-
-    /// <summary>
-    /// Expand one cast into timed steps. Timeline for "×3, cast time 330, dodge after":
-    /// R↓ … R↑(+60) · 330 · R↓ … R↑ · 330 · R↓ … R↑ · 330 (let the LAST cast finish — a roll cancels it) ·
-    /// dir↓ + Space↓ … Space↑(+60) · 300 · dir↑ · roll recovery 650 · then-wait → rotation free.
-    /// Taps are real DOWN/UP pairs with a held duration (a zero-length press is missed by a game that polls
-    /// key state per frame — that is why "×3" used to land once). Each cast re-aims at the target's live position.
-    /// </summary>
-    private void StartComboMacro(CombatAssist.Skill spec, CombatAssist.Decision d, DateTime now)
-    {
-        AbortComboMacro();
-        _macroTargetId = d.TargetId;
-        _macroTargetGrid = d.TargetGrid;
-        _macroTargetWorld = d.TargetWorld;
-        var castMs = Math.Max(60, spec.RepeatGapMs);
-        var tapMs = Math.Clamp(_settings.CombatTapHoldMs, 30, 200);
-        for (var i = 0; i < spec.Repeat; i++)
-        {
-            var after = i == 0 ? TimeSpan.Zero : TimeSpan.FromMilliseconds(castMs);
-            _macro.Enqueue((MacroStep.Aim, 0, after));
-            _macro.Enqueue((MacroStep.KeyDown, d.Vk, TimeSpan.Zero));
-            _macro.Enqueue((MacroStep.KeyUp, d.Vk, TimeSpan.FromMilliseconds(spec.HoldMs > 0 ? spec.HoldMs : tapMs)));
-        }
-        if (spec.DodgeAfter && _settings.CombatDodgeKey is >= 1 and <= 255)
-        {
-            // Wait a full cast time after the last tap so the roll does not cancel the final cast.
-            _macro.Enqueue((MacroStep.DodgeStart, (ushort)_settings.CombatDodgeKey, TimeSpan.FromMilliseconds(Math.Max(0, castMs - (spec.HoldMs > 0 ? spec.HoldMs : tapMs)))));
-            _macro.Enqueue((MacroStep.KeyUp, (ushort)_settings.CombatDodgeKey, TimeSpan.FromMilliseconds(tapMs)));
-            _macro.Enqueue((MacroStep.DodgeEnd, 0, TimeSpan.FromMilliseconds(300)));
-            _macro.Enqueue((MacroStep.Done, 0, TimeSpan.FromMilliseconds(Math.Max(0, _settings.CombatDodgeRecoverMs - 300) + spec.NextDelayMs)));
-        }
-        else
-        {
-            _macro.Enqueue((MacroStep.Done, 0, TimeSpan.FromMilliseconds(spec.NextDelayMs)));
-        }
-        _macroNextUtc = now;
-    }
-
-    /// <summary>Advance the macro; true while steps remain.</summary>
-    /// <summary>Advance the macro; true while steps remain.</summary>
-    private bool RunComboMacro(DateTime now, NumVec2 player, POE2Radar.Core.Game.Vector3? playerWorld,
-        IReadOnlyList<Poe2Live.EntityDot> entities)
-    {
-        // One step per tick at most for DOWN/UP pairs: never collapse a press and its release into the same
-        // instant even after a frame hitch.
-        var steps = 0;
-        while (_macro.Count > 0 && now >= _macroNextUtc && steps++ < 2)
-        {
-            var (step, vk, _) = _macro.Dequeue();
-            switch (step)
-            {
-                case MacroStep.Aim:
-                {
-                    // Live target position when it is still listed; else the position at macro start.
-                    var grid = _macroTargetGrid; var world = _macroTargetWorld;
-                    foreach (var e in entities) if (e.Id == _macroTargetId) { grid = e.Grid; world = e.World; break; }
-                    _macroTargetGrid = grid;
-                    AimAtEntity(grid, world, playerWorld);
-                    break;
-                }
-                case MacroStep.KeyDown: GameHost.KeyDown(vk); _macroHeld.Add(vk); break;
-                case MacroStep.KeyUp: GameHost.KeyUp(vk); _macroHeld.Remove(vk); break;
-                case MacroStep.Tap: GameHost.TapKey(vk); break;
-                case MacroStep.DodgeStart:
-                {
-                    // Roll AWAY from the target: hold the opposite direction keys for the roll and aim the cursor
-                    // behind us (PoE2 rolls along held WASD, else toward the cursor — cover both).
-                    var away = player - _macroTargetGrid;
-                    if (away.LengthSquared() < 1e-3f) away = new NumVec2(1f, 0f);
-                    away = NumVec2.Normalize(away);
-                    var dir = ((int)MathF.Round(away.X), (int)MathF.Round(away.Y));
-                    if (dir == (0, 0)) dir = (MathF.Abs(away.X) > MathF.Abs(away.Y) ? MathF.Sign(away.X) : 0, MathF.Abs(away.X) > MathF.Abs(away.Y) ? 0 : MathF.Sign(away.Y));
-                    var keys = PathMove.KeysFor(dir, _settings.MoveKeyW, _settings.MoveKeyA, _settings.MoveKeyS, _settings.MoveKeyD);
-                    var aim = player + away * 8f;
-                    AimClick((int)MathF.Round(aim.X), (int)MathF.Round(aim.Y), playerWorld);
-                    // If the mover still holds the dodge key as "run", let go first — a press on an already-held
-                    // key is not a new roll.
-                    if (_heldKeys.Remove(vk)) GameHost.KeyUp(vk);
-                    foreach (var k in keys) { GameHost.KeyDown(k); _macroHeld.Add(k); }
-                    GameHost.KeyDown(vk); _macroHeld.Add(vk);
-                    break;
-                }
-                case MacroStep.DodgeEnd:
-                    foreach (var k in _macroHeld) GameHost.KeyUp(k);
-                    _macroHeld.Clear();
-                    break;
-                case MacroStep.Done:
-                    break;
-            }
-            if (_macro.Count > 0)
-            {
-                var next = _macro.Peek();
-                _macroNextUtc = now + next.After;
-                if (next.Step == MacroStep.Done) { _comboLockUntil = _macroNextUtc; _macro.Dequeue(); }
-            }
-        }
-        return _macro.Count > 0;
-    }
-
-    private void AbortComboMacro()
-    {
-        _macro.Clear();
-        foreach (var k in _macroHeld) GameHost.KeyUp(k);
-        _macroHeld.Clear();
     }
 
     /// <summary>Watchdog ignores ∪ essence-imprisoned monsters (immune until their crystal is clicked).</summary>
@@ -422,199 +316,6 @@ public sealed partial class RadarApp
         if (copy > 0) Array.Copy(_combatFiredAt, next, copy);
         _combatFiredAt = next;
         if (n <= 0 || _combatNextIndex >= n) _combatNextIndex = 0;
-    }
-
-    /// <summary>
-    /// Path move: tap WASD or click-to-move toward the next waypoint of the first selected path.
-    /// Armed by F5 or by F3 bot master. Same gates as combat assist
-    /// (armed + focused + in-game + cooldown). Decision is <see cref="PathMove.Decide"/>;
-    /// this method only taps (and aims the cursor for Click) and updates the status note.
-    /// </summary>
-    private void TickPathMove(bool inGame, bool focused, NumVec2 player,
-        IReadOnlyList<SelectedPath> paths, POE2Radar.Core.Game.Vector3? playerWorld, bool inCombat, bool fleeing = false)
-    {
-        var now = DateTime.UtcNow;
-        IReadOnlyList<(int x, int y)> waypoints = paths.Count > 0
-            ? paths[0].Points
-            : Array.Empty<(int x, int y)>();
-        var terrain = _terrain;
-        var decision = PathMove.Decide(new PathMove.Snapshot(
-            Armed: MoveArmed,
-            Focused: focused,
-            InGame: inGame,
-            PlayerGrid: player,
-            Waypoints: waypoints,
-            ArriveRadius: _settings.MoveArriveRadius,
-            NowUtc: now,
-            LastFireUtc: _moveFiredAt,
-            CooldownMs: _settings.MoveCooldownMs,
-            Method: _settings.MoveMethod ?? "WASD",
-            KeyW: _settings.MoveKeyW,
-            KeyA: _settings.MoveKeyA,
-            KeyS: _settings.MoveKeyS,
-            KeyD: _settings.MoveKeyD,
-            ClickKey: _settings.MoveClickKey,
-            PauseForCombat: inCombat,
-            LookAhead: _settings.MoveLookAhead,
-            Walkable: terrain?.Walkable,
-            Width: terrain?.Width ?? 0,
-            Height: terrain?.Height ?? 0,
-            Diagonals: _settings.MoveDiagonals,
-            AxisRotationDeg: _settings.MoveAxisRotationDeg,
-            RunKey: _settings.MoveRunKey,
-            RunEnabled: _settings.MoveRunEnabled,
-            PrevHoldKeys: _prevDirKeys));
-        _moveNote = fleeing ? "kite → " + decision.Note : decision.Note;
-
-        // Held keys: WASD direction set + run key while moving. Diff against what is currently down so a
-        // direction change is one KeyUp + one KeyDown, not a tap storm; everything is released the instant
-        // the bot stops wanting to move (arrived / combat / unfocused / disarmed).
-        // Focus / in-game regained: the game drops key state on focus loss while our bookkeeping still says
-        // "held" → nothing would ever be re-pressed. Release everything so the next tick presses afresh.
-        var live = focused && inGame;
-        if (live && !_moveWasLive) ReleaseHeldKeys();
-        _moveWasLive = live;
-
-        _wantKeys.Clear();
-        _prevDirKeys = decision.HoldKeys is { Count: > 0 } ? decision.HoldKeys : null;
-        var wantsDir = decision.HoldKeys is { Count: > 0 };
-        if (wantsDir) foreach (var k in decision.HoldKeys!) _wantKeys.Add(k);
-
-        // Stuck watchdog: direction keys held but the character has not moved. Two "kicks" (release all,
-        // re-press next tick — fixes a lost key-down / dropped run state), then a perpendicular sidestep to
-        // slide off whatever wall corner we're pressed into; alternate sides. Reset the moment we move.
-        if (wantsDir && !fleeing)
-        {
-            if (NumVec2.DistanceSquared(player, _stuckRef) > StuckMoveCellsSq)
-            {
-                _stuckRef = player; _stuckSince = now; _stuckKicks = 0;
-            }
-            else if (_stuckSince == DateTime.MinValue)
-            {
-                _stuckRef = player; _stuckSince = now;
-            }
-            else if (now < _sidestepUntil)
-            {
-                // sidestep in progress — handled below
-            }
-            else if (now - _stuckSince > StuckAfter)
-            {
-                _stuckKicks++;
-                _stuckSince = now;
-                if (_stuckKicks <= 2)
-                {
-                    ReleaseHeldKeys();
-                    _runHoldUntil = DateTime.MinValue;
-                    _moveNote = $"stuck → re-press ({_stuckKicks})";
-                    return; // keys re-pressed next tick
-                }
-                _sidestepSign = -_sidestepSign;
-                _sidestepUntil = now + SidestepFor;
-                _stuckKicks = 0;
-                Console.WriteLine("\nPath move: stuck — sidestepping.");
-            }
-        }
-        else
-        {
-            _stuckSince = DateTime.MinValue;
-            _stuckKicks = 0;
-        }
-        if (wantsDir && now < _sidestepUntil)
-        {
-            var dir = PathMove.DirectionOf(decision.HoldKeys!, _settings.MoveKeyW, _settings.MoveKeyA, _settings.MoveKeyS, _settings.MoveKeyD);
-            var perp = (x: -dir.y * _sidestepSign, y: dir.x * _sidestepSign);
-            _wantKeys.Clear();
-            foreach (var k in PathMove.KeysFor(perp, _settings.MoveKeyW, _settings.MoveKeyA, _settings.MoveKeyS, _settings.MoveKeyD)) _wantKeys.Add(k);
-            _moveNote = "stuck → sidestep";
-        }
-
-        // Run key: keep it down across the brief "no path" / "arrived" gaps between route replans and
-        // re-targets (RunLinger), so it is pressed ONCE and held for the whole trip. Hard stops (combat,
-        // unfocused, disarmed, not in game) release it immediately.
-        var hardStop = !MoveArmed || !focused || !inGame || inCombat;
-        if (decision.Moving) _runHoldUntil = now + RunLinger;
-        else if (hardStop) _runHoldUntil = DateTime.MinValue;
-        if (now < _runHoldUntil && _settings.MoveRunEnabled && _settings.MoveRunKey is >= 1 and <= 255)
-            _wantKeys.Add((ushort)_settings.MoveRunKey);
-        ApplyHeldKeys();
-
-        if (!decision.ShouldTap) return;
-        if (PathMove.IsClick(_settings.MoveMethod))
-            AimClick(decision.TargetX, decision.TargetY, playerWorld);
-        GameHost.TapKey(decision.Vk);
-        _moveFiredAt = now;
-    }
-
-    private readonly HashSet<ushort> _heldKeys = new();
-
-    private readonly HashSet<ushort> _wantKeys = new();
-
-    private static readonly TimeSpan RunLinger = TimeSpan.FromMilliseconds(600);
-
-    private IReadOnlyList<ushort>? _prevDirKeys;
-
-    // Stuck watchdog state (render thread).
-    private static readonly TimeSpan StuckAfter = TimeSpan.FromMilliseconds(500);
-
-    private static readonly TimeSpan SidestepFor = TimeSpan.FromMilliseconds(350);
-
-    private const float StuckMoveCellsSq = 0.75f * 0.75f;
-
-    private NumVec2 _stuckRef;
-
-    private DateTime _stuckSince = DateTime.MinValue;
-
-    private int _stuckKicks;
-
-    private DateTime _sidestepUntil = DateTime.MinValue;
-
-    private int _sidestepSign = 1;
-
-    private bool _moveWasLive;
-
-    private DateTime _runHoldUntil = DateTime.MinValue;
-
-    private readonly List<ushort> _keyScratch = new();
-
-    private void ApplyHeldKeys()
-    {
-        _keyScratch.Clear();
-        foreach (var k in _heldKeys) if (!_wantKeys.Contains(k)) _keyScratch.Add(k);
-        foreach (var k in _keyScratch) { GameHost.KeyUp(k); _heldKeys.Remove(k); }
-        foreach (var k in _wantKeys) if (_heldKeys.Add(k)) GameHost.KeyDown(k);
-    }
-
-    /// <summary>Let go of every held movement/run key (shutdown, disarm, focus loss).</summary>
-    private void ReleaseHeldKeys()
-    {
-        foreach (var k in _heldKeys) GameHost.KeyUp(k);
-        _heldKeys.Clear();
-    }
-
-    /// <summary>Warp the cursor onto the projected waypoint so a click-to-move tap walks there.</summary>
-    private void AimClick(int gridX, int gridY, POE2Radar.Core.Game.Vector3? playerWorld)
-        => AimWorld(
-            gridX * POE2Radar.Core.Pathfinding.GridConstants.GridToWorld,
-            gridY * POE2Radar.Core.Pathfinding.GridConstants.GridToWorld,
-            playerWorld?.Z ?? 0f);
-
-    /// <summary>Warp the cursor onto a monster: its own world position when read, else its grid at player height.</summary>
-    private void AimAtEntity(NumVec2 grid, POE2Radar.Core.Game.Vector3 world, POE2Radar.Core.Game.Vector3? playerWorld)
-    {
-        if (world.X != 0f || world.Y != 0f)
-            AimWorld(world.X, world.Y, world.Z != 0f ? world.Z : playerWorld?.Z ?? 0f);
-        else
-            AimClick((int)MathF.Round(grid.X), (int)MathF.Round(grid.Y), playerWorld);
-    }
-
-    private void AimWorld(float wx, float wy, float wz)
-    {
-        if (_cameraMatrix is not { } m) return;
-        if (!POE2Radar.Core.Pathfinding.MapProjection.TryWorldToScreen(m, wx, wy, wz, _window.Width, _window.Height, out var sx, out var sy))
-            return;
-        const float pad = 8f;
-        if (sx < pad || sy < pad || sx > _window.Width - pad || sy > _window.Height - pad) return;
-        GameHost.SetCursorPos(_window.OriginX + (int)MathF.Round(sx), _window.OriginY + (int)MathF.Round(sy));
     }
 
     /// <summary>

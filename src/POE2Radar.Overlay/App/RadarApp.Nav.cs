@@ -389,9 +389,27 @@ public sealed partial class RadarApp
         {
             if (!_trackers.TryGetValue(selected[i], out var tracker)) continue;
             var pts = tracker.CurrentPoints;
-            if (pts.Count > 0) paths.Add(new SelectedPath(Math.Min(i, MaxSelectedTargets - 1), pts));
+            if (pts.Count > 0) paths.Add(new SelectedPath(Math.Min(i, MaxSelectedTargets - 1), pts, TargetKind(selected[i])));
         }
         _selectedPaths = paths;
+    }
+
+    /// <summary>Target kind for the mover's arrive radius: "cell" (sweep), "mob", "event" (clickable entity),
+    /// "landmark" (tile transition / waypoint).</summary>
+    private string TargetKind(string id)
+    {
+        if (id.StartsWith("t:", StringComparison.Ordinal)) return "landmark";
+        if (id.StartsWith("e:", StringComparison.Ordinal))
+        {
+            if (uint.TryParse(id.AsSpan(2), out var eid))
+            {
+                if (_pendingEventIds.Contains(eid)) return "event";
+                foreach (var e in _entities)
+                    if (e.Id == eid) return e.Category == Poe2Live.EntityCategory.Monster && !e.IsFriendly ? "mob" : "event";
+            }
+            return "event";
+        }
+        return "cell";
     }
 
     /// <summary>Display label for a selected id (its NavTarget name if still present, else the raw id).
