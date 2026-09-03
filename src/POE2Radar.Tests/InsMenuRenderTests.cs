@@ -50,6 +50,8 @@ public sealed class InsMenuRenderTests
     [InlineData(2)]
     [InlineData(3)]
     [InlineData(4)]
+    [InlineData(5)]
+    [InlineData(6)]
     public void Every_tab_renders_and_registers_click_rects(int tab)
     {
         using var win = OverlayWindow.CreateHeadless(1280, 800);
@@ -61,6 +63,7 @@ public sealed class InsMenuRenderTests
         Assert.Contains("ins:close", actions);
         Assert.Contains("ins:tab:0", actions);
         Assert.Contains("ins:tab:4", actions);
+        Assert.Contains("ins:tab:6", actions);
         switch (tab)
         {
             case 0: Assert.Contains("ins:toggle:bot", actions); Assert.Contains("ins:toggle:flask", actions); Assert.Contains("ins:flag:autoRespawn", actions); break;
@@ -68,6 +71,8 @@ public sealed class InsMenuRenderTests
             case 2: Assert.Contains("ins:skill:add", actions); Assert.Contains("ins:skill:adj:0:cd:50", actions); Assert.Contains("ins:skill:flip:1:rareOnly", actions); Assert.Contains("ins:skill:del:2", actions); Assert.Contains("ins:skill:adj:0:repeat:1", actions); Assert.Contains("ins:skill:flip:0:dodgeAfter", actions); break;
             case 3: Assert.Contains("ins:slider:mapClearAggroRange", actions); break;
             case 4: Assert.Contains("ins:set:moveMethod:Click", actions); Assert.Contains("ins:slider:moveLookAhead", actions); Assert.Contains("ins:flag:moveRunEnabled", actions); break;
+            case 5: Assert.Contains("ins:slider:bossFleeHpPct", actions); Assert.Contains("ins:slider:bossDodgeSpikePct", actions); Assert.Contains("ins:flag:bossReengage", actions); Assert.Contains("ins:slider:combatComboSkipHpPct", actions); break;
+            case 6: Assert.Contains("ins:slider:rollPressMs", actions); Assert.Contains("ins:slider:moveRollIntervalMs", actions); Assert.Contains("ins:slider:moveCoastMs", actions); Assert.Contains("ins:slider:moveArriveRadiusMob", actions); break;
         }
 
         var dir = Environment.GetEnvironmentVariable("POE2RADAR_PREVIEW_DIR");

@@ -221,6 +221,7 @@ public sealed partial class RadarApp
                 else if (parts[2] == "eventRitual") _settings.EventRitual = !_settings.EventRitual;
                 else if (parts[2] == "eventChests") _settings.EventChests = !_settings.EventChests;
                 else if (parts[2] == "eventClickStalled") _settings.EventClickStalled = !_settings.EventClickStalled;
+                else if (parts[2] == "bossReengage") _settings.BossReengage = !_settings.BossReengage;
                 else return;
                 _settings.Save();
                 return;
@@ -250,6 +251,18 @@ public sealed partial class RadarApp
         "moveAxisRotationDeg" => _settings.MoveAxisRotationDeg,
         "lifeThresholdPct" => _settings.LifeThresholdPct,
         "manaThresholdPct" => _settings.ManaThresholdPct,
+        "rollPressMs" => _settings.RollPressMs,
+        "combatDodgeRecoverMs" => _settings.CombatDodgeRecoverMs,
+        "moveRollIntervalMs" => _settings.MoveRollIntervalMs,
+        "moveRollMinCells" => _settings.MoveRollMinCells,
+        "moveCoastMs" => _settings.MoveCoastMs,
+        "moveArriveRadiusMob" => _settings.MoveArriveRadiusMob,
+        "moveArriveRadiusEvent" => _settings.MoveArriveRadiusEvent,
+        "combatComboSkipHpPct" => _settings.CombatComboSkipHpPct,
+        "bossFleeHpPct" => _settings.BossFleeHpPct,
+        "bossKeepDistance" => _settings.BossKeepDistance,
+        "bossDodgeIntervalMs" => _settings.BossDodgeIntervalMs,
+        "bossDodgeSpikePct" => _settings.BossDodgeSpikePct,
         _ => 0f,
     };
 
@@ -277,6 +290,18 @@ public sealed partial class RadarApp
             case "moveAxisRotationDeg": s.MoveAxisRotationDeg = v; break;
             case "lifeThresholdPct": s.LifeThresholdPct = v; break;
             case "manaThresholdPct": s.ManaThresholdPct = v; break;
+            case "rollPressMs": s.RollPressMs = (int)v; break;
+            case "combatDodgeRecoverMs": s.CombatDodgeRecoverMs = (int)v; break;
+            case "moveRollIntervalMs": s.MoveRollIntervalMs = (int)v; break;
+            case "moveRollMinCells": s.MoveRollMinCells = v; break;
+            case "moveCoastMs": s.MoveCoastMs = (int)v; break;
+            case "moveArriveRadiusMob": s.MoveArriveRadiusMob = v; break;
+            case "moveArriveRadiusEvent": s.MoveArriveRadiusEvent = v; break;
+            case "combatComboSkipHpPct": s.CombatComboSkipHpPct = v; break;
+            case "bossFleeHpPct": s.BossFleeHpPct = v; break;
+            case "bossKeepDistance": s.BossKeepDistance = v; break;
+            case "bossDodgeIntervalMs": s.BossDodgeIntervalMs = (int)v; break;
+            case "bossDodgeSpikePct": s.BossDodgeSpikePct = v; break;
             default: return;
         }
         s.Save();
