@@ -200,7 +200,7 @@ public sealed partial class RadarApp
         _combatWatch.FleeRecoverPct = _settings.CombatFleeRecoverPct;
         _combatWatch.KeepDistance = _settings.CombatKeepDistance;
         var watch = CombatArmed && inGame
-            ? _combatWatch.Update(combatEntities, player, _settings.CombatEngageRange, DateTime.UtcNow, _hpPct)
+            ? _combatWatch.Update(combatEntities, player, _settings.CombatEngageRange, DateTime.UtcNow, _hpPct, _settings.CombatRange)
             : default;
         var inCombat = watch.PauseMove;
         _inCombat = inCombat || watch.Flee;
@@ -217,13 +217,15 @@ public sealed partial class RadarApp
         TickPathMove(inGame, focused, player, movePaths, playerWorld, inCombat || _comboBusy, (watch.Flee || watch.Kite) && !_comboBusy);
         TickQuestUse(inGame, focused, player, playerWorld, inCombat);
         TickEventUse(inGame, focused, player, playerWorld, inCombat);
+        TickFarmInput(inGameState, inGame, focused);
 
         _state = new RadarState(inGame, snap.AreaHash, snap.AreaLevel, map.IsVisible, map.Zoom, player,
             snap.Entities, snap.Landmarks, _hpPct, _manaPct, _esPct, _autoFlask, _flaskNote,
             snap.AreaCode, _charName, snap.CharLevel, _worldMs, _renderMs, mr.Markers, _fps,
             ex.Open, ex.Summary, ex.Offered, ex.Wanted, ex.HaveQty, ex.FillNote,
             CombatArmed, _combatNote, _questFollow, _questFollowNote,
-            MoveArmed, _moveNote, _botEnabled, _botNote, _mapClear, _mapClearNote);
+            MoveArmed, _moveNote, _botEnabled, _botNote, _mapClear || _farmLoop, _mapClearNote,
+            _farmLoop, _farmNote);
 
         var realActive = _gameHwnd != 0 && GameHost.GetForegroundWindow() == _gameHwnd;
         // "Always show" draws the overlay even when PoE2 isn't focused (for dashboard calibration).
@@ -331,6 +333,8 @@ public sealed partial class RadarApp
             PathMoveNote: _moveNote,
             MapClear: _mapClear,
             MapClearNote: _mapClearNote,
+            FarmLoop: _farmLoop,
+            FarmNote: _farmNote,
             InsMenu: _insMenuOpen ? new InsMenuData(
                 Tab: _insMenuTab,
                 CombatRange: _settings.CombatRange,
@@ -519,7 +523,8 @@ public sealed partial class RadarApp
         // Quest follow / map-clear: when armed, auto-select one nav target so MaintainRoutes
         // can A* it. Map-clear (F2) overrides quest follow. Runs every world tick so a boss
         // that spawns after zone-in still gets picked.
-        if (_mapClear) ApplyMapClear(areaCode, player);
+        if (_farmLoop) ApplyFarmLoop(areaCode, player);
+        else if (_mapClear) ApplyMapClear(areaCode, player);
         else ApplyQuestFollow(areaCode, player);
 
         // Auto-deselect entity targets the game has marked complete (e.g. a looted expedition):

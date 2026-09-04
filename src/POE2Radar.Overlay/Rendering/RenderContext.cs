@@ -245,6 +245,8 @@ public sealed record RenderContext(
     string PathMoveNote = "",
     bool MapClear = false,
     string MapClearNote = "",
+    bool FarmLoop = false,
+    string FarmNote = "",
     // ── INSERT in-game menu (toggles + live tunables). Null = closed. ──
     InsMenuData? InsMenu = null);
 

@@ -317,9 +317,15 @@ public static class PathMove
         var sx = x0 < x1 ? 1 : -1;
         var sy = y0 < y1 ? 1 : -1;
         var err = dx + dy;
+        // The origin is where the character STANDS. When the grid calls that cell blocked (door threshold,
+        // ledge lip — collision is looser than the nav grid) he can still walk off it, so the origin is not a
+        // wall hit; every cell after it is checked as usual.
+        var first = true;
         while (true)
         {
-            if (!Clear(x0, y0)) return false;
+            var originOffGrid = first && (uint)x0 < (uint)width && (uint)y0 < (uint)height && walkable[y0 * width + x0] == 0;
+            first = false;
+            if (!originOffGrid && !Clear(x0, y0)) return false;
             if (x0 == x1 && y0 == y1) return true;
             var e2 = 2 * err;
             if (e2 >= dy) { err += dy; x0 += sx; }

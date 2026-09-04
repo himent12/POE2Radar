@@ -267,6 +267,7 @@ public sealed partial class OverlayRenderer
         var lx = x; var ly = Section(rt, lx, y, "Automation");
         ly = Toggle(rt, lx, ly, colW, "Bot", "quest follow + move + combat", ctx.BotEnabled, "ins:toggle:bot", "F3");
         ly = Toggle(rt, lx, ly, colW, "Map clear", "sweep the zone, run events", ctx.MapClear, "ins:toggle:clear", "F2");
+        ly = Toggle(rt, lx, ly, colW, "Farm loop", !ctx.FarmLoop || string.IsNullOrEmpty(ctx.FarmNote) ? "clear → portal → waypoint → repeat" : Cut(ctx.FarmNote, 30), ctx.FarmLoop, "ins:toggle:farm", "F11");
         ly = Toggle(rt, lx, ly, colW, "Combat", "aimed skill rotation", ctx.CombatAssist, "ins:toggle:combat", "F4");
         ly = Toggle(rt, lx, ly, colW, "Movement", "walk the route", ctx.PathMove, "ins:toggle:move", "F5");
         ly = Toggle(rt, lx, ly, colW, "Auto flask", "life / mana under threshold", ctx.AutoFlask, "ins:toggle:flask", "F8");

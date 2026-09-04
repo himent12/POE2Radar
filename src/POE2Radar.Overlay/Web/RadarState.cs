@@ -50,7 +50,9 @@ public sealed record RadarState(
     bool Bot = false,
     string BotNote = "",
     bool MapClear = false,
-    string MapClearNote = "")
+    string MapClearNote = "",
+    bool FarmLoop = false,
+    string FarmNote = "")
 {
     public static readonly RadarState Empty =
         new(false, 0, 0, false, 0, System.Numerics.Vector2.Zero,

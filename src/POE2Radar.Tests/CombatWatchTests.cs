@@ -53,6 +53,30 @@ public sealed class CombatWatchTests
     }
 
     [Fact]
+    public void Kill_with_pack_still_in_attack_range_holds_the_mover_for_the_retarget_grace()
+    {
+        // Engaged mob at 5 dies; another hostile sits at 30 — outside engage (20) but inside attack range (40).
+        // The mover must stay paused for the grace so the rotation re-aims instead of a run/roll press
+        // breaking the combo; after the grace (mob still far) movement resumes; with no attack range given
+        // (legacy callers) or no other hostile, it clears at once.
+        var w = Watch();
+        Assert.True(w.Update([Mob(1, 5, 0), Mob(2, 30, 0)], NumVec2.Zero, 20, T0, attackRange: 40).PauseMove);
+        var r = w.Update([Mob(1, 5, 0, hp: 0), Mob(2, 30, 0)], NumVec2.Zero, 20, T0.AddMilliseconds(100), attackRange: 40);
+        Assert.True(r.PauseMove);
+        Assert.Equal("retargeting", r.Note);
+        Assert.True(w.Update([Mob(2, 30, 0)], NumVec2.Zero, 20, T0.AddMilliseconds(500), attackRange: 40).PauseMove);
+        Assert.False(w.Update([Mob(2, 30, 0)], NumVec2.Zero, 20, T0.AddMilliseconds(1200), attackRange: 40).PauseMove);
+
+        var w2 = Watch();
+        Assert.True(w2.Update([Mob(1, 5, 0), Mob(2, 30, 0)], NumVec2.Zero, 20, T0).PauseMove);
+        Assert.False(w2.Update([Mob(2, 30, 0)], NumVec2.Zero, 20, T0.AddMilliseconds(100)).PauseMove);
+
+        var w3 = Watch();
+        Assert.True(w3.Update([Mob(1, 5, 0)], NumVec2.Zero, 20, T0, attackRange: 40).PauseMove);
+        Assert.False(w3.Update([Mob(1, 5, 0, hp: 0)], NumVec2.Zero, 20, T0.AddMilliseconds(100), attackRange: 40).PauseMove);
+    }
+
+    [Fact]
     public void No_damage_for_stall_window_gives_up_and_ignores_mob()
     {
         var w = Watch();

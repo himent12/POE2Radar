@@ -48,6 +48,15 @@ public sealed class CombatWatch
     /// <summary>Back off when any hostile is closer than this many cells (0 = melee, never kite).</summary>
     public float KeepDistance { get; set; } = 0f;
 
+    /// <summary>
+    /// Retarget grace: after the last engaged hostile dies, keep the mover paused this long while OTHER
+    /// hostiles are still inside <c>attackRange</c> (the wider combat range), so the rotation re-aims at the
+    /// next mob in the pack instead of the mover kicking in for a moment — a run/roll press between two
+    /// targets is what drops a built-up combo.
+    /// </summary>
+    public TimeSpan RetargetGrace { get; set; } = TimeSpan.FromMilliseconds(900);
+    private DateTime _lastEngagedUtc = DateTime.MinValue;
+
     public bool IsFleeing { get { lock (_lock) return _fleeing; } }
 
     /// <summary>Hostile ids the watchdog has given up on (snapshot; safe to read from any thread).</summary>
@@ -79,7 +88,8 @@ public sealed class CombatWatch
     /// One tick. <paramref name="engageRange"/> is the grid radius inside which a live hostile pauses movement.
     /// Progress = any tracked hostile lost HP or died/vanished since the previous tick.
     /// </summary>
-    public Result Update(IReadOnlyList<Poe2Live.EntityDot>? entities, NumVec2 player, float engageRange, DateTime nowUtc, float playerHpPct = 100f)
+    public Result Update(IReadOnlyList<Poe2Live.EntityDot>? entities, NumVec2 player, float engageRange, DateTime nowUtc, float playerHpPct = 100f,
+        float attackRange = 0f)
     {
         lock (_lock)
         {
@@ -159,10 +169,16 @@ public sealed class CombatWatch
 
             if (inRange == 0)
             {
+                // Just killed the engaged mob(s) and the pack is not done: hold the mover for the retarget
+                // grace while another hostile is inside attack range — the rotation picks it up next tick.
+                if (_fighting && !_fleeing && RetargetGrace > TimeSpan.Zero && nowUtc - _lastEngagedUtc < RetargetGrace
+                    && attackRange > r && CombatAssist.HasHostileInRange(entities, player, attackRange, _ignoredSnapshot))
+                    return new(true, true, false, 0, "retargeting");
                 _fighting = false;
                 _fleeing = false;
                 return new(false, false, false, 0, "clear");
             }
+            _lastEngagedUtc = nowUtc;
 
             // Low-HP flee with hysteresis: start under FleeBelowPct, stop at FleeRecoverPct.
             if (_fleeing)

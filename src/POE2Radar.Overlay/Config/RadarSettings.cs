@@ -223,6 +223,15 @@ public sealed class RadarSettings
     public int CombatAttackKey { get; set; } = 0x51; // Q
     public List<CombatSkill> CombatSkills { get; set; } = new();
 
+    // ── Farm loop (F11 in-game kill-switch). Default OFF. FarmLoopEnabled is NOT writable via the HTTP
+    //    API — same as MapClearEnabled. Clears FarmAreaCode with map-clear, casts a town portal (FarmPortalKey
+    //    = the key the built-in Portal skill is bound to), takes it, uses the town waypoint and ctrl-clicks the
+    //    area back for a fresh instance, repeat. FarmClearSettleMs = how long "cleared + nothing near" must hold. ──
+    public bool FarmLoopEnabled { get; set; }
+    public string FarmAreaCode { get; set; } = "";
+    public int FarmPortalKey { get; set; }
+    public int FarmClearSettleMs { get; set; } = 2500;
+
     // ── Quest follow (F3 bot-master also arms this). Default OFF. QuestFollowEnabled is NOT writable
     //    via the HTTP API — same as CombatAssistEnabled / AutoFlaskEnabled / BotEnabled. When armed,
     //    each zone auto-selects one nav target from zone notes (or a Transition/waypoint/boss fallback)

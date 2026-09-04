@@ -54,6 +54,10 @@ public static class MapClear
             return;
         }
 
+        // Player off walkable ground (doorway / ledge lip): the disc is centred on the ground beside him — the
+        // seed — so the flood fill's window contains it and the reveal covers where he actually is.
+        if (sx != cx || sy != cy) { cx = sx; cy = sy; }
+
         var side = 2 * r + 1;
         var seen = new bool[side * side];
         var queue = new Queue<(int x, int y)>();
@@ -105,10 +109,14 @@ public static class MapClear
         }
     }
 
-    /// <summary>The player's cell if walkable, else the nearest walkable cell within 2 (rounding slop).</summary>
+    /// <summary>Seed search radius: the player can stand a few cells off walkable ground (a door threshold, a
+    /// ledge lip — collision is looser than the nav grid); the sweep must still anchor to the hall beside him.</summary>
+    public const int SeedRadius = 6;
+
+    /// <summary>The player's cell if walkable, else the nearest walkable cell within <see cref="SeedRadius"/>.</summary>
     private static bool TryFindSeed(byte[] walkable, int width, int height, int cx, int cy, out int sx, out int sy)
     {
-        for (var ring = 0; ring <= 2; ring++)
+        for (var ring = 0; ring <= SeedRadius; ring++)
         {
             for (var dy = -ring; dy <= ring; dy++)
             {
@@ -200,7 +208,7 @@ public static class MapClear
     }
 
     /// <summary>
-    /// Sweep planner — "go where the fog is". BFS from the player over walkable cells (true walking distance)
+    /// Sweep planner — "go where the fog is". Dijkstra from the player over walkable cells (true walking distance)
     /// up to <c>maxDepth</c>; every reachable UNVISITED cell is a candidate. Its gain = number of unvisited
     /// walkable cells the stamp disc would newly reveal from there, read in O(1) from a summed-area table
     /// built over the BFS bounding box. Its cost = steps walked, where a step through already-explored ground
@@ -225,89 +233,158 @@ public static class MapClear
         var r = Math.Max(1, stampRadius);
         var maxDepth = Math.Clamp(r * 10, 80, 320);
 
-        // ── Pass 1: BFS. Record each reached cell's weighted cost + the bounding box of the region. ──
-        var seen = new System.Collections.BitArray(width * height);
-        var queue = new Queue<int>();
-        var cost = new Dictionary<int, float>();
-        var depthOf = new Dictionary<int, int>();
-        var reached = new List<int>();
-        var start = sy * width + sx;
-        queue.Enqueue(start);
-        seen[start] = true;
-        cost[start] = 0f;
-        depthOf[start] = 0;
-        int minX = sx, maxX = sx, minY = sy, maxY = sy;
-        while (queue.Count > 0)
-        {
-            var idx = queue.Dequeue();
-            var x = idx % width;
-            var y = idx / width;
-            reached.Add(idx);
-            if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y;
-            var d = depthOf[idx];
-            if (d >= maxDepth) continue;
-            var c = cost[idx];
-            Push(x + 1, y, d, c); Push(x - 1, y, d, c); Push(x, y + 1, d, c); Push(x, y - 1, d, c);
-        }
+        // Everything below works in a WINDOW around the player (player ± maxDepth, padded by r for the gain
+        // disc, clipped to the map) on flat reusable arrays — no per-cell dictionary/hash work in the walk.
+        var wx0 = Math.Max(0, sx - maxDepth - r); var wy0 = Math.Max(0, sy - maxDepth - r);
+        var wx1 = Math.Min(width - 1, sx + maxDepth + r); var wy1 = Math.Min(height - 1, sy + maxDepth + r);
+        var ww = wx1 - wx0 + 1; var wh = wy1 - wy0 + 1;
+        var n = ww * wh;
+        var s = SweepScratch.Get(n, (ww + 1) * (wh + 1));
+        var cost = s.Cost; var depth = s.Depth; var sat = s.Sat; var unvisited = s.Unvisited;
 
-        // ── Pass 2: summed-area table of "unvisited walkable" over the bbox padded by r. ──
-        var bx0 = Math.Max(0, minX - r); var by0 = Math.Max(0, minY - r);
-        var bx1 = Math.Min(width - 1, maxX + r); var by1 = Math.Min(height - 1, maxY + r);
-        var bw = bx1 - bx0 + 1; var bh = by1 - by0 + 1;
-        var sat = new int[(bw + 1) * (bh + 1)];
-        for (var y = 0; y < bh; y++)
+        // ── Pass 1: window masks — walkable-and-unvisited per cell + its summed-area table. ──
+        var w1 = ww + 1;
+        Array.Clear(sat, 0, w1 * (wh + 1));
+        for (var y = 0; y < wh; y++)
         {
             var rowSum = 0;
-            var gy = by0 + y;
-            for (var x = 0; x < bw; x++)
+            var gy = wy0 + y;
+            var rowBase = gy * width;
+            for (var x = 0; x < ww; x++)
             {
-                var gx = bx0 + x;
-                if (walkable[gy * width + gx] != 0 && !visited.Contains(Key(gx, gy))) rowSum++;
-                sat[(y + 1) * (bw + 1) + (x + 1)] = sat[y * (bw + 1) + (x + 1)] + rowSum;
+                var gx = wx0 + x;
+                var u = walkable[rowBase + gx] != 0 && !visited.Contains(Key(gx, gy));
+                unvisited[y * ww + x] = u;
+                if (u) rowSum++;
+                sat[(y + 1) * w1 + (x + 1)] = sat[y * w1 + (x + 1)] + rowSum;
             }
         }
         int BoxGain(int gx, int gy)
         {
-            var x0 = Math.Max(bx0, gx - r) - bx0; var x1 = Math.Min(bx1, gx + r) - bx0 + 1;
-            var y0 = Math.Max(by0, gy - r) - by0; var y1 = Math.Min(by1, gy + r) - by0 + 1;
-            var w1 = bw + 1;
+            var x0 = Math.Max(wx0, gx - r) - wx0; var x1 = Math.Min(wx1, gx + r) - wx0 + 1;
+            var y0 = Math.Max(wy0, gy - r) - wy0; var y1 = Math.Min(wy1, gy + r) - wy0 + 1;
             return sat[y1 * w1 + x1] - sat[y0 * w1 + x1] - sat[y1 * w1 + x0] + sat[y0 * w1 + x0];
         }
 
-        // ── Pass 3: score every reachable unvisited cell. ──
+        // ── Pass 2: Dijkstra from the player (4-connected, true walking distance) with the weighted step cost,
+        //    bounded by maxDepth steps. Scores every reachable unvisited cell as it settles. ──
+        Array.Fill(depth, -1, 0, n);
         var fullBox = (2 * r + 1) * (2 * r + 1);
         var minGain = Math.Max(4, (int)(fullBox * MinGainFraction));
         var useHeading = heading.LengthSquared() > 1e-3f;
         var hdir = useHeading ? NumVec2.Normalize(heading) : default;
         var bestScore = float.MinValue;
         var found = false;
-        foreach (var idx in reached)
+
+        var heap = s.Heap;
+        heap.Clear();
+        var startLocal = (sy - wy0) * ww + (sx - wx0);
+        cost[startLocal] = 0f;
+        depth[startLocal] = 0;
+        heap.Push(startLocal, 0f);
+        while (heap.TryPop(out var li, out var c))
         {
-            var x = idx % width;
-            var y = idx / width;
-            if (visited.Contains(Key(x, y))) continue;
-            var gain = BoxGain(x, y);
-            if (gain < minGain) continue;
-            var score = gain / (cost[idx] + r * 0.5f);
-            if (useHeading)
+            if (c > cost[li]) continue; // stale entry
+            var lx = li % ww; var ly = li / ww;
+            var gx = lx + wx0; var gy = ly + wy0;
+            if (unvisited[li])
             {
-                var dir = new NumVec2(x - player.X + 1e-3f, y - player.Y);
-                score *= 1f + 0.35f * MathF.Max(0f, NumVec2.Dot(NumVec2.Normalize(dir), hdir));
+                var gain = BoxGain(gx, gy);
+                if (gain >= minGain)
+                {
+                    var score = gain / (c + r * 0.5f);
+                    if (useHeading)
+                    {
+                        var dir = new NumVec2(gx - player.X + 1e-3f, gy - player.Y);
+                        score *= 1f + 0.35f * MathF.Max(0f, NumVec2.Dot(NumVec2.Normalize(dir), hdir));
+                    }
+                    if (score > bestScore) { bestScore = score; bx = gx; by = gy; found = true; }
+                }
             }
-            if (score > bestScore) { bestScore = score; bx = x; by = y; found = true; }
+            var d = depth[li];
+            if (d >= maxDepth) continue;
+            if (lx > 0)      Relax(li - 1,  gx - 1, gy,     d, c);
+            if (lx < ww - 1) Relax(li + 1,  gx + 1, gy,     d, c);
+            if (ly > 0)      Relax(li - ww, gx,     gy - 1, d, c);
+            if (ly < wh - 1) Relax(li + ww, gx,     gy + 1, d, c);
         }
         return found;
 
-        void Push(int x, int y, int d, float c)
+        void Relax(int li, int gx, int gy, int d, float c)
         {
-            if ((uint)x >= (uint)width || (uint)y >= (uint)height) return;
-            var i = y * width + x;
-            if (seen[i]) return;
-            seen[i] = true;
-            if (walkable[i] == 0) return;
-            queue.Enqueue(i);
-            depthOf[i] = d + 1;
-            cost[i] = c + (visited.Contains(Key(x, y)) ? 1f : UnexploredStepCost);
+            if (walkable[gy * width + gx] == 0) return;
+            var nc = c + (unvisited[li] ? UnexploredStepCost : 1f);
+            if (depth[li] >= 0 && nc >= cost[li]) return;
+            cost[li] = nc;
+            depth[li] = d + 1;
+            heap.Push(li, nc);
+        }
+    }
+
+    /// <summary>Reusable per-thread scratch for the sweep (sized to the largest window seen so far).</summary>
+    private sealed class SweepScratch
+    {
+        [ThreadStatic] private static SweepScratch? _instance;
+        public float[] Cost = Array.Empty<float>();
+        public int[] Depth = Array.Empty<int>();
+        public int[] Sat = Array.Empty<int>();
+        public bool[] Unvisited = Array.Empty<bool>();
+        public readonly MinHeap Heap = new();
+
+        public static SweepScratch Get(int cells, int satCells)
+        {
+            var s = _instance ??= new SweepScratch();
+            if (s.Cost.Length < cells)
+            {
+                s.Cost = new float[cells];
+                s.Depth = new int[cells];
+                s.Unvisited = new bool[cells];
+            }
+            if (s.Sat.Length < satCells) s.Sat = new int[satCells]; // (ww+1)×(wh+1): one extra row + column
+            return s;
+        }
+    }
+
+    /// <summary>Array-backed binary min-heap of (index, key) with lazy deletion.</summary>
+    private sealed class MinHeap
+    {
+        private int[] _node = new int[1024];
+        private float[] _key = new float[1024];
+        private int _count;
+
+        public void Clear() => _count = 0;
+
+        public void Push(int node, float key)
+        {
+            if (_count == _node.Length) { Array.Resize(ref _node, _count * 2); Array.Resize(ref _key, _count * 2); }
+            var i = _count++;
+            while (i > 0)
+            {
+                var p = (i - 1) >> 1;
+                if (_key[p] <= key) break;
+                _node[i] = _node[p]; _key[i] = _key[p]; i = p;
+            }
+            _node[i] = node; _key[i] = key;
+        }
+
+        public bool TryPop(out int node, out float key)
+        {
+            if (_count == 0) { node = 0; key = 0; return false; }
+            node = _node[0]; key = _key[0];
+            var last = --_count;
+            if (last == 0) return true;
+            var ln = _node[last]; var lk = _key[last];
+            var i = 0;
+            while (true)
+            {
+                var c = 2 * i + 1;
+                if (c >= last) break;
+                if (c + 1 < last && _key[c + 1] < _key[c]) c++;
+                if (_key[c] >= lk) break;
+                _node[i] = _node[c]; _key[i] = _key[c]; i = c;
+            }
+            _node[i] = ln; _key[i] = lk;
+            return true;
         }
     }
 

@@ -163,11 +163,15 @@ public sealed class MapClearTests
     [Fact]
     public void Stamp_falls_back_to_disc_when_player_cell_unwalkable_and_no_seed()
     {
-        var walk = new byte[8 * 8]; // all walls except a far cell
-        walk[7 * 8 + 7] = 1;
+        var walk = new byte[16 * 16]; // all walls except a cell beyond the seed radius
+        walk[15 * 16 + 15] = 1;
         var visited = new HashSet<long>();
-        MapClear.StampVisited(visited, walk, 8, 8, new NumVec2(1, 1), 2);
+        MapClear.StampVisited(visited, walk, 16, 16, new NumVec2(1, 1), 2);
         Assert.Empty(visited);
+        // A walkable cell within the seed radius (player wedged in a doorway) IS found and stamped.
+        walk[(1 + MapClear.SeedRadius) * 16 + 1] = 1;
+        MapClear.StampVisited(visited, walk, 16, 16, new NumVec2(1, 1), 2);
+        Assert.Contains(MapClear.Key(1, 1 + MapClear.SeedRadius), visited);
     }
 
     [Fact]
@@ -295,6 +299,39 @@ public sealed class MapClearTests
         for (var y = 0; y < 20; y++) for (var x = 0; x < 10; x++) visited.Add(MapClear.Key(x, y));
         Assert.False(MapClear.TryBestSweepTarget(walk, 20, 20, visited, new NumVec2(3, 3), 6, default, out _, out _));
         Assert.Null(MapClear.PickTarget("G1_2", new NumVec2(3, 3), walk, 20, 20, visited, [], null, stampRadius: 6));
+    }
+
+    [Fact]
+    public void Sweep_handles_thin_and_large_windows_without_overflow()
+    {
+        // A 1200×3 strip (window far wider than tall) then a 700×700 field: the reusable scratch must size its
+        // summed-area table to the real (w+1)×(h+1) window, and a repeat call must reuse it cleanly.
+        var walk = FullWalkable(1200, 3);
+        var visited = VisitedDisc(walk, 1200, 3, 5, 1, 4);
+        Assert.True(MapClear.TryBestSweepTarget(walk, 1200, 3, visited, new NumVec2(5, 1), 4, default, out var bx, out _));
+        Assert.True(bx > 5);
+
+        var big = FullWalkable(700, 700);
+        var visitedBig = VisitedDisc(big, 700, 700, 350, 350, 24);
+        Assert.True(MapClear.TryBestSweepTarget(big, 700, 700, visitedBig, new NumVec2(350, 350), 24, default, out _, out _));
+        Assert.True(MapClear.TryBestSweepTarget(walk, 1200, 3, visited, new NumVec2(5, 1), 4, default, out bx, out _));
+        Assert.True(bx > 5);
+    }
+
+    [Fact]
+    public void Sweep_walks_around_a_wall_not_through_it()
+    {
+        // Fog pocket directly behind a wall (straight-line close), a smaller pocket down the open side. Walking
+        // distance decides: the wall pocket costs a long detour, so the open-side pocket wins.
+        var w = 60; var h = 30;
+        var walk = FullWalkable(w, h);
+        for (var y = 0; y < 26; y++) walk[y * w + 30] = 0; // wall x=30, gap only at y=26..29
+        var visited = new HashSet<long>();
+        for (var y = 0; y < h; y++) for (var x = 0; x < w; x++) visited.Add(MapClear.Key(x, y));
+        for (var y = 2; y < 14; y++) for (var x = 32; x < 44; x++) visited.Remove(MapClear.Key(x, y));   // behind the wall (12×12)
+        for (var y = 2; y < 12; y++) for (var x = 4; x < 14; x++) visited.Remove(MapClear.Key(x, y));    // open side (10×10)
+        Assert.True(MapClear.TryBestSweepTarget(walk, w, h, visited, new NumVec2(27, 6), 6, default, out var bx, out _));
+        Assert.True(bx < 30, $"picked ({bx}) — scored the pocket behind the wall by straight-line distance");
     }
 
     [Fact]

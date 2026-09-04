@@ -43,6 +43,7 @@ public sealed partial class ApiServer
                     pathMove = s.PathMove, move = s.PathMoveNote,
                     bot = s.Bot, botNote = s.BotNote,
                     mapClear = s.MapClear, clear = s.MapClearNote,
+                    farmLoop = s.FarmLoop, farm = s.FarmNote,
                     player = new { x = s.Player.X, y = s.Player.Y },
                     entityCount = s.Entities.Count,
                     poiCount = s.Entities.Count(e => e.Poi),

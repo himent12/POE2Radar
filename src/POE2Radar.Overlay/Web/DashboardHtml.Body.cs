@@ -415,6 +415,13 @@ internal static partial class DashboardHtml
               <input class="numin" type="number" step="1" min="1" max="30" data-set="eventUseRadius"></div>
               <div class="row"><div class="rl">Event max clicks<small>give up on an event (90 s) after this many clicks without effect</small></div>
               <input class="numin" type="number" step="1" min="1" max="20" data-set="eventMaxClicks"></div>
+            <div class="row"><div class="rl hint-row">F11 toggles the farm loop in-game: stand in the area you farm and press F11 &mdash; it map-clears the whole zone, casts a town portal, takes it, walks to the town waypoint and ctrl-clicks the area for a fresh instance, then clears again until F11. Bind PoE2's built-in <b>Portal</b> skill to a key and set it below. Status: <span id="farmState">&mdash;</span></div></div>
+            <div class="row"><div class="rl">Portal key<small>the key your Portal skill is bound to</small></div>
+              <input class="numin keyin" type="text" maxlength="1" data-set="farmPortalKey"></div>
+            <div class="row"><div class="rl">Farm area<small>area code captured by F11 (editable)</small></div>
+              <input class="numin textin" type="text" style="width:150px" data-set="farmAreaCode"></div>
+            <div class="row"><div class="rl">Clear settle<small>ms the zone must stay &ldquo;cleared&rdquo; with nothing nearby before portalling out</small></div>
+              <input class="numin" type="number" step="500" min="500" max="60000" data-set="farmClearSettleMs"></div>
             <div class="row"><div class="rl hint-row">F5 toggles path move in-game (F3 quest follow also arms it). It cannot be armed from this page. Status: <span id="pathMoveState">&mdash;</span></div></div>
           </div>
         </div>

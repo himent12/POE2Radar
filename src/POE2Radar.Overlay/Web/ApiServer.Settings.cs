@@ -62,6 +62,10 @@ public sealed partial class ApiServer
         questUseKey = _settings.QuestUseKey,
         questUseRadius = _settings.QuestUseRadius,
         questUseCooldownMs = _settings.QuestUseCooldownMs,
+        farmPortalKey = _settings.FarmPortalKey,
+        farmClearSettleMs = _settings.FarmClearSettleMs,
+        farmAreaCode = _settings.FarmAreaCode,
+        farmAreaName = string.IsNullOrEmpty(_settings.FarmAreaCode) ? "" : ZoneGuide.Shared.FriendlyName(_settings.FarmAreaCode),
         mapClearStampRadius = _settings.MapClearStampRadius,
         mapClearAggroRange = _settings.MapClearAggroRange,
         mapClearStuckMs = _settings.MapClearStuckMs,
@@ -176,6 +180,9 @@ public sealed partial class ApiServer
                 case "questUseKey" when TryInt(p.Value, out var n): _settings.QuestUseKey = Math.Clamp(n, 1, 255); applied.Add(p.Name); break;
                 case "questUseRadius" when TryFloat(p.Value, out var f): _settings.QuestUseRadius = Math.Clamp(f, 0f, 64f); applied.Add(p.Name); break;
                 case "questUseCooldownMs" when TryInt(p.Value, out var n): _settings.QuestUseCooldownMs = Math.Clamp(n, 0, 60000); applied.Add(p.Name); break;
+                case "farmPortalKey" when TryInt(p.Value, out var n): _settings.FarmPortalKey = Math.Clamp(n, 0, 255); applied.Add(p.Name); break;
+                case "farmClearSettleMs" when TryInt(p.Value, out var n): _settings.FarmClearSettleMs = Math.Clamp(n, 500, 60000); applied.Add(p.Name); break;
+                case "farmAreaCode" when p.Value.ValueKind == JsonValueKind.String: _settings.FarmAreaCode = (p.Value.GetString() ?? "").Trim(); applied.Add(p.Name); break;
                 case "mapClearStampRadius" when TryInt(p.Value, out var n): _settings.MapClearStampRadius = Math.Clamp(n, 4, 64); applied.Add(p.Name); break;
                 case "mapClearAggroRange" when TryFloat(p.Value, out var f): _settings.MapClearAggroRange = Math.Clamp(f, 0f, 500f); applied.Add(p.Name); break;
                 case "mapClearStuckMs" when TryInt(p.Value, out var n): _settings.MapClearStuckMs = Math.Clamp(n, 1000, 120000); applied.Add(p.Name); break;

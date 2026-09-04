@@ -243,6 +243,9 @@ public sealed partial class RadarApp : IDisposable
         if (_botEnabled) { _botNote = "armed"; _questFollowNote = _questFollow ? "armed" : "paused (clear)"; }
         if (_mapClear) _mapClearNote = "armed";
         _moveEnabled = _settings.MoveEnabled;          // restore F5 state (default OFF)
+        _farmAreaCode = _settings.FarmAreaCode ?? "";
+        _farmLoop = _settings.FarmLoopEnabled && !string.IsNullOrEmpty(_farmAreaCode); // F11 farm loop (default OFF)
+        if (_farmLoop) _farmNote = "armed · " + FarmAreaName;
         Console.WriteLine($"Settings: {RadarSettings.FilePath}");
         Console.WriteLine($"Entity names: {EntityNameResolver.Shared.Count} mappings; zones: {ZoneGuide.Shared.Count}");
         _live = new Poe2Live(reader, gameStateSlot);

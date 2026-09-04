@@ -256,6 +256,7 @@ public sealed partial class RadarApp
     private DateTime _macroNextUtc = DateTime.MinValue;
     private DateTime _comboLockUntil = DateTime.MinValue;
     private NumVec2 _macroTargetGrid;
+    private int _macroNextDelayMs;
     private readonly List<ushort> _macroHeld = new();
 
     /// <summary>
@@ -271,6 +272,7 @@ public sealed partial class RadarApp
         _macroTargetId = d.TargetId;
         _macroTargetGrid = d.TargetGrid;
         _macroTargetWorld = d.TargetWorld;
+        _macroNextDelayMs = spec.NextDelayMs;
         var castMs = Math.Max(60, spec.RepeatGapMs);
         var tapMs = Math.Clamp(_settings.CombatTapHoldMs, 30, 200);
         for (var i = 0; i < spec.Repeat; i++)
@@ -310,9 +312,16 @@ public sealed partial class RadarApp
             {
                 case MacroStep.Aim:
                 {
-                    // Live target position when it is still listed; else the position at macro start.
-                    var grid = _macroTargetGrid; var world = _macroTargetWorld;
-                    foreach (var e in entities) if (e.Id == _macroTargetId) { grid = e.Grid; world = e.World; break; }
+                    // Live target position when it is still alive. If it died mid-combo, carry the remaining
+                    // casts over to the next hostile in range (the combo keeps building on the pack); with
+                    // nothing left to hit, drop the rest — including the dodge — instead of casting at a corpse
+                    // and rolling away from it.
+                    if (!TryLiveMacroTarget(entities, player, out var grid, out var world))
+                    {
+                        AbortComboMacro();
+                        _combatNote = "target died → next";
+                        return false;
+                    }
                     _macroTargetGrid = grid;
                     AimAtEntity(grid, world, playerWorld);
                     break;
@@ -322,6 +331,14 @@ public sealed partial class RadarApp
                 case MacroStep.Tap: GameHost.TapKey(vk); break;
                 case MacroStep.DodgeStart:
                 {
+                    // The last cast killed it: nothing to roll away from. Skip the dodge (it would only cancel
+                    // the combo on the next mob) and fall through to the rotation lockout.
+                    if (!TryLiveMacroTarget(entities, player, out _, out _, retarget: false))
+                    {
+                        _macro.Clear();
+                        _macro.Enqueue((MacroStep.Done, 0, TimeSpan.FromMilliseconds(_macroNextDelayMs)));
+                        break;
+                    }
                     // Roll AWAY from the target: hold the opposite direction keys for the roll and aim the cursor
                     // behind us (PoE2 rolls along held WASD, else toward the cursor — cover both).
                     var away = player - _macroTargetGrid;
@@ -354,6 +371,29 @@ public sealed partial class RadarApp
             }
         }
         return _macro.Count > 0;
+    }
+
+    /// <summary>The macro's target if still alive (live position), else — when <paramref name="retarget"/> — the
+    /// next hostile in combat range per the target mode, which becomes the macro's target.</summary>
+    private bool TryLiveMacroTarget(IReadOnlyList<Poe2Live.EntityDot> entities, NumVec2 player,
+        out NumVec2 grid, out POE2Radar.Core.Game.Vector3 world, bool retarget = true)
+    {
+        grid = _macroTargetGrid; world = _macroTargetWorld;
+        foreach (var e in entities)
+        {
+            if (e.Id != _macroTargetId) continue;
+            if (!CombatAssist.IsHostile(e)) break;
+            grid = e.Grid; world = e.World;
+            return true;
+        }
+        if (!retarget) return false;
+        if (!CombatAssist.TryPickTarget(entities, player, _settings.CombatRange, out var next, CombatIgnoreIds(),
+                CombatAssist.ParseTargetMode(_settings.CombatTargetMode)))
+            return false;
+        _macroTargetId = next.Id;
+        _lastTargetId = next.Id;
+        grid = next.Grid; world = next.World;
+        return true;
     }
 
     private void AbortComboMacro()
@@ -531,8 +571,11 @@ public sealed partial class RadarApp
         // Run key: keep it down across the brief "no path" / "arrived" gaps between route replans and
         // re-targets (RunLinger), so it is pressed ONCE and held for the whole trip. Hard stops (combat,
         // unfocused, disarmed, not in game) release it immediately.
-        var hardStop = !MoveArmed || !focused || !inGame || inCombat;
-        if (decision.Moving) _runHoldUntil = now + RunLinger;
+        // The run key is the dodge roll: never press it with a hostile inside attack range (walking between
+        // two mobs of a pack is fine; a roll cancels the cast and resets a built-up combo).
+        var hostileNear = CombatArmed && _hostilesNear > 0;
+        var hardStop = !MoveArmed || !focused || !inGame || inCombat || hostileNear;
+        if (decision.Moving && !hostileNear) _runHoldUntil = now + RunLinger;
         else if (hardStop) _runHoldUntil = DateTime.MinValue;
         if (now < _runHoldUntil && _settings.MoveRunEnabled && _settings.MoveRunKey is >= 1 and <= 255)
             _wantKeys.Add((ushort)_settings.MoveRunKey);
@@ -626,7 +669,7 @@ public sealed partial class RadarApp
     {
         var now = DateTime.UtcNow;
         var decision = QuestFollow.DecideUse(new QuestFollow.UseSnapshot(
-            Armed: _questFollow,
+            Armed: _questFollow || FarmUseArmed,
             Focused: focused,
             InGame: inGame,
             PlayerGrid: player,
@@ -647,7 +690,7 @@ public sealed partial class RadarApp
         _questFollowNote = "use";
     }
 
-    private bool CombatArmed => _combatAssist || _botEnabled || _mapClear;
+    private bool CombatArmed => _combatAssist || _botEnabled || _mapClear || _farmLoop;
 
-    private bool MoveArmed => _moveEnabled || _botEnabled || _mapClear;
+    private bool MoveArmed => _moveEnabled || _botEnabled || _mapClear || _farmLoop;
 }

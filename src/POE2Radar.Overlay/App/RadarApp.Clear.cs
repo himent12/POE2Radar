@@ -3,6 +3,7 @@ using POE2Radar.Overlay.Draw;
 using NumVec2 = System.Numerics.Vector2;
 using POE2Radar.Core;
 using POE2Radar.Core.Game;
+using POE2Radar.Core.Pathfinding;
 using POE2Radar.Overlay.Config;
 using POE2Radar.Overlay.Input;
 using POE2Radar.Core.Native;
@@ -84,7 +85,7 @@ public sealed partial class RadarApp
     private void OnAreaChanged(uint areaHash)
     {
         int count; bool restored;
-        var follow = _questFollow || _mapClear;
+        var follow = _questFollow || _mapClear || _farmLoop;
         _questFollowId = null;
         _questPinId = null;
         _mapClearVisited.Clear();
@@ -190,9 +191,13 @@ public sealed partial class RadarApp
     /// next clear target (unique boss, nearest hostile, then unexplored frontier). Pure pick
     /// lives in <see cref="MapClear.PickTarget"/>.
     /// </summary>
+    /// <summary>A mob whose cell is off walkable ground counts as reachable if walkable ground in the
+    /// player's region lies within this many cells of it (melee range slop).</summary>
+    private const int UnreachableMobSnapCells = 4;
+
     private void ApplyMapClear(string areaCode, NumVec2 player)
     {
-        if (!_mapClear)
+        if (!_mapClear && !_farmLoop)
         {
             _mapClearNote = "OFF (F2)";
             return;
@@ -235,6 +240,11 @@ public sealed partial class RadarApp
             if (imprisoned.Contains(e.Id)) continue; // immune: click the crystal instead
             // Skip monsters the fight watchdog / stuck watchdog gave up on (unreachable, untargetable).
             if (_clearIgnoredMobs.ContainsKey(e.Id) || _combatWatch.IsIgnored(e.Id)) continue;
+            // Provably unreachable (different walkable region — across a chasm, on a ledge): skip it NOW
+            // instead of walking to the edge and waiting out the stuck watchdog.
+            if (terrain is not null && !PathPlanner.IsReachable(terrain,
+                    ((int)player.X, (int)player.Y), ((int)e.Grid.X, (int)e.Grid.Y), UnreachableMobSnapCells))
+                continue;
             _clearMobs.Add(new MapClear.MobHint(
                 "e:" + e.Id, e.Grid,
                 e.Rarity == Poe2Live.Rarity.Unique));
@@ -293,6 +303,7 @@ public sealed partial class RadarApp
             _clearStuckId = null;
         }
 
+        _mapClearIdle = id is null && terrain is not null && _clearMobs.Count == 0 && events.Count == 0;
         _mapClearNote = SetAutoNavTarget(id, terrain is null ? "armed (no terrain)" : "armed (cleared)", "Map clear");
         if (_eventTarget is { } evt && !string.IsNullOrEmpty(_eventNote)) _mapClearNote = _eventNote;
         else if (_eventTarget is { } evt2) _mapClearNote = $"→ {evt2.Label}";

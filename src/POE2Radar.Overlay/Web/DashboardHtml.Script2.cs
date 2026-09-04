@@ -391,6 +391,7 @@ function renderState(){
   const bs=$('#botState'); if(bs) bs.textContent=(s.bot?'ON':'OFF')+(s.botNote?' · '+s.botNote:'');
   $('#kClear').textContent=(s.mapClear?'on':'off')+(s.clear?' · '+s.clear:'');
   const cls=$('#mapClearState'); if(cls) cls.textContent=(s.mapClear?'ON':'OFF')+(s.clear?' · '+s.clear:'');
+  const fst=$('#farmState'); if(fst) fst.textContent=(s.farmLoop?'ON':'OFF')+(s.farm?' · '+s.farm:'');
   $('#kCombat').textContent=(s.combatAssist?'on':'off')+(s.combat?' · '+s.combat:'');
   const cs=$('#combatState'); if(cs) cs.textContent=(s.combatAssist?'ON':'OFF')+(s.combat?' · '+s.combat:'');
   $('#kQuest').textContent=(s.questFollow?'on':'off')+(s.quest?' · '+s.quest:'');

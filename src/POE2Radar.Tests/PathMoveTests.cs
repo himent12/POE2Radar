@@ -200,6 +200,18 @@ public sealed class PathMoveTests
     }
 
     [Fact]
+    public void LineOfSight_from_a_blocked_origin_cell_still_sees_out()
+    {
+        // Player standing on a door-threshold cell the grid marks blocked: the line out of it is clear as long as
+        // every cell AFTER the origin is; a wall further along still blocks.
+        var walk = new byte[8 * 8]; Array.Fill(walk, (byte)1);
+        walk[0] = 0;
+        Assert.True(PathMove.HasLineOfSight(walk, 8, 8, new NumVec2(0, 0), (7, 0)));
+        walk[4] = 0;
+        Assert.False(PathMove.HasLineOfSight(walk, 8, 8, new NumVec2(0, 0), (7, 0)));
+    }
+
+    [Fact]
     public void LineOfSight_bresenham()
     {
         var walk = new byte[8 * 8]; Array.Fill(walk, (byte)1);

@@ -44,6 +44,10 @@ public sealed partial class RadarApp
 
     private const int ClearPathsVk = 0x76;
 
+    private const int FarmLoopVk = 0x7A; // F11
+
+    private DateTime _nextFarmToggleAt = DateTime.MinValue;
+
     // INSERT in-game menu (render thread owns it; clicks arrive on the window thread → volatile).
     private volatile bool _insMenuOpen;
 
@@ -187,6 +191,7 @@ public sealed partial class RadarApp
             case "ins:toggle:combat": ToggleCombatAssist(); return;
             case "ins:toggle:move": TogglePathMove(); return;
             case "ins:toggle:flask": ToggleAutoFlask(); return;
+            case "ins:toggle:farm": ToggleFarmLoop(); return;
             case "ins:skill:add": AddCombatSkill(); return;
         }
         var parts = action.Split(':');
@@ -387,6 +392,12 @@ public sealed partial class RadarApp
         {
             _nextMapClearToggleAt = DateTime.UtcNow.AddMilliseconds(300);
             ToggleMapClear();
+        }
+        // F11 farm loop (debounced): clear the area → portal → town waypoint → fresh instance → repeat.
+        if (Down(FarmLoopVk) && DateTime.UtcNow >= _nextFarmToggleAt)
+        {
+            _nextFarmToggleAt = DateTime.UtcNow.AddMilliseconds(300);
+            ToggleFarmLoop();
         }
         // F5 master kill-switch for path move (debounced). Not writable via the dashboard.
         if (Down(PathMoveVk) && DateTime.UtcNow >= _nextMoveToggleAt)
