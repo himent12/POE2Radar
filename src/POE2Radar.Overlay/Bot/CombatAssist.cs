@@ -37,7 +37,15 @@ public static class CombatAssist
         int RepeatGapMs = 150,
         int HoldMs = 0,
         bool DodgeAfter = false,
-        int NextDelayMs = 0);
+        int NextDelayMs = 0,
+        float ManaBelowPct = 0f,
+        float MinManaPct = 0f,
+        float EsBelowPct = 0f,
+        float TargetHpBelowPct = 0f,
+        bool RequireTarget = true,
+        bool Priority = false,
+        string AimMode = "Target",
+        bool AnyLowResource = false);
 
     public readonly record struct Snapshot(
         bool Armed,
@@ -56,7 +64,12 @@ public static class CombatAssist
         float PlayerHpPct = 100f,
         bool KeyboardOnly = false,    // background mode on Linux: mouse-bound skills cannot be delivered
         bool Busy = false,            // a combo macro is still executing → no new decision
-        uint PreferredTargetId = 0);  // stick to this target while it is alive and in range (no hopping between mobs)
+        uint PreferredTargetId = 0,
+        float PlayerManaPct = 100f,
+        float PlayerEsPct = 100f,
+        bool HasEs = false,
+        bool VitalsKnown = true,
+        bool Fleeing = false);  // stick to this target while it is alive and in range (no hopping between mobs)
 
     /// <summary>
     /// <see cref="HasTarget"/> + <see cref="TargetGrid"/> / <see cref="TargetWorld"/> name the hostile the
@@ -82,66 +95,74 @@ public static class CombatAssist
     /// skipping slots that are disabled, cooling down, out of range of the target, below their
     /// <see cref="Skill.MinTargets"/> count, rare-only against a normal, or HP-gated. One tap per call.
     /// </summary>
-    public static Decision Decide(in Snapshot s)
+public static Decision Decide(in Snapshot s)
     {
         if (!s.Armed) return Idle(0, "OFF (F4)");
         if (!s.InGame) return Idle(0, "paused (not in game)");
         if (!s.Focused) return Idle(0, "paused (PoE2 not focused)");
+        if (s.VitalsKnown && s.PlayerHpPct <= 0f) return Idle(s.NextIndex, "paused (dead)");
         if (s.Busy) return Idle(s.NextIndex, "casting");
-
         var skills = s.Skills;
         var n = skills?.Count ?? 0;
         if (n == 0) return Idle(0, "no skills");
-
-        var cursor = s.NextIndex % n;
-        if (cursor < 0) cursor += n;
-
+        var cursor = ((s.NextIndex % n) + n) % n;
         var globalRange = Math.Max(0f, s.Range);
-        if (!TryPickTarget(s.Entities, s.PlayerGrid, globalRange, out var target, s.IgnoreIds, s.Mode))
-            return Idle(cursor, "armed");
-        // Stickiness: keep hitting the mob we were hitting while it is alive and in range — hopping to the
-        // nearest one every tick re-aims mid-combo and wastes casts. Rarity mode may still upgrade to a rarer mob.
-        if (s.PreferredTargetId != 0 && s.PreferredTargetId != target.Id
+        var hasTarget = TryPickTarget(s.Entities, s.PlayerGrid, globalRange, out var target, s.IgnoreIds, s.Mode);
+        if (hasTarget && s.PreferredTargetId != 0 && s.PreferredTargetId != target.Id
             && TryFindHostile(s.Entities, s.PreferredTargetId, s.PlayerGrid, globalRange, s.IgnoreIds, out var kept)
             && (s.Mode != TargetMode.Rarity || RarityRank(kept.Rarity) >= RarityRank(target.Rarity)))
             target = kept;
-
-        var tdx = target.Grid.X - s.PlayerGrid.X;
-        var tdy = target.Grid.Y - s.PlayerGrid.Y;
-        var targetDistSq = tdx * tdx + tdy * tdy;
-        var targetIsRare = target.Rarity is Poe2Live.Rarity.Rare or Poe2Live.Rarity.Unique;
         var inGlobal = CountHostilesInRange(s.Entities, s.PlayerGrid, globalRange, s.IgnoreIds);
-
         var last = s.LastFireUtc;
-        var lastN = last?.Count ?? 0;
+        // Emergency slots precede the rotation, but never interrupt a held-key macro.
+        for (var pass = 0; pass < 2; pass++)
         for (var i = 0; i < n; i++)
         {
-            var idx = s.PriorityOrder ? i : (cursor + i) % n;
+            var idx = pass == 0 || s.PriorityOrder ? i : (cursor + i) % n;
             var sk = skills![idx];
-            if (!sk.Enabled) continue;
+            if (sk.Priority != (pass == 0) || !sk.Enabled) continue;
+            if (s.Fleeing && !sk.Priority) continue;
             if (sk.Key is < 1 or > 255) continue;
             if (s.KeyboardOnly && sk.Key is 0x01 or 0x02 or 0x04 or 0x05 or 0x06) continue;
+            if ((sk.RequireTarget || sk.AimMode != "Cursor" || sk.RareOnly || sk.TargetHpBelowPct > 0f) && !hasTarget) continue;
             var skillRange = sk.Range > 0f ? sk.Range : globalRange;
-            if (targetDistSq > skillRange * skillRange) continue;
-            if (sk.RareOnly && !targetIsRare) continue;
-            if (sk.HpBelowPct > 0f && s.PlayerHpPct >= sk.HpBelowPct) continue;
-            if (sk.MinTargets > 1)
+            if (sk.RequireTarget && hasTarget && NumVec2.DistanceSquared(target.Grid, s.PlayerGrid) > skillRange * skillRange) continue;
+            if (sk.RareOnly && target.Rarity is not (Poe2Live.Rarity.Rare or Poe2Live.Rarity.Unique)) continue;
+            var resourceGate = sk.HpBelowPct > 0f || sk.ManaBelowPct > 0f || sk.MinManaPct > 0f || sk.EsBelowPct > 0f;
+            if (resourceGate && !s.VitalsKnown) continue;
+            var lowConditions = 0;
+            var matchedLowConditions = 0;
+            if (sk.HpBelowPct > 0f)
             {
-                var count = sk.Range > 0f && sk.Range < globalRange
-                    ? CountHostilesInRange(s.Entities, s.PlayerGrid, skillRange, s.IgnoreIds)
-                    : inGlobal;
+                lowConditions++;
+                if (float.IsFinite(s.PlayerHpPct) && s.PlayerHpPct < sk.HpBelowPct) matchedLowConditions++;
+            }
+            if (sk.ManaBelowPct > 0f)
+            {
+                lowConditions++;
+                if (float.IsFinite(s.PlayerManaPct) && s.PlayerManaPct < sk.ManaBelowPct) matchedLowConditions++;
+            }
+            if (sk.EsBelowPct > 0f)
+            {
+                lowConditions++;
+                if (s.HasEs && float.IsFinite(s.PlayerEsPct) && s.PlayerEsPct < sk.EsBelowPct) matchedLowConditions++;
+            }
+            if (lowConditions > 0 && (sk.AnyLowResource ? matchedLowConditions == 0 : matchedLowConditions != lowConditions)) continue;
+            if (sk.MinManaPct > 0f && (!float.IsFinite(s.PlayerManaPct) || s.PlayerManaPct < sk.MinManaPct)) continue;
+            if (sk.TargetHpBelowPct > 0f && (target.HpMax <= 0 || 100f * target.HpCur / target.HpMax >= sk.TargetHpBelowPct)) continue;
+            if (sk.MinTargets > 0)
+            {
+                var count = sk.Range > 0f ? CountHostilesInRange(s.Entities, s.PlayerGrid, skillRange, s.IgnoreIds) : inGlobal;
                 if (count < sk.MinTargets) continue;
             }
-            var firedAt = idx < lastN ? last![idx] : DateTime.MinValue;
-            var cooldown = TimeSpan.FromMilliseconds(Math.Max(0, sk.CooldownMs));
-            if (s.NowUtc - firedAt < cooldown) continue;
-            var next = s.PriorityOrder ? cursor : (idx + 1) % n;
-            return new(true, (ushort)sk.Key, idx, next, "fired",
-                HasTarget: true, TargetGrid: target.Grid, TargetWorld: target.World, TargetId: target.Id, HostilesInRange: inGlobal);
+            var firedAt = idx < (last?.Count ?? 0) ? last![idx] : DateTime.MinValue;
+            if (s.NowUtc - firedAt < TimeSpan.FromMilliseconds(Math.Max(0, sk.CooldownMs))) continue;
+            var next = sk.Priority || s.PriorityOrder ? cursor : (idx + 1) % n;
+            return new(true, (ushort)sk.Key, idx, next, sk.Priority ? "priority cast" : "fired",
+                HasTarget: hasTarget, TargetGrid: target.Grid, TargetWorld: target.World, TargetId: target.Id, HostilesInRange: inGlobal);
         }
-
-        return new(false, 0, 0, cursor, "armed",
-            HasTarget: true, TargetGrid: target.Grid, TargetWorld: target.World, TargetId: target.Id, HostilesInRange: inGlobal);
+        return new(false, 0, 0, cursor, "armed", HasTarget: hasTarget,
+            TargetGrid: target.Grid, TargetWorld: target.World, TargetId: target.Id, HostilesInRange: inGlobal);
     }
 
     private static Decision Idle(int next, string note) => new(false, 0, 0, next, note);

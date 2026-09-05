@@ -54,7 +54,7 @@ async function loadSettings(){
     mono = s.monoliths || {};
     ce = s.currencyExchange || {};
     combatSkillsData = Array.isArray(s.combatSkills)
-      ? s.combatSkills.map(sk=>({key:sk.key||sk.vk||0x51, cooldownMs:sk.cooldownMs??400, range:sk.range||0}))
+      ? s.combatSkills.map(sk=>({...sk, key:sk.key||sk.vk||0x51, cooldownMs:sk.cooldownMs??400, range:sk.range||0}))
       : [];
     renderHpBars(); renderTerrain(); renderGround(); renderHover(); renderMono(); renderExchange(); renderCombatSkills();
   }catch(e){}
@@ -185,48 +185,65 @@ function nextQwer(){
   const used=new Set(combatSkillsData.map(s=>s.key));
   return QWER.find(k=>!used.has(k)) || 0x51;
 }
+const skillPresets={
+  attack:{name:'Main attack',cooldownMs:400},
+  escape:{name:'Low-life escape',hpBelowPct:35,priority:true,aimMode:'Away',cooldownMs:5000},
+  guard:{name:'Emergency guard',hpBelowPct:45,requireTarget:false,minTargets:0,priority:true,aimMode:'Cursor',cooldownMs:5000},
+    danger:{name:'Low life OR shield guard',hpBelowPct:35,esBelowPct:25,anyLowResource:true,requireTarget:false,minTargets:0,priority:true,aimMode:'Cursor',cooldownMs:5000},
+    surrounded:{name:'Escape when surrounded',minTargets:4,range:12,priority:true,aimMode:'Away',cooldownMs:5000},
+  mana:{name:'Mana recovery',manaBelowPct:30,requireTarget:false,minTargets:0,priority:true,aimMode:'Cursor',cooldownMs:8000},
+  shield:{name:'Shield recovery',esBelowPct:30,requireTarget:false,minTargets:0,priority:true,aimMode:'Cursor',cooldownMs:8000},
+  pack:{name:'Pack clear',minTargets:3,cooldownMs:1500},
+  boss:{name:'Rare / boss skill',rareOnly:true,minManaPct:25,cooldownMs:3000},
+  execute:{name:'Finisher',targetHpBelowPct:20,cooldownMs:1000}
+};
+function skillSummary(sk){
+  const rules=[],low=[];
+  if(sk.hpBelowPct>0) low.push('life < '+sk.hpBelowPct+'%');
+  if(sk.manaBelowPct>0) low.push('mana < '+sk.manaBelowPct+'%');
+  if(sk.esBelowPct>0) low.push('ES < '+sk.esBelowPct+'% (requires ES pool)');
+  if(low.length) rules.push('('+low.join(sk.anyLowResource?' OR ':' AND ')+')');
+  if(sk.minManaPct>0) rules.push('mana ≥ '+sk.minManaPct+'%');
+  if(sk.targetHpBelowPct>0) rules.push('enemy life < '+sk.targetHpBelowPct+'%');
+  if(sk.rareOnly) rules.push('rare / unique enemy');
+  if((sk.minTargets??1)>0) rules.push((sk.minTargets??1)+'+ enemies in range');
+  if(sk.requireTarget!==false) rules.push('target required');
+  return (sk.priority?'Priority · ':'Rotation · ')+(rules.join(' AND ')||'whenever ready');
+}
 function renderCombatSkills(){
   const box=$('#combatSkills'); if(!box) return;
-  if(!combatSkillsData.length){
-    box.innerHTML='<span class="hint-row" style="opacity:.6">No skills. Add a key (QWER) to rotate through.</span>';
-    return;
-  }
-  box.innerHTML=combatSkillsData.map((sk,i)=>
-    '<div class="skrow" data-i="'+i+'">'
-    +'<span class="skn">'+(i+1)+'</span>'
-    +'<input class="numin keyin sk-key" type="text" maxlength="1" value="'+esc(vkToChar(sk.key))+'" title="skill key">'
-    +'<input class="numin sk-cd" type="number" step="50" min="0" value="'+(sk.cooldownMs??400)+'" title="cooldown ms">'
-    +'<input class="numin sk-rg" type="number" step="1" min="0" max="200" value="'+(sk.range||0)+'" title="optional range (0 = global)">'
-    +'<input class="numin sk-min" type="number" step="1" min="1" max="20" value="'+(sk.minTargets||1)+'" title="only fire with at least this many hostiles in range (AoE)">'
-    +'<input class="numin sk-hp" type="number" step="5" min="0" max="100" value="'+(sk.hpBelowPct||0)+'" title="only fire while your life is under this % (0 = always)">'
-    +'<input type="checkbox" class="sk-rare" '+(sk.rareOnly?'checked':'')+' title="only against rare / unique">'
-    +'<input type="checkbox" class="sk-on" '+(sk.enabled===false?'':'checked')+' title="enabled">'
-    +'<button type="button" class="delbtn sk-del">Remove</button></div>'
-    +'<div class="skrow skcombo" data-i="'+i+'"><span class="skn"></span>'
-    +'<label>×<input class="numin sk-rep" type="number" step="1" min="1" max="10" value="'+(sk.repeat||1)+'" title="tap the key this many times"></label>'
-    +'<label>cast ms<input class="numin sk-gap" type="number" step="10" min="60" max="2000" value="'+(sk.repeatGapMs||150)+'" title="ms between repeated casts — also the wait before a dodge so the last cast finishes"></label>'
-    +'<label>hold<input class="numin sk-hold" type="number" step="50" min="0" max="10000" value="'+(sk.holdMs||0)+'" title="ms to hold the key (0 = tap)"></label>'
-    +'<label><input type="checkbox" class="sk-dodge" '+(sk.dodgeAfter?'checked':'')+'> dodge after</label>'
-    +'<label>then wait<input class="numin sk-next" type="number" step="50" min="0" max="10000" value="'+(sk.nextDelayMs||0)+'" title="ms the whole rotation waits after this cast"></label></div>'
-  ).join('');
-  $$('#combatSkills .skcombo').forEach(row=>{
-    const i=+row.dataset.i, sk=combatSkillsData[i]; if(!sk) return;
-    const num=(cls,key,lo,hi)=>{ row.querySelector(cls).onchange=e=>{ const v=parseInt(e.target.value,10); if(!isNaN(v)){ sk[key]=Math.max(lo,Math.min(hi,v)); saveCombatSkills(); } }; };
-    num('.sk-rep','repeat',1,10); num('.sk-gap','repeatGapMs',30,2000); num('.sk-hold','holdMs',0,10000); num('.sk-next','nextDelayMs',0,10000);
-    row.querySelector('.sk-dodge').onchange=e=>{ sk.dodgeAfter=!!e.target.checked; saveCombatSkills(); };
-  });
-  $$('#combatSkills .skrow:not(.skcombo)').forEach(row=>{
-    const i=+row.dataset.i, sk=combatSkillsData[i]; if(!sk) return;
-    row.querySelector('.sk-key').onchange=e=>{ const vk=charToVk(e.target.value); if(vk){ sk.key=vk; saveCombatSkills(); } e.target.value=vkToChar(sk.key); };
-    row.querySelector('.sk-cd').onchange=e=>{ const v=parseFloat(e.target.value); if(!isNaN(v)){ sk.cooldownMs=Math.max(0,v); saveCombatSkills(); } };
-    row.querySelector('.sk-rg').onchange=e=>{ const v=parseFloat(e.target.value); if(!isNaN(v)){ sk.range=Math.max(0,v); saveCombatSkills(); } };
-    row.querySelector('.sk-min').onchange=e=>{ const v=parseInt(e.target.value,10); if(!isNaN(v)){ sk.minTargets=Math.max(1,v); saveCombatSkills(); } };
-    row.querySelector('.sk-hp').onchange=e=>{ const v=parseFloat(e.target.value); if(!isNaN(v)){ sk.hpBelowPct=Math.max(0,Math.min(100,v)); saveCombatSkills(); } };
-    row.querySelector('.sk-rare').onchange=e=>{ sk.rareOnly=!!e.target.checked; saveCombatSkills(); };
-    row.querySelector('.sk-on').onchange=e=>{ sk.enabled=!!e.target.checked; saveCombatSkills(); };
-    row.querySelector('.sk-del').onclick=()=>{ combatSkillsData.splice(i,1); renderCombatSkills(); saveCombatSkills(); };
+  if(!combatSkillsData.length){box.innerHTML='<p class="hint-row">No skills. Add a skill, choose its key, then pick a starting preset.</p>';return;}
+  const numeric=(sk,key,label,max=100,step=5,fallback=0)=>'<label>'+label+'<input class="numin" data-num="'+key+'" type="number" min="0" max="'+max+'" step="'+step+'" value="'+(sk[key]??fallback)+'"></label>';
+  const flag=(sk,key,label,fallback=false)=>'<label class="skill-check"><input type="checkbox" data-flag="'+key+'" '+((sk[key]??fallback)?'checked':'')+'>'+label+'</label>';
+  const keyOptions=[[1,'Left mouse'],[2,'Right mouse'],[4,'Middle mouse'],[5,'Mouse 4'],[6,'Mouse 5'],[32,'Space'],...Array.from('1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ',k=>[k.charCodeAt(0),k])];
+  box.innerHTML=combatSkillsData.map((sk,i)=>{
+    const keys=keyOptions.some(k=>k[0]===sk.key)?keyOptions:[...keyOptions,[sk.key,'VK '+sk.key]];
+    const warning=sk.minManaPct>0&&sk.manaBelowPct>0&&sk.minManaPct>=sk.manaBelowPct&&(!sk.anyLowResource||(!(sk.hpBelowPct>0)&&!(sk.esBelowPct>0)))?'Mana conditions conflict: minimum mana must be below the low-mana threshold.':sk.requireTarget===false&&((sk.minTargets??1)>0||sk.rareOnly||sk.targetHpBelowPct>0||sk.aimMode!=='Cursor')?'Enemy-dependent rules still require enemies. For recovery outside combat, choose no re-aim, Min enemies 0, and disable target rules.':'';
+    return '<article class="skill-card" data-i="'+i+'"><header><span class="skill-order">'+(i+1)+'</span><label class="skill-name-label">Skill name<input class="skill-name" maxlength="60" value="'+esc(sk.name||'')+'" placeholder="Name this skill"></label>'+flag(sk,'enabled','Enabled',true)+'<button type="button" data-move="-1" aria-label="Move skill up" '+(i===0?'disabled':'')+'>↑</button><button type="button" data-move="1" aria-label="Move skill down" '+(i===combatSkillsData.length-1?'disabled':'')+'>↓</button><button type="button" class="sk-del">Remove</button></header>'
+      +'<p class="skill-summary">'+esc(skillSummary(sk))+'</p><p class="skill-warning" '+(warning?'':'hidden')+'>'+esc(warning)+'</p>'
+      +'<div class="skill-fields"><label>Key<select class="sk-key">'+keys.map(([key,label])=>'<option value="'+key+'" '+(sk.key===key?'selected':'')+'>'+label+'</option>').join('')+'</select></label>'
+      +'<label>Starting preset<select class="sk-preset"><option value="">Custom rules</option>'+Object.entries(skillPresets).map(([key,p])=>'<option value="'+key+'">'+p.name+'</option>').join('')+'</select></label>'
+      +numeric(sk,'cooldownMs','Cooldown · ms',60000,50,400)+numeric(sk,'range','Range · 0 = global',200,1)
+      +'<label>Aim<select class="sk-aim">'+[['Target','At enemy'],['Cursor','Self / no re-aim'],['Away','Away from enemy']].map(([key,label])=>'<option value="'+key+'" '+((sk.aimMode||'Target')===key?'selected':'')+'>'+label+'</option>').join('')+'</select></label></div>'
+      +'<fieldset><legend>When to cast</legend><div class="skill-fields">'
+      +numeric(sk,'hpBelowPct','Life below · %')+numeric(sk,'manaBelowPct','Mana below · %')+numeric(sk,'minManaPct','Minimum mana · %')+numeric(sk,'esBelowPct','ES below · %')+numeric(sk,'targetHpBelowPct','Enemy life below · %')+numeric(sk,'minTargets','Min enemies · 0 = none',20,1,1)
+      +'</div><div class="skill-flags">'+flag(sk,'anyLowResource','Any low resource (OR)')+flag(sk,'requireTarget','Require enemy target',true)+flag(sk,'rareOnly','Rare / unique only')+flag(sk,'priority','Priority before rotation')+'</div><small>0% disables a rule. Low life, mana and ES normally all must match; OR lets any one trigger the cast. Minimum mana and enemy rules always apply. Priority waits for the current combo; cooldown still applies. No re-aim leaves your cursor where it is.</small></fieldset>'
+      +'<details><summary>Combo & timing</summary><div class="skill-fields">'+numeric(sk,'repeat','Taps',10,1,1)+numeric(sk,'repeatGapMs','Cast interval · ms',2000,10,150)+numeric(sk,'holdMs','Hold · ms',10000,50)+numeric(sk,'nextDelayMs','Wait after · ms',10000,50)+'</div>'+flag(sk,'dodgeAfter','Dodge after (needs an enemy)')+'</details></article>';
+  }).join('');
+  box.querySelectorAll('.skill-card').forEach(row=>{
+    const i=+row.dataset.i,sk=combatSkillsData[i];
+    const save=()=>{saveCombatSkills();renderCombatSkills();};
+    row.querySelector('.skill-name').onchange=e=>{sk.name=e.target.value.trim().slice(0,60);save();};
+    row.querySelector('.sk-key').onchange=e=>{sk.key=+e.target.value;save();};
+    row.querySelector('.sk-aim').onchange=e=>{sk.aimMode=e.target.value;save();};
+    row.querySelectorAll('[data-num]').forEach(input=>{input.onchange=()=>{let v=Number(input.value);if(!Number.isFinite(v))return;const k=input.dataset.num;const lo=k==='repeat'?1:k==='repeatGapMs'?30:0;v=Math.max(lo,Math.min(+input.max,v));if(['cooldownMs','minTargets','repeat','repeatGapMs','holdMs','nextDelayMs'].includes(k))v=Math.round(v);sk[k]=v;save();};});
+    row.querySelectorAll('[data-flag]').forEach(input=>{input.onchange=()=>{sk[input.dataset.flag]=input.checked;save();};});
+    row.querySelector('.sk-preset').onchange=e=>{const preset=skillPresets[e.target.value];if(!preset)return;Object.assign(sk,{anyLowResource:false,hpBelowPct:0,manaBelowPct:0,minManaPct:0,esBelowPct:0,targetHpBelowPct:0,requireTarget:true,minTargets:1,rareOnly:false,priority:false,aimMode:'Target',repeat:1,repeatGapMs:150,holdMs:0,dodgeAfter:false,nextDelayMs:0},preset);save();};
+    row.querySelectorAll('[data-move]').forEach(button=>{button.onclick=()=>{const j=i+Number(button.dataset.move);if(j<0||j>=combatSkillsData.length)return;[combatSkillsData[i],combatSkillsData[j]]=[combatSkillsData[j],combatSkillsData[i]];save();};});
+    row.querySelector('.sk-del').onclick=()=>{combatSkillsData.splice(i,1);save();};
   });
 }
+
 
 /* ── icon / HP-bar / mechanics editors (nested objects: POST the whole {styles}/{hpBars}) ── */
 let styles=null, hpBars=null, terrain=null;

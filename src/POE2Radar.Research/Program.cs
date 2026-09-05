@@ -28,6 +28,18 @@ Console.WriteLine($"Attached to {process.ProcessName} (PID {process.ProcessId})"
 Console.WriteLine($"Main module base: 0x{process.MainModuleBase:X16}  size: 0x{process.MainModuleSize:X}");
 var reader = new MemoryReader(process);
 
+if (HasFlag(args, "--loadout"))
+{
+    var slots = AobPatterns.GameStateRefs.SelectMany(p => AobScanner.ScanForResolvedAddresses(process, reader, p)).Distinct().ToArray();
+    if (slots.Length != 1) { Console.Error.WriteLine("GameState signature is not unique."); return 1; }
+    var loadout = new Poe2Live(reader, slots[0]).ReadLoadout();
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(loadout, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+    return loadout.Complete ? 0 : 1;
+}
+
+if (HasFlag(args, "--patch-check"))
+    return PatchCheck.Run(process, reader);
+
 if (HasFlag(args, "--aob"))
     return RunAobScan(process, reader);
 

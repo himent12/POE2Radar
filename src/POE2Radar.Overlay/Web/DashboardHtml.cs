@@ -11,5 +11,5 @@ namespace POE2Radar.Overlay.Web;
 internal static partial class DashboardHtml
 {
     /// <summary>The whole inlined document: head + body + script (concatenated at compile time).</summary>
-    public const string Page = Head + Body + Script + Script2;
+    public const string Page = Head + Body + Script + BuildScript + Script2;
 }

@@ -204,7 +204,7 @@ public sealed partial class RadarApp
             : default;
         var inCombat = watch.PauseMove;
         _inCombat = inCombat || watch.Flee;
-        TickCombatAssist(inGame, focused, player, combatEntities, playerWorld, watch);
+        TickCombatAssist(inGame, focused, player, combatEntities, playerWorld, watch, localPlayer);
         // Low HP: the mover runs the flee point instead of the route (attacks are held above).
         IReadOnlyList<SelectedPath> movePaths = selectedPaths;
         if ((watch.Flee || watch.Kite) && CombatWatch.TryFleePoint(combatEntities, player, _settings.CombatRange,

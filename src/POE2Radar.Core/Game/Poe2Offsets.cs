@@ -27,14 +27,14 @@ public static class Poe2
     /// </summary>
     public static class GameState
     {
-        public const int CurrentStatePtr = 0x08;  // (GH2) StdVector — current state
-        public const int States          = 0x48;  // (GH2) inline array of 12 × StdTuple2D<IntPtr> (16 bytes each)
-        public const int StateSlotStride = 0x10;   // each slot is StdTuple2D<IntPtr> (ptr + extra)
-        public const int StateSlotCount  = 12;
+        public const int CurrentStatePtr = 0x10; // ✓ live: active-state vector after updated root header.
+        public const int States = 0x50; // ✓ inline array of 12 shared-pointer pairs.
+        public const int StateSlotStride = 0x10;
+        public const int StateSlotCount = 12;
     }
 
     /// <summary>
-    /// InGameState. Resolve it from <c>GameState.CurrentStatePtr</c> (StdVector @ +0x08): the
+    /// InGameState. Resolve it from <c>GameState.CurrentStatePtr</c> (StdVector @ +0x10): the
     /// vector's first element is the active state pointer when in-game. ✓ (matches States[] slot).
     /// </summary>
     public static class InGameState
@@ -60,14 +60,14 @@ public static class Poe2
     /// </summary>
     public static class AreaInstance
     {
-        public const int AreaInfoPtr      = 0x0A0;  // ✓ → AreaInfo; +0x00 → UTF-16 "Code\0Name\0" (Code validated 'G1_town')
-        public const int LocalPlayer      = 0x5C0;  // ✓ → player Entity (value-scanned player matched here). 2026-07-16 patch shifted +0x08 (was 0x5B8); 2026-06-25 shifted +0x18 (was 0x5A0).
-        public const int ServerDataPtr    = 0x5A0;  // ✓ → ServerData (gateway to player inventories; +0x20 here = LocalPlayer @ 0x5C0). 2026-07-16 patch shifted +0x08 (was 0x598); 2026-06-25 shifted +0x18 (was 0x580).
-        public const int AwakeEntities    = 0x6E0;  // ✓ StdMap of live entities (id→EntityPtr). 2026-07-16 patch shifted +0x08 (was 0x6D8); 2026-06-25 shifted +0x18 (was 0x6C0).
-        public const int SleepingEntities = 0x6F0;  // ✓ StdMap. 2026-07-16 patch shifted +0x08 (was 0x6E8); 2026-06-25 shifted +0x18 (was 0x6D0).
-        public const int TerrainMetadata  = 0x8C0;  // ✓ TerrainStruct base. 2026-07-16 patch shifted +0x08 (was 0x8B8); 2026-06-25 shifted +0x18 (was 0x8A0).
-        public const int CurrentAreaLevel = 0x0C4;  // ✓ int — per-area, validated 27/32 (GH2's 0xBC drifted)
-        public const int CurrentAreaHash  = 0x11C;  // ✓ uint — per-area random hash (GH2's 0xFC drifted; +0x120 paired seed)
+        public const int AreaInfoPtr = 0x098; // ✓ G2_10_1.
+        public const int LocalPlayer = 0x5D0; // ✓ player metadata; previous build 0x5C0.
+        public const int ServerDataPtr = 0x5B0; // ✓ 117 inventory entries with valid shared-pointer pairs.
+        public const int AwakeEntities = 0x6F0; // ✓ 227 entities including the local player.
+        public const int SleepingEntities = 0x700; // ✓ 5070 entities with valid metadata.
+        public const int TerrainMetadata = 0x8D0; // ✓ 103×103 tiles; 2807265 grid bytes at stride 1185.
+        public const int CurrentAreaLevel = 0x0BC; // ✓ area level 17.
+        public const int CurrentAreaHash = 0x114; // Header shifted -0x08; paired seed at +0x118.
     }
 
     /// <summary>Entity StdMap conventions. Maps live at AreaInstance+0x6C0 (Awake) / +0x6D0 (Sleeping).</summary>
@@ -282,7 +282,7 @@ public static class Poe2
     /// +0x08 ptr InventoryStruct, +0x10 ptr (= +0x08 − 0x10, the fingerprint invariant).</summary>
     public static class ServerData
     {
-        public const int League = 0x21E0;  // ✓ live 2026-06-22 (--league) — std::wstring current league name, EXACTLY poe.ninja/poe2scout's Value (e.g. "HC Runes of Aldur", "Standard", "Hardcore"). The HC/SC prefix lets us auto-detect the price league.
+        public const int League = 0x2160;  // ✓ live 2026-06-22 (--league) — std::wstring current league name, EXACTLY poe.ninja/poe2scout's Value (e.g. "HC Runes of Aldur", "Standard", "Hardcore"). The HC/SC prefix lets us auto-detect the price league.
         public const int PlayerServerDataVec = 0x48;  // ✓ StdVector<IntPtr>; [0] → ServerDataStructure
         public const int PlayerInventoriesVec = 0x320; // ✓ (on ServerDataStructure) StdVector<InventoryArrayStruct>
         public const int InvArrayStride = 0x18;        // ✓ sizeof(InventoryArrayStruct)
@@ -457,9 +457,9 @@ public static class Poe2
     /// </summary>
     public static class MapUiElement
     {
-        public const int Shift        = 0x368; // ✓ StdTuple2D<float>
-        public const int DefaultShift = 0x370; // ✓ StdTuple2D<float> (0,-20)
-        public const int Zoom         = 0x3A8; // ✓ float (0.5 live)
+        public const int Shift = 0x350; // ✓ (0,0).
+        public const int DefaultShift = 0x358; // ✓ (0,-20), two map elements.
+        public const int Zoom = 0x390; // ✓ 0.5 with large map open.
     }
 
     /// <summary>UiElement base — ✓ validated live (GH2's offsets drifted: Self 0x30→0x8, Flags 0x1B8→0x180).
@@ -474,10 +474,10 @@ public static class Poe2
         public const int Parent         = 0xB8;  // (community) parent UiElement; true UI root = *(UiRoot+0xB8)
         public const int RelativePos    = 0x118; // ✓ StdTuple2D<float> position relative to parent (varies per atlas node)
         public const int LocalScaleMul  = 0x130; // float local scale multiplier (also the atlas zoom on node elements)
-        public const int Flags          = 0x180; // ✓ uint; IsVisibleLocal = bit 0x0B (toggle-diff: 0x2EF1↔0x26F1)
+        public const int Flags          = 0x168; // ✓ Tab toggle: 0x5026F1 → 0x502EF1.
         public const int FlagVisibleBit = 0x0B;  // ✓ visible bit (set when shown)
         public const int FlagModifyPosBit = 0x0A; // when set, PositionModifier (+0xF0) is added to the parent pos
-        public const int ScaleIndex     = 0x18A; // byte; selects which axis scale(s) apply (1=v1,2=v2,3=v1×v2). root=3
+        public const int ScaleIndex     = 0x172; // byte; selects which axis scale(s) apply (1=v1,2=v2,3=v1×v2). root=3
         public const int Text           = 0x390; // std::wstring of the element's displayed text (font name @ +0xC8).
                                                   // Validated live 2026-06-14: every text element (loot tags, skill
                                                   // rows, runeforge rows) holds its UTF-16 string here.

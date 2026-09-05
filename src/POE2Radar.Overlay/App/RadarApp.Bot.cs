@@ -30,6 +30,7 @@ public sealed partial class RadarApp
     private bool _combatAssist;
 
     private DateTime[] _combatFiredAt = Array.Empty<DateTime>();
+    private readonly Dictionary<int, DateTime> _combatKeyFiredAt = new();
 
     private int _combatNextIndex;
 
@@ -174,21 +175,24 @@ public sealed partial class RadarApp
     /// </summary>
     private void TickCombatAssist(bool inGame, bool focused, NumVec2 player,
         IReadOnlyList<Poe2Live.EntityDot> entities, POE2Radar.Core.Game.Vector3? playerWorld,
-        CombatWatch.Result watch)
+        CombatWatch.Result watch, nint localPlayer)
     {
         var now = DateTime.UtcNow;
         var src = _settings.CombatSkills;
         var n = src?.Count ?? 0;
-        EnsureCombatClocks(n);
+        EnsureCombatClocks(src);
         var specs = new CombatAssist.Skill[n];
         for (var i = 0; i < n; i++)
         {
             var sk = src![i];
-            specs[i] = new CombatAssist.Skill(sk.Key, sk.CooldownMs, sk.Range, Math.Max(1, sk.MinTargets), sk.RareOnly, sk.HpBelowPct, sk.Enabled,
-                Math.Clamp(sk.Repeat, 1, 10), Math.Clamp(sk.RepeatGapMs, 30, 2000), Math.Clamp(sk.HoldMs, 0, 10000), sk.DodgeAfter, Math.Clamp(sk.NextDelayMs, 0, 10000));
+            specs[i] = new CombatAssist.Skill(sk.Key, sk.CooldownMs, sk.Range, Math.Max(0, sk.MinTargets), sk.RareOnly, sk.HpBelowPct, sk.Enabled,
+                Math.Clamp(sk.Repeat, 1, 10), Math.Clamp(sk.RepeatGapMs, 30, 2000), Math.Clamp(sk.HoldMs, 0, 10000), sk.DodgeAfter, Math.Clamp(sk.NextDelayMs, 0, 10000),
+                sk.ManaBelowPct, sk.MinManaPct, sk.EsBelowPct, sk.TargetHpBelowPct, sk.RequireTarget, sk.Priority, sk.AimMode, sk.AnyLowResource);
         }
         // A combo macro in flight owns the keyboard: advance it and skip deciding.
+        if (!CombatArmed || !inGame || !focused || _playerDead || (watch.Flee && !_macroPriority)) AbortComboMacro();
         var busy = RunComboMacro(now, player, playerWorld, entities) || now < _comboLockUntil;
+        var vitals = inGame ? _liveRender.PlayerVitals(localPlayer) : null;
         var decision = CombatAssist.Decide(new CombatAssist.Snapshot(
             Armed: CombatArmed,
             Focused: focused,
@@ -203,10 +207,12 @@ public sealed partial class RadarApp
             IgnoreIds: CombatIgnoreIds(),
             Mode: CombatAssist.ParseTargetMode(_settings.CombatTargetMode),
             PriorityOrder: string.Equals(_settings.CombatRotationMode, "Priority", StringComparison.OrdinalIgnoreCase),
-            PlayerHpPct: _hpPct,
+            PlayerHpPct: vitals?.HpPct ?? 100f,
             KeyboardOnly: GameHost.IsBackgroundActive && !GameHost.BackgroundSupportsMouse,
             Busy: busy,
-            PreferredTargetId: _lastTargetId));
+            PreferredTargetId: _lastTargetId,
+            PlayerManaPct: vitals?.ManaPct ?? 100f, PlayerEsPct: vitals?.EsPct ?? 100f,
+            HasEs: vitals?.HasEs ?? false, VitalsKnown: vitals is not null, Fleeing: watch.Flee));
         _comboBusy = busy;
         _lastTargetId = decision.HasTarget ? decision.TargetId : 0;
         _hostilesNear = decision.HostilesInRange;
@@ -218,19 +224,19 @@ public sealed partial class RadarApp
             : watch.Stalled ? decision.Note + " (stalled, moving on)"
             : watch.Fighting ? $"{decision.Note} ({watch.Note})"
             : decision.Note;
-        if (watch.Flee) { AbortComboMacro(); return; } // running, not swinging
+        // Priority recovery/escape slots remain eligible while the watchdog is fleeing.
         if (!decision.ShouldTap) return;
         // Aim: PoE2 fires a skill toward the cursor, so warp it onto the target first — otherwise the
         // rotation swings at wherever the last move-click left the cursor and the mob never dies.
-        if (decision.HasTarget) AimAtEntity(decision.TargetGrid, decision.TargetWorld, playerWorld);
         var spec = specs[decision.SkillIndex];
+        if (decision.HasTarget) AimCombatSkill(spec.AimMode, decision.TargetGrid, decision.TargetWorld, player, playerWorld);
         var isCombo = spec.Repeat > 1 || spec.HoldMs > 0 || spec.DodgeAfter || spec.NextDelayMs > 0;
         if (isCombo)
         {
             // A combo commits us for a second or more: only start it with the target comfortably inside range
             // (85 %) so it cannot walk out halfway and waste the remaining casts.
             var reach = spec.Range > 0f ? spec.Range : _settings.CombatRange;
-            if (NumVec2.Distance(player, decision.TargetGrid) > reach * 0.85f)
+            if (spec.RequireTarget && spec.AimMode == "Target" && NumVec2.Distance(player, decision.TargetGrid) > reach * 0.85f)
             {
                 _combatNote = $"closing in ({NumVec2.Distance(player, decision.TargetGrid):0} / {reach * 0.85f:0})";
                 return;
@@ -240,6 +246,7 @@ public sealed partial class RadarApp
         else GameHost.TapKey(decision.Vk);
         if ((uint)decision.SkillIndex < (uint)_combatFiredAt.Length)
             _combatFiredAt[decision.SkillIndex] = now;
+        _combatKeyFiredAt[spec.Key] = now;
         _combatNextIndex = decision.NextIndex;
     }
 
@@ -248,6 +255,8 @@ public sealed partial class RadarApp
     //    performs whatever steps are due. ──
     private enum MacroStep { Aim, KeyDown, KeyUp, Tap, DodgeStart, DodgeEnd, Done }
     private uint _macroTargetId;
+    private string _macroAimMode = "Target";
+    private bool _macroPriority;
     private POE2Radar.Core.Game.Vector3 _macroTargetWorld;
     private uint _lastTargetId;
     // A combo in flight owns the character: the mover (and its run/dodge key) must stay idle until it ends.
@@ -270,6 +279,8 @@ public sealed partial class RadarApp
     {
         AbortComboMacro();
         _macroTargetId = d.TargetId;
+        _macroAimMode = spec.AimMode;
+        _macroPriority = spec.Priority;
         _macroTargetGrid = d.TargetGrid;
         _macroTargetWorld = d.TargetWorld;
         _macroNextDelayMs = spec.NextDelayMs;
@@ -316,6 +327,7 @@ public sealed partial class RadarApp
                     // casts over to the next hostile in range (the combo keeps building on the pack); with
                     // nothing left to hit, drop the rest — including the dodge — instead of casting at a corpse
                     // and rolling away from it.
+                    if (_macroAimMode == "Cursor") break;
                     if (!TryLiveMacroTarget(entities, player, out var grid, out var world))
                     {
                         AbortComboMacro();
@@ -323,7 +335,7 @@ public sealed partial class RadarApp
                         return false;
                     }
                     _macroTargetGrid = grid;
-                    AimAtEntity(grid, world, playerWorld);
+                    AimCombatSkill(_macroAimMode, grid, world, player, playerWorld);
                     break;
                 }
                 case MacroStep.KeyDown: GameHost.KeyDown(vk); _macroHeld.Add(vk); break;
@@ -454,14 +466,12 @@ public sealed partial class RadarApp
     }
 
     /// <summary>Grow/shrink the per-skill last-fire clocks to match the current rotation length.</summary>
-    private void EnsureCombatClocks(int n)
+private void EnsureCombatClocks(IReadOnlyList<CombatSkill>? skills)
     {
-        if (_combatFiredAt.Length == n) return;
-        var next = new DateTime[n];
-        var copy = Math.Min(_combatFiredAt.Length, n);
-        if (copy > 0) Array.Copy(_combatFiredAt, next, copy);
-        _combatFiredAt = next;
-        if (n <= 0 || _combatNextIndex >= n) _combatNextIndex = 0;
+        var n = skills?.Count ?? 0;
+        if (_combatFiredAt.Length != n) _combatFiredAt = new DateTime[n];
+        for (var i = 0; i < n; i++)
+            _combatFiredAt[i] = _combatKeyFiredAt.GetValueOrDefault(skills![i].Key, DateTime.MinValue);
     }
 
     /// <summary>
@@ -693,4 +703,15 @@ public sealed partial class RadarApp
     private bool CombatArmed => _combatAssist || _botEnabled || _mapClear || _farmLoop;
 
     private bool MoveArmed => _moveEnabled || _botEnabled || _mapClear || _farmLoop;
+
+    private void AimCombatSkill(string mode, NumVec2 target, POE2Radar.Core.Game.Vector3 world,
+        NumVec2 player, POE2Radar.Core.Game.Vector3? playerWorld)
+    {
+        if (mode == "Cursor") return;
+        if (mode != "Away") { AimAtEntity(target, world, playerWorld); return; }
+        var away = player - target;
+        if (away.LengthSquared() < 0.001f) away = new NumVec2(1f, 0f);
+        var point = player + NumVec2.Normalize(away) * 8f;
+        AimClick((int)MathF.Round(point.X), (int)MathF.Round(point.Y), playerWorld);
+    }
 }
