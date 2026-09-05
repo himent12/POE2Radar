@@ -31,6 +31,11 @@ For recovery without enemies: disable Require enemy target, set Min enemies to
 does not target the player automatically; it leaves the mouse cursor alone.
 Away aiming requires an enemy direction and does not guarantee a safe landing.
 
+Cooldown starts at the first dispatched key press, not when a cast is queued.
+Cancelling before that press does not spend cooldown or advance the rotation.
+Later taps in the same combo do not restart the cooldown. Queued casts are
+cancelled across area changes, including cursor-only recovery skills.
+
 Priority skills are checked before the normal rotation and do not advance its
 cursor. They respect cooldowns and wait for an active combo to finish; they are
 not guaranteed instant interrupts. Multiple priority skills use list order.

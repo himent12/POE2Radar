@@ -19,8 +19,9 @@ public sealed class CombatInputOwnershipTests
     {
         var app = (RadarApp)RuntimeHelpers.GetUninitializedObject(typeof(RadarApp));
         Field("_settings").SetValue(app, new RadarSettings { CombatTapHoldMs = 60 });
-        foreach (var name in new[] { "_macro", "_macroHeld", "_heldKeys" })
+        foreach (var name in new[] { "_macro", "_macroHeld", "_heldKeys", "_combatKeyFiredAt", "_combatWatch", "_imprisonedIds" })
             Field(name).SetValue(app, Activator.CreateInstance(Field(name).FieldType));
+        Field("_combatFiredAt").SetValue(app, Array.Empty<DateTime>());
         return app;
     }
     private static FieldInfo Field(string name) => typeof(RadarApp).GetField(name, Private)!;
@@ -94,5 +95,95 @@ public sealed class CombatInputOwnershipTests
         Assert.Equal(DateTime.MinValue, Get<DateTime>(app, "_comboLockUntil"));
         Assert.False(TickEmptyMacro(app, Now));
         Assert.True(Flee(app, "WASD").Moving);
+    }
+    [Theory]
+    [InlineData(1)]
+    [InlineData(3)]
+    public void Scheduling_then_abort_does_not_spend_cooldown_or_advance_rotation(int repeat)
+    {
+        var app = App();
+        var clocks = Get<Dictionary<int, DateTime>>(app, "_combatKeyFiredAt");
+        var prior = Now.AddSeconds(-10);
+        clocks[81] = prior;
+        Field("_combatNextIndex").SetValue(app, 1);
+        Call(app, "StartComboMacro", new CombatAssist.Skill(81, 5000, Repeat: repeat),
+            new CombatAssist.Decision(true, 81, 1, 2, "scheduled"), Now);
+        Assert.Equal(prior, clocks[81]);
+        Assert.Equal(1, Get<int>(app, "_combatNextIndex"));
+        Call(app, "AbortComboMacro");
+        Assert.Equal(prior, clocks[81]);
+        Assert.Equal(1, Get<int>(app, "_combatNextIndex"));
+        Assert.False(Get<bool>(app, "_macroCastPending"));
+    }
+
+    [Fact]
+    public void First_dispatched_press_commits_clock_at_press_time_only_once()
+    {
+        var app = App();
+        var clocks = Get<Dictionary<int, DateTime>>(app, "_combatKeyFiredAt");
+        Call(app, "StartComboMacro", new CombatAssist.Skill(81, 5000, Repeat: 3, AimMode: "Cursor"),
+            new CombatAssist.Decision(true, 81, 0, 1, "scheduled"), Now);
+        var pressedAt = Now.AddMilliseconds(70);
+        var calls = 0;
+        Action<ushort> send = key => { Assert.Equal((ushort)81, key); if (calls++ == 0) Assert.Empty(clocks); };
+        Assert.True((bool)Call(app, "DispatchCombatKeyDown", (ushort)81, pressedAt, send)!);
+        Assert.Equal(pressedAt, clocks[81]);
+        Assert.Equal(1, Get<int>(app, "_combatNextIndex"));
+        Assert.True((bool)Call(app, "DispatchCombatKeyDown", (ushort)81, pressedAt.AddMilliseconds(300), send)!);
+        Assert.Equal(2, calls);
+        Assert.Equal(pressedAt, clocks[81]);
+        // Fake input: release the bookkeeping only, never invoke native KeyUp.
+        Get<List<ushort>>(app, "_macroHeld").Clear();
+        Call(app, "AbortComboMacro");
+        Assert.Equal(pressedAt, clocks[81]);
+    }
+
+    [Fact]
+    public void Dispatch_exception_does_not_charge_cooldown()
+    {
+        var app = App();
+        Call(app, "StartComboMacro", new CombatAssist.Skill(81, 5000),
+            new CombatAssist.Decision(true, 81, 0, 1, "scheduled"), Now);
+        Action<ushort> fail = _ => throw new InvalidOperationException("input failed");
+        Assert.Throws<TargetInvocationException>(() => Call(app, "DispatchCombatKeyDown", (ushort)81, Now.AddMilliseconds(60), fail));
+        Assert.Empty(Get<Dictionary<int, DateTime>>(app, "_combatKeyFiredAt"));
+        Assert.Empty(Get<List<ushort>>(app, "_macroHeld"));
+        Assert.Equal(0, Get<int>(app, "_combatNextIndex"));
+    }
+
+    [Fact]
+    public void Target_disappearing_before_aim_cancels_without_cooldown()
+    {
+        var app = App();
+        Call(app, "StartComboMacro", new CombatAssist.Skill(81, 5000),
+            new CombatAssist.Decision(true, 81, 0, 1, "scheduled", HasTarget: true, TargetId: 10), Now);
+        Assert.False(TickEmptyMacro(app, Now.AddMilliseconds(60)));
+        Assert.Empty(Get<Dictionary<int, DateTime>>(app, "_combatKeyFiredAt"));
+        Assert.False(Get<bool>(app, "_comboBusy"));
+    }
+
+    [Fact]
+    public void Zone_change_cancels_even_cursor_only_queued_casts()
+    {
+        var app = App();
+        Field("_areaHash").SetValue(app, (uint)100);
+        Call(app, "StartComboMacro", new CombatAssist.Skill(81, 5000, AimMode: "Cursor"),
+            new CombatAssist.Decision(true, 81, 0, 1, "scheduled"), Now);
+        Field("_areaHash").SetValue(app, (uint)101);
+        Assert.False(TickEmptyMacro(app, Now.AddMilliseconds(60)));
+        Assert.Empty(Get<Dictionary<int, DateTime>>(app, "_combatKeyFiredAt"));
+        Assert.False(Get<bool>(app, "_macroCastPending"));
+    }
+
+    [Fact]
+    public void Reordered_and_duplicate_slots_use_the_dispatched_key_clock()
+    {
+        var app = App();
+        Call(app, "StartComboMacro", new CombatAssist.Skill(81, 5000),
+            new CombatAssist.Decision(true, 81, 0, 1, "scheduled"), Now);
+        var pressedAt = Now.AddMilliseconds(60);
+        Call(app, "DispatchCombatKeyDown", (ushort)81, pressedAt, (Action<ushort>)(_ => { }));
+        Call(app, "EnsureCombatClocks", (object)new[] { new CombatSkill { Key = 82 }, new CombatSkill { Key = 81 }, new CombatSkill { Key = 81 } });
+        Assert.Equal(new[] { DateTime.MinValue, pressedAt, pressedAt }, Get<DateTime[]>(app, "_combatFiredAt"));
     }
 }

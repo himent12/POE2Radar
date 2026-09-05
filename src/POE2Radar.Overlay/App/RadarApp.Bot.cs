@@ -180,7 +180,6 @@ public sealed partial class RadarApp
         var now = DateTime.UtcNow;
         var src = _settings.CombatSkills;
         var n = src?.Count ?? 0;
-        EnsureCombatClocks(src);
         var specs = new CombatAssist.Skill[n];
         for (var i = 0; i < n; i++)
         {
@@ -193,6 +192,7 @@ public sealed partial class RadarApp
         var vitals = inGame ? _liveRender.PlayerVitals(localPlayer) : null;
         if (!CombatArmed || !inGame || !focused || _playerDead || vitals is { HpCur: <= 0 } || (watch.Flee && !_macroPriority)) AbortComboMacro();
         var busy = RunComboMacro(now, player, playerWorld, entities);
+        EnsureCombatClocks(src);
         var decision = CombatAssist.Decide(new CombatAssist.Snapshot(
             Armed: CombatArmed,
             Focused: focused,
@@ -243,10 +243,6 @@ public sealed partial class RadarApp
         }
         // Single taps use the same ownership, press duration and recovery as longer combos.
         StartComboMacro(spec, decision, now);
-        if ((uint)decision.SkillIndex < (uint)_combatFiredAt.Length)
-            _combatFiredAt[decision.SkillIndex] = now;
-        _combatKeyFiredAt[spec.Key] = now;
-        _combatNextIndex = decision.NextIndex;
     }
 
     // ── Combo macro executor (render thread). One skill cast expanded into timed steps: N taps or a hold,
@@ -256,6 +252,9 @@ public sealed partial class RadarApp
     private uint _macroTargetId;
     private string _macroAimMode = "Target";
     private bool _macroPriority;
+    private bool _macroCastPending;
+    private int _macroNextIndex;
+    private uint _macroAreaHash;
     private POE2Radar.Core.Game.Vector3 _macroTargetWorld;
     private uint _lastTargetId;
     // A combo in flight owns the character: the mover (and its run/dodge key) must stay idle until it ends.
@@ -278,6 +277,8 @@ public sealed partial class RadarApp
     {
         AbortComboMacro();
         ClaimCombatInput(spec, now);
+        _macroCastPending = true;
+        _macroNextIndex = d.NextIndex;
         _macroTargetId = d.TargetId;
         _macroAimMode = spec.AimMode;
         _macroPriority = spec.Priority;
@@ -314,6 +315,7 @@ public sealed partial class RadarApp
     private bool RunComboMacro(DateTime now, NumVec2 player, POE2Radar.Core.Game.Vector3? playerWorld,
         IReadOnlyList<Poe2Live.EntityDot> entities)
     {
+        if (_macroAreaHash != _areaHash) { AbortComboMacro(); return false; }
         // One step per tick at most for DOWN/UP pairs: never collapse a press and its release into the same
         // instant even after a frame hitch.
         var steps = 0;
@@ -339,7 +341,14 @@ public sealed partial class RadarApp
                     AimCombatSkill(_macroAimMode, grid, world, player, playerWorld);
                     break;
                 }
-                case MacroStep.KeyDown: GameHost.KeyDown(vk); _macroHeld.Add(vk); break;
+                case MacroStep.KeyDown:
+                    if (!DispatchCombatKeyDown(vk, now, GameHost.KeyDown))
+                    {
+                        AbortComboMacro();
+                        _combatNote = "cast cancelled (input unavailable)";
+                        return false;
+                    }
+                    break;
                 case MacroStep.KeyUp: GameHost.KeyUp(vk); _macroHeld.Remove(vk); break;
                 case MacroStep.Tap: GameHost.TapKey(vk); break;
                 case MacroStep.DodgeStart:
@@ -417,6 +426,7 @@ public sealed partial class RadarApp
         _comboLockUntil = DateTime.MinValue;
         _comboBusy = false;
         _macroPriority = false;
+        _macroCastPending = false;
     }
 
     /// <summary>Watchdog ignores ∪ essence-imprisoned monsters (immune until their crystal is clicked).</summary>
@@ -721,9 +731,25 @@ private void EnsureCombatClocks(IReadOnlyList<CombatSkill>? skills)
     private void ClaimCombatInput(CombatAssist.Skill spec, DateTime now)
     {
         ReleaseHeldKeys();
+        _macroAreaHash = _areaHash;
         _macroPriority = spec.Priority;
         var pressMs = spec.HoldMs > 0 ? spec.HoldMs : Math.Clamp(_settings.CombatTapHoldMs, 30, 200);
         _comboLockUntil = now.AddMilliseconds(Math.Max(pressMs, Math.Max(60, spec.RepeatGapMs)));
         _comboBusy = true;
+    }
+
+    /// <summary>Commit cooldown and rotation only after the first cast press is dispatched.</summary>
+    private bool DispatchCombatKeyDown(ushort vk, DateTime now, Action<ushort> keyDown)
+    {
+        if (GameHost.WouldDrop(vk)) return false;
+        keyDown(vk);
+        _macroHeld.Add(vk);
+        if (_macroCastPending)
+        {
+            _combatKeyFiredAt[vk] = now;
+            _combatNextIndex = _macroNextIndex;
+            _macroCastPending = false;
+        }
+        return true;
     }
 }
