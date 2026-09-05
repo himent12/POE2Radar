@@ -21,6 +21,11 @@ public sealed partial class ApiServer
                 WriteHtml(ctx, DashboardHtml.Page);
                 break;
 
+            case "/api/build":
+                try { HandleBuild(ctx); }
+                catch (JsonException) { Write(ctx, 400, JsonSerializer.Serialize(new { error = "Invalid JSON." }, Json)); }
+                break;
+
             case "/health":
                 Write(ctx, 200, JsonSerializer.Serialize(new { ok = true, inGame = s.InGame }, Json));
                 break;

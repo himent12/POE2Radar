@@ -48,17 +48,19 @@ public static class AobPatterns
 
     /// <summary>
     /// PoE2 "Game States" pattern (GameHelper2 StaticOffsetsPatterns.cs):
-    ///   <c>48 39 2D ^ ?? ?? ?? ?? 0F 85 16 01 00 00</c>
+    ///   <c>48 39 2D ^ ?? ?? ?? ?? 0F 85 ?? ?? ?? ?? B9 48 01 00 00</c>
     /// The instruction is <c>cmp [rip+rel32], rbp</c> (48 39 2D + rel32 = 7 bytes); the rel32
     /// resolves to the GameStates global pointer slot. Deref the slot → GameState root.
-    /// The trailing <c>0F 85 …</c> (jnz) is included for uniqueness.
+    /// The branch displacement changes with compiler layout (0x116 → 0x120 in the updated client).
+    /// Match the following allocation size instead: <c>mov ecx, 0x148</c>. Live scan: one match.
     /// </summary>
     public static readonly Pattern[] GameStateRefs =
     [
         new Pattern(
             Bytes: new byte?[] {
                 0x48, 0x39, 0x2D, null, null, null, null,
-                0x0F, 0x85, 0x16, 0x01, 0x00, 0x00
+                0x0F, 0x85, null, null, null, null,
+                0xB9, 0x48, 0x01, 0x00, 0x00
             },
             DispOffset:  3,   // rel32 starts after 48 39 2D
             InstrLen:    7,   // cmp [rip+rel32], rbp

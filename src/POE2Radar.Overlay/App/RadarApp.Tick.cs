@@ -204,7 +204,7 @@ public sealed partial class RadarApp
             : default;
         var inCombat = watch.PauseMove;
         _inCombat = inCombat || watch.Flee;
-        TickCombatAssist(inGame, focused, player, combatEntities, playerWorld, watch);
+        TickCombatAssist(inGame, focused, player, combatEntities, playerWorld, watch, localPlayer);
         // Low HP: the mover runs the flee point instead of the route (attacks are held above).
         IReadOnlyList<SelectedPath> movePaths = selectedPaths;
         if ((watch.Flee || watch.Kite) && CombatWatch.TryFleePoint(combatEntities, player, _settings.CombatRange,
@@ -215,8 +215,8 @@ public sealed partial class RadarApp
         }
         // A running combo pauses movement (and kiting) — a roll or run press mid-cast cancels the cast.
         TickPathMove(inGame, focused, player, movePaths, playerWorld, inCombat || _comboBusy, (watch.Flee || watch.Kite) && !_comboBusy);
-        TickQuestUse(inGame, focused, player, playerWorld, inCombat);
-        TickEventUse(inGame, focused, player, playerWorld, inCombat);
+        TickQuestUse(inGame, focused, player, playerWorld, inCombat || _comboBusy);
+        TickEventUse(inGame, focused, player, playerWorld, inCombat || _comboBusy);
         TickFarmInput(inGameState, inGame, focused);
 
         _state = new RadarState(inGame, snap.AreaHash, snap.AreaLevel, map.IsVisible, map.Zoom, player,

@@ -335,9 +335,44 @@ internal static partial class DashboardHtml
               </select></div>
             <div class="row"><div class="rl">Keep distance<small>grid units; ranged builds back away while a hostile is closer than this (0 = melee, never)</small></div>
               <input class="numin" type="number" step="1" min="0" max="200" data-set="combatKeepDistance"></div>
-            <div class="row"><div class="rl">Skill rotation<small>ordered slots. Range 0 uses the attack range; Min mobs gates AoE; Life &lt; fires only under that %; Rare = rare/unique only</small></div></div>
-            <div class="skhead"><span></span><span>Key</span><span>CD ms</span><span>Range</span><span>Min mobs</span><span>Life &lt; %</span><span>Rare</span><span>On</span></div>
+            <section id="autoBuild" style="border:1px solid var(--line);padding:18px;border-radius:10px;margin:16px 0">
+              <h3>Auto build · starter profile</h3>
+              <p class="hint-row">Scan your equipped gear, gems and life/mana/ES pools. Generates reviewed combat rules—not a passive-tree or DPS optimizer. Keys need one-time confirmation; unsupported skills are never guessed.</p>
+              <button type="button" class="addbtn" id="autoBuildScan">Scan &amp; propose build</button>
+              <button type="button" class="addbtn" id="autoBuildUndo" disabled>Undo last generated build</button>
+              <p id="autoBuildStatus" role="status" aria-live="polite"></p>
+              <div id="autoBuildResult" hidden>
+                <p id="autoBuildSummary"></p>
+                <details><summary>Detected equipment</summary><ul id="autoBuildEquipment"></ul></details>
+                <details open><summary>Limits &amp; warnings</summary><ul id="autoBuildWarnings"></ul></details>
+                <div id="autoBuildRows"></div>
+                <button type="button" class="addbtn" id="autoBuildApply" disabled>Apply selected build</button>
+                <p class="hint-row">Select a supported main attack and unique, confirmed keys. Preview expires after 2 minutes. Applying does not arm combat; use F4 locally. Undo is available this session until manual edits change the generated settings.</p>
+              </div>
+            </section>
+            <style>#autoBuild p,#autoBuild li{font-size:12px;line-height:1.6;overflow-wrap:anywhere}#autoBuild .auto-build-row{border-top:1px solid var(--line);padding:14px 0}#autoBuild label{display:block;font-size:12px}#autoBuild select{margin:8px 0;padding:8px;background:var(--panel);color:var(--text);max-width:100%;border:1px solid var(--line)}#autoBuild button:disabled{opacity:.4;cursor:default}</style>
+            <div class="row"><div class="rl">Skill rules<small>Choose a preset, then tailor its conditions. Changes save automatically. Presets do not bind or arm skills for you.</small></div></div>
+            <style>
+              #combatSkills .skill-card{border:1px solid #394351;border-radius:12px;background:rgba(18,24,32,.65);padding:16px;margin:12px 0}
+              #combatSkills header{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+              #combatSkills label{display:flex;flex-direction:column;gap:6px;font-size:12px;color:#bac5d4;min-width:0}
+              #combatSkills .skill-name-label{flex:1;min-width:140px}
+              #combatSkills input:not([type=checkbox]),#combatSkills select{width:100%;box-sizing:border-box;background:#151c26;color:#edf3fc;border:1px solid #465367;border-radius:6px;padding:8px;font:inherit;min-width:0}
+              #combatSkills .skill-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin:12px 0}
+              #combatSkills .skill-check{flex-direction:row;align-items:center;gap:7px}
+              #combatSkills .skill-flags{display:flex;flex-wrap:wrap;gap:16px;margin:12px 0}
+              #combatSkills fieldset{border:1px solid #394351;border-radius:8px;margin:14px 0;padding:12px}
+              #combatSkills legend,#combatSkills summary{color:#d6e3f3;font-size:12px;padding:0 6px}
+              #combatSkills .skill-summary{color:#a6cbef;font-size:12px;line-height:1.6;margin:12px 0}
+              #combatSkills .skill-warning{color:#ffc478;font-size:12px;line-height:1.5}
+              #combatSkills small{display:block;color:#a8b4c6;font-size:11px;line-height:1.6}
+              #combatSkills button{background:#273244;color:#e1e9f4;border:1px solid #465367;border-radius:5px;padding:6px 10px;cursor:pointer}
+              #combatSkills button:disabled{opacity:.3;cursor:default} #combatSkills .sk-del{color:#ffadad}
+              #combatSkills .skill-order{color:#a6cbef;font-weight:bold} #combatSkills details{margin-top:12px} #combatSkills summary{cursor:pointer}
+              #combatSkills :focus-visible{outline:2px solid #9ccfff;outline-offset:2px}
+            </style>
             <div id="combatSkills"></div>
+
             <div class="row"><button type="button" class="addbtn" id="combatSkillAdd">Add skill</button></div>
             <div class="row"><div class="rl hint-row">F4 toggles combat assist in-game. It cannot be armed from this page. Status: <span id="combatState">&mdash;</span></div></div>
             <div class="row"><div class="rl hint-row">When armed, each zone auto-selects a nav target from the area's zone notes (or a Transition / waypoint / boss landmark) and reuses the existing A* route. F6 cycles a single quest target (last press is the one the bot follows; it will not jump to the other F6 picks). Click a legend row to pin that one. F7 clears the pin and returns to auto-pick. A unique monster (boss) that spawns is targeted immediately. On arrival, taps interact/use. F3 toggles quest follow in-game. It cannot be armed from this page. Status: <span id="questFollowState">&mdash;</span></div></div>

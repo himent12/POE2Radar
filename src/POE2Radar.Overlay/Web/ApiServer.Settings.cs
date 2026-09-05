@@ -496,41 +496,48 @@ public sealed partial class ApiServer
     /// <summary>Parse the combat-assist rotation the dashboard re-POSTs on edit: each entry is
     /// <c>{ key|vk, cooldownMs, range? }</c>. Sanitized + capped at 8; a malformed entry is skipped.
     /// An empty array is accepted (Decide no-ops until the user adds a skill).</summary>
-    private static bool TryParseCombatSkills(JsonElement el, out List<CombatSkill> skills)
+private static bool TryParseCombatSkills(JsonElement el, out List<CombatSkill> skills)
     {
         skills = new List<CombatSkill>();
-        try
+        if (el.ValueKind != JsonValueKind.Array) return false;
+        foreach (var s in el.EnumerateArray())
         {
-            foreach (var s in el.EnumerateArray())
+            if (s.ValueKind != JsonValueKind.Object) continue;
+            int Number(string name, int fallback, int min, int max) =>
+                s.TryGetProperty(name, out var v) && TryInt(v, out var value) ? Math.Clamp(value, min, max) : fallback;
+            float Scalar(string name, float max) =>
+                s.TryGetProperty(name, out var v) && TryFloat(v, out var value) && float.IsFinite(value) ? Math.Clamp(value, 0f, max) : 0f;
+            bool Flag(string name, bool fallback = false) =>
+                s.TryGetProperty(name, out var v) && TryBool(v, out var value) ? value : fallback;
+            string Text(string field, int max)
             {
-                if (s.ValueKind != JsonValueKind.Object) continue;
-                var key = 0;
-                if (s.TryGetProperty("key", out var kv) && TryInt(kv, out var k)) key = k;
-                else if (s.TryGetProperty("vk", out var vv) && TryInt(vv, out var vk)) key = vk;
-                if (key is < 1 or > 255) continue;
-                var cd = 400;
-                if (s.TryGetProperty("cooldownMs", out var cv) && TryInt(cv, out var c)) cd = c;
-                cd = Math.Clamp(cd, 0, 60000);
-                var range = 0f;
-                if (s.TryGetProperty("range", out var rv) && TryFloat(rv, out var r)) range = r;
-                range = Math.Clamp(range, 0f, 200f);
-                var minT = 1;
-                if (s.TryGetProperty("minTargets", out var mv) && TryInt(mv, out var mt)) minT = Math.Clamp(mt, 1, 20);
-                var rareOnly = s.TryGetProperty("rareOnly", out var ro) && TryBool(ro, out var rb) && rb;
-                var hpBelow = 0f;
-                if (s.TryGetProperty("hpBelowPct", out var hv) && TryFloat(hv, out var hb)) hpBelow = Math.Clamp(hb, 0f, 100f);
-                var enabled = !(s.TryGetProperty("enabled", out var ev) && TryBool(ev, out var eb)) || eb;
-                var repeat = 1; if (s.TryGetProperty("repeat", out var rpv) && TryInt(rpv, out var rp)) repeat = Math.Clamp(rp, 1, 10);
-                var gap = 150; if (s.TryGetProperty("repeatGapMs", out var gv) && TryInt(gv, out var gp)) gap = Math.Clamp(gp, 30, 2000);
-                var hold = 0; if (s.TryGetProperty("holdMs", out var hov) && TryInt(hov, out var ho)) hold = Math.Clamp(ho, 0, 10000);
-                var dodge = s.TryGetProperty("dodgeAfter", out var dv) && TryBool(dv, out var db) && db;
-                var nextDelay = 0; if (s.TryGetProperty("nextDelayMs", out var ndv) && TryInt(ndv, out var nd)) nextDelay = Math.Clamp(nd, 0, 10000);
-                skills.Add(new CombatSkill { Key = key, CooldownMs = cd, Range = range, MinTargets = minT, RareOnly = rareOnly, HpBelowPct = hpBelow, Enabled = enabled,
-                    Repeat = repeat, RepeatGapMs = gap, HoldMs = hold, DodgeAfter = dodge, NextDelayMs = nextDelay });
-                if (skills.Count >= 8) break;
+                var text = s.TryGetProperty(field, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() ?? "" : "";
+                return text.Length > max ? text[..max] : text;
             }
-            return true;
+            var key = 0;
+            if (s.TryGetProperty("key", out var kv) && TryInt(kv, out var k)) key = k;
+            else if (s.TryGetProperty("vk", out var vv) && TryInt(vv, out var vk)) key = vk;
+            if (key is < 1 or > 255) continue;
+            var name = s.TryGetProperty("name", out var nv) && nv.ValueKind == JsonValueKind.String ? nv.GetString()?.Trim() ?? "" : "";
+            var aim = s.TryGetProperty("aimMode", out var av) && av.ValueKind == JsonValueKind.String
+                ? OneOf(av.GetString(), "Target", "Cursor", "Away") ?? "Target" : "Target";
+            skills.Add(new CombatSkill
+            {
+                Key = key, Name = name.Length > 60 ? name[..60] : name,
+                SourceMetadata = Text("sourceMetadata", 256), SourceCharacter = Text("sourceCharacter", 160),
+                CooldownMs = Number("cooldownMs", 400, 0, 60000), Range = Scalar("range", 200f),
+                MinTargets = Number("minTargets", 1, 0, 20), RareOnly = Flag("rareOnly"),
+                HpBelowPct = Scalar("hpBelowPct", 100f), ManaBelowPct = Scalar("manaBelowPct", 100f),
+                MinManaPct = Scalar("minManaPct", 100f), EsBelowPct = Scalar("esBelowPct", 100f),
+                TargetHpBelowPct = Scalar("targetHpBelowPct", 100f),
+                RequireTarget = Flag("requireTarget", true), Priority = Flag("priority"), AimMode = aim,
+                                AnyLowResource = Flag("anyLowResource"),
+                Enabled = Flag("enabled", true), Repeat = Number("repeat", 1, 1, 10),
+                RepeatGapMs = Number("repeatGapMs", 150, 30, 2000), HoldMs = Number("holdMs", 0, 0, 10000),
+                DodgeAfter = Flag("dodgeAfter"), NextDelayMs = Number("nextDelayMs", 0, 0, 10000)
+            });
+            if (skills.Count == 8) break;
         }
-        catch { return false; }
+        return true;
     }
 }

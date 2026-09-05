@@ -341,7 +341,7 @@ public sealed partial class OverlayRenderer
     private void DrawSkills(DrawTarget rt, InsMenuData m, float x, float y, float w, float bottom)
     {
         var skills = m.Skills ?? Array.Empty<CombatSkill>();
-        const float cardH = 80f, gap = 8f;
+        const float cardH = 118f, gap = 8f;
         var shown = 0;
         for (var i = 0; i < skills.Count && y + cardH <= bottom - 34f; i++, shown++)
         {
@@ -364,8 +364,8 @@ public sealed partial class OverlayRenderer
             var l1 = y + 18f; var l2 = y + 50f;
             fx = Field(rt, fx, l1, "Cooldown", $"{sk.CooldownMs} ms", i, "cd", 50f, ink);
             fx = Field(rt, fx, l1, "Range", sk.Range <= 0f ? "auto" : $"{sk.Range:0}", i, "range", 5f, ink);
-            fx = Field(rt, fx, l1, "Min mobs", sk.MinTargets <= 1 ? "1" : $"{sk.MinTargets}+", i, "min", 1f, ink);
-            fx = Field(rt, fx, l1, "Life below", sk.HpBelowPct <= 0f ? "off" : $"{sk.HpBelowPct:0}%", i, "hp", 5f, ink);
+            fx = Field(rt, fx, l1, "Min mobs", sk.MinTargets == 0 ? "none" : $"{sk.MinTargets}+", i, "min", 1f, ink);
+            fx = Field(rt, fx, l1, sk.AnyLowResource ? "Life · OR" : "Life below", sk.HpBelowPct <= 0f ? "off" : $"{sk.HpBelowPct:0}%", i, "hp", 5f, ink);
             Check(rt, fx + 8f, l1, "Rare only", sk.RareOnly, $"ins:skill:flip:{i}:rareOnly");
 
             fx = x + 66f;
@@ -374,6 +374,14 @@ public sealed partial class OverlayRenderer
             fx = Field(rt, fx, l2, "Hold", sk.HoldMs <= 0 ? "tap" : $"{sk.HoldMs} ms", i, "hold", 100f, ink);
             fx = Field(rt, fx, l2, "Then wait", sk.NextDelayMs <= 0 ? "0" : $"{sk.NextDelayMs} ms", i, "next", 100f, ink);
             Check(rt, fx + 8f, l2, "Dodge after", sk.DodgeAfter, $"ins:skill:flip:{i}:dodgeAfter");
+
+            fx = x + 66f;
+            var l3 = y + 86f;
+            fx = Field(rt, fx, l3, "Mana below", sk.ManaBelowPct <= 0f ? "off" : $"{sk.ManaBelowPct:0}%", i, "mana", 5f, ink);
+            fx = Field(rt, fx, l3, "Min mana", sk.MinManaPct <= 0f ? "off" : $"{sk.MinManaPct:0}%", i, "minMana", 5f, ink);
+            fx = Field(rt, fx, l3, "ES below", sk.EsBelowPct <= 0f ? "off" : $"{sk.EsBelowPct:0}%", i, "es", 5f, ink);
+            fx = Field(rt, fx, l3, "Enemy life", sk.TargetHpBelowPct <= 0f ? "off" : $"<{sk.TargetHpBelowPct:0}%", i, "targetHp", 5f, ink);
+            Check(rt, fx + 8f, l3, "Priority", sk.Priority, $"ins:skill:flip:{i}:priority");
 
             // Enabled switch + remove, right edge.
             Switch(rt, x + w - 58f, y + 26f, sk.Enabled);
@@ -391,7 +399,7 @@ public sealed partial class OverlayRenderer
             _legendRowRects.Add((add, "ins:skill:add"));
         }
         if (shown < skills.Count) T(rt, $"{skills.Count - shown} more not shown", _tfSmall!, x + 136f, y + 15f, UDim);
-        T(rt, "Taps ×N with Cast time between them (also the wait before a dodge, so the last cast finishes) · Hold = keep the key down instead", _tfSmall!, x, bottom - 10f, UDim);
+        T(rt, "0% = off · Resource OR joins low-life/mana/ES triggers only · F12: names, presets, aim, reorder & full rules", _tfSmall!, x, bottom - 10f, UDim);
     }
 
     /// <summary>Small labelled field: caption above, "‹ value ›" below. Returns the x after it.</summary>

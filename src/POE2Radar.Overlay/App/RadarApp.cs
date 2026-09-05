@@ -518,7 +518,7 @@ public sealed partial class RadarApp : IDisposable
         Console.WriteLine($"Hidden entities: {_hidden.Count} pattern(s); display rules: {_displayRules.Count}; known mods: {_modCatalog.Count}");
         _api = new ApiServer(() => _state, _settings, GetNavSelection, ToggleNavTarget, ClearNavSelection,
                              _hidden, _displayRules, _landmarkStore, CurrentTilePaths, () => _modCatalog.All, PricesJson, AtlasJson, SetAtlasSelection,
-                             SetAtlasHighlight, VersionJson, _settings.ApiPort);
+                             SetAtlasHighlight, VersionJson, _settings.ApiPort) { LoadoutProvider = () => _liveApi.ReadLoadout() };
         try { _api.Start(); Console.WriteLine($"API on http://localhost:{_settings.ApiPort} (dashboard at /)"); }
         catch (Exception ex) { Console.Error.WriteLine($"API server disabled: {ex.Message}"); }
         Console.WriteLine("Hotkeys: F6=next quest target (bot on) / add nearest  F7=clear path targets  "

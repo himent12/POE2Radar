@@ -325,6 +325,7 @@ public sealed partial class RadarApp
             case "flip" when parts.Length == 5:
                 if (parts[4] == "enabled") sk.Enabled = !sk.Enabled;
                 else if (parts[4] == "rareOnly") sk.RareOnly = !sk.RareOnly;
+                else if (parts[4] == "priority") sk.Priority = !sk.Priority;
                 else if (parts[4] == "dodgeAfter") sk.DodgeAfter = !sk.DodgeAfter;
                 else return;
                 break;
@@ -341,8 +342,12 @@ public sealed partial class RadarApp
                     }
                     case "cd": sk.CooldownMs = Math.Clamp(sk.CooldownMs + (int)d, 0, 60000); break;
                     case "range": sk.Range = Math.Clamp(sk.Range + d, 0f, 200f); break;
-                    case "min": sk.MinTargets = Math.Clamp(sk.MinTargets + (int)d, 1, 20); break;
+                    case "min": sk.MinTargets = Math.Clamp(sk.MinTargets + (int)d, 0, 20); break;
                     case "hp": sk.HpBelowPct = Math.Clamp(sk.HpBelowPct + d, 0f, 100f); break;
+                    case "mana": sk.ManaBelowPct = Math.Clamp(sk.ManaBelowPct + d, 0f, 100f); break;
+                    case "minMana": sk.MinManaPct = Math.Clamp(sk.MinManaPct + d, 0f, 100f); break;
+                    case "es": sk.EsBelowPct = Math.Clamp(sk.EsBelowPct + d, 0f, 100f); break;
+                    case "targetHp": sk.TargetHpBelowPct = Math.Clamp(sk.TargetHpBelowPct + d, 0f, 100f); break;
                     case "repeat": sk.Repeat = Math.Clamp(sk.Repeat + (int)d, 1, 10); break;
                     case "gap": sk.RepeatGapMs = Math.Clamp(sk.RepeatGapMs + (int)d, 30, 2000); break;
                     case "hold": sk.HoldMs = Math.Clamp(sk.HoldMs + (int)d, 0, 10000); break;

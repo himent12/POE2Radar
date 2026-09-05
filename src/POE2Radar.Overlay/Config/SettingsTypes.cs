@@ -29,6 +29,19 @@ public sealed class CombatSkill
     public bool DodgeAfter { get; set; }
     /// <summary>Block the whole rotation for this long after the cast (animation / combo timing).</summary>
     public int NextDelayMs { get; set; }
+
+    public string Name { get; set; } = "";
+    public float ManaBelowPct { get; set; }
+    public float MinManaPct { get; set; }
+    public float EsBelowPct { get; set; }
+    public float TargetHpBelowPct { get; set; }
+    public bool RequireTarget { get; set; } = true;
+    public bool Priority { get; set; }
+    public string AimMode { get; set; } = "Target";
+    /// <summary>Any enabled low-life/mana/ES trigger may fire; other conditions still all apply.</summary>
+    public bool AnyLowResource { get; set; }
+    public string SourceMetadata { get; set; } = "";
+    public string SourceCharacter { get; set; } = "";
 }
 
 /// <summary>

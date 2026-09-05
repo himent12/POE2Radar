@@ -17,43 +17,42 @@ public readonly record struct Path(bool Found, float Cost, IReadOnlyList<PathCel
 /// 1.0 in the open, rising smoothly toward walls — so routes are optimal for "shortest while staying off the
 /// walls". Diagonal steps cost √2 and are refused when either orthogonal neighbour is blocked (no corner
 /// cutting). The octile heuristic is admissible against this cost (multiplier ≥ 1), so the result is optimal
-/// up to the 0.1 % tie-break inflation.</para>
+/// when heuristicWeight is 1.</para>
 /// </summary>
 public sealed class AStar
 {
     private const float Sqrt2 = 1.4142136f;
-    private const float TieBreak = 1.001f;
 
     private readonly int _width;
     private readonly int _height;
     private readonly float[] _gScore;
-    private readonly int[]   _cameFrom;
-    private readonly int[]   _openGen;    // generation stamp: cell has a g-score this search
-    private readonly int[]   _closedGen;  // generation stamp: cell has been expanded this search
+    private readonly int[] _cameFrom;
+    private readonly int[] _openGen;    // generation stamp: cell has a g-score this search
+    private readonly int[] _closedGen;  // generation stamp: cell has been expanded this search
     private int _currentGen;
 
     // Binary min-heap (lazy deletion: stale entries are skipped when popped).
-    private int[]   _heapNode;
+    private int[] _heapNode;
     private float[] _heapKey;
-    private int     _heapCount;
+    private int _heapCount;
 
-    public int Width  => _width;
+    public int Width => _width;
     public int Height => _height;
     /// <summary>Nodes expanded by the last search (diagnostics).</summary>
     public int LastExpanded { get; private set; }
 
     public AStar(int width, int height)
     {
-        _width  = width;
+        _width = width;
         _height = height;
         var n = width * height;
-        _gScore    = new float[n];
-        _cameFrom  = new int[n];
-        _openGen   = new int[n];
+        _gScore = new float[n];
+        _cameFrom = new int[n];
+        _openGen = new int[n];
         _closedGen = new int[n];
         var heapCap = Math.Clamp(n / 8, 1024, 1 << 20);
         _heapNode = new int[heapCap];
-        _heapKey  = new float[heapCap];
+        _heapKey = new float[heapCap];
     }
 
     /// <summary>
@@ -63,8 +62,8 @@ public sealed class AStar
     /// </summary>
     public Path FindPath(NavGrid g, PathCell start, PathCell goal, int maxNodes = int.MaxValue, float heuristicWeight = 1f)
     {
-        if (g.Width != _width || g.Height != _height)
-            throw new ArgumentException($"Grid dims {g.Width}x{g.Height} != A* dims {_width}x{_height}");
+        LastExpanded = 0;
+        if (g.Width != _width || g.Height != _height) throw new ArgumentException($"Grid dims {g.Width}x{g.Height} != A* dims {_width}x{_height}");
         if (!g.IsWalkable(start.X, start.Y) || !g.IsWalkable(goal.X, goal.Y)) return Path.NoPath;
         if (!g.SameRegion(start.X, start.Y, goal.X, goal.Y)) return Path.NoPath;
 
@@ -78,10 +77,10 @@ public sealed class AStar
         var walk = g.Walkable;
         var clear = g.Clearance;
         var mult = NavGrid.StepMultiplier;
-        var hw = heuristicWeight * TieBreak;
+        var hw = heuristicWeight;
 
         var startIdx = start.Y * w + start.X;
-        var goalIdx  = goal.Y * w + goal.X;
+        var goalIdx = goal.Y * w + goal.X;
         var gx = goal.X;
         var gy = goal.Y;
 
@@ -102,22 +101,23 @@ public sealed class AStar
                 LastExpanded = expanded;
                 return Reconstruct(cur, _gScore[cur]);
             }
-            if (++expanded > maxNodes) break;
+            if (expanded >= maxNodes) break;
+            expanded++;
 
             var cx = cur % w;
             var cy = cur / w;
             var curG = _gScore[cur];
 
             // Orthogonal openness, reused by the diagonal corner-cut checks.
-            var canL = cx > 0     && walk[cur - 1] != 0;
+            var canL = cx > 0 && walk[cur - 1] != 0;
             var canR = cx < w - 1 && walk[cur + 1] != 0;
-            var canU = cy > 0     && walk[cur - w] != 0;
+            var canU = cy > 0 && walk[cur - w] != 0;
             var canD = cy < h - 1 && walk[cur + w] != 0;
 
-            if (canL) Relax(cur - 1,     cx - 1, cy,     1f,    curG);
-            if (canR) Relax(cur + 1,     cx + 1, cy,     1f,    curG);
-            if (canU) Relax(cur - w,     cx,     cy - 1, 1f,    curG);
-            if (canD) Relax(cur + w,     cx,     cy + 1, 1f,    curG);
+            if (canL) Relax(cur - 1, cx - 1, cy, 1f, curG);
+            if (canR) Relax(cur + 1, cx + 1, cy, 1f, curG);
+            if (canU) Relax(cur - w, cx, cy - 1, 1f, curG);
+            if (canD) Relax(cur + w, cx, cy + 1, 1f, curG);
             if (canL && canU) Relax(cur - w - 1, cx - 1, cy - 1, Sqrt2, curG);
             if (canR && canU) Relax(cur - w + 1, cx + 1, cy - 1, Sqrt2, curG);
             if (canL && canD) Relax(cur + w - 1, cx - 1, cy + 1, Sqrt2, curG);
@@ -128,9 +128,9 @@ public sealed class AStar
                 if (walk[nIdx] == 0 || _closedGen[nIdx] == _currentGen) return;
                 var tentative = fromG + step * mult[clear[nIdx]];
                 if (_openGen[nIdx] == _currentGen && tentative >= _gScore[nIdx]) return;
-                _gScore[nIdx]   = tentative;
+                _gScore[nIdx] = tentative;
                 _cameFrom[nIdx] = cur;
-                _openGen[nIdx]  = _currentGen;
+                _openGen[nIdx] = _currentGen;
                 Push(nIdx, tentative + Octile(nx, ny, gx, gy) * hw);
             }
         }
@@ -164,7 +164,7 @@ public sealed class AStar
         if (_heapCount == _heapNode.Length)
         {
             Array.Resize(ref _heapNode, _heapNode.Length * 2);
-            Array.Resize(ref _heapKey,  _heapKey.Length  * 2);
+            Array.Resize(ref _heapKey, _heapKey.Length * 2);
         }
         var i = _heapCount++;
         while (i > 0)
@@ -172,11 +172,11 @@ public sealed class AStar
             var parent = (i - 1) >> 1;
             if (_heapKey[parent] <= key) break;
             _heapNode[i] = _heapNode[parent];
-            _heapKey[i]  = _heapKey[parent];
+            _heapKey[i] = _heapKey[parent];
             i = parent;
         }
         _heapNode[i] = node;
-        _heapKey[i]  = key;
+        _heapKey[i] = key;
     }
 
     private int Pop()
@@ -185,7 +185,7 @@ public sealed class AStar
         var last = --_heapCount;
         if (last == 0) return top;
         var node = _heapNode[last];
-        var key  = _heapKey[last];
+        var key = _heapKey[last];
         var i = 0;
         while (true)
         {
@@ -194,11 +194,11 @@ public sealed class AStar
             if (child + 1 < last && _heapKey[child + 1] < _heapKey[child]) child++;
             if (_heapKey[child] >= key) break;
             _heapNode[i] = _heapNode[child];
-            _heapKey[i]  = _heapKey[child];
+            _heapKey[i] = _heapKey[child];
             i = child;
         }
         _heapNode[i] = node;
-        _heapKey[i]  = key;
+        _heapKey[i] = key;
         return top;
     }
 }
