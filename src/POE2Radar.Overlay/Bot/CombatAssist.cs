@@ -124,9 +124,10 @@ public static Decision Decide(in Snapshot s)
             if (s.Fleeing && !sk.Priority) continue;
             if (sk.Key is < 1 or > 255) continue;
             if (s.KeyboardOnly && sk.Key is 0x01 or 0x02 or 0x04 or 0x05 or 0x06) continue;
-            if ((sk.RequireTarget || sk.AimMode != "Cursor" || sk.RareOnly || sk.TargetHpBelowPct > 0f) && !hasTarget) continue;
+            var needsTarget = sk.RequireTarget || sk.AimMode != "Cursor" || sk.RareOnly || sk.TargetHpBelowPct > 0f;
+            if (needsTarget && !hasTarget) continue;
             var skillRange = sk.Range > 0f ? sk.Range : globalRange;
-            if (sk.RequireTarget && hasTarget && NumVec2.DistanceSquared(target.Grid, s.PlayerGrid) > skillRange * skillRange) continue;
+            if (needsTarget && hasTarget && NumVec2.DistanceSquared(target.Grid, s.PlayerGrid) > skillRange * skillRange) continue;
             if (sk.RareOnly && target.Rarity is not (Poe2Live.Rarity.Rare or Poe2Live.Rarity.Unique)) continue;
             var resourceGate = sk.HpBelowPct > 0f || sk.ManaBelowPct > 0f || sk.MinManaPct > 0f || sk.EsBelowPct > 0f;
             if (resourceGate && !s.VitalsKnown) continue;

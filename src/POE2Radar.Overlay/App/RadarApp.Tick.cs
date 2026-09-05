@@ -215,8 +215,8 @@ public sealed partial class RadarApp
         }
         // A running combo pauses movement (and kiting) — a roll or run press mid-cast cancels the cast.
         TickPathMove(inGame, focused, player, movePaths, playerWorld, inCombat || _comboBusy, (watch.Flee || watch.Kite) && !_comboBusy);
-        TickQuestUse(inGame, focused, player, playerWorld, inCombat);
-        TickEventUse(inGame, focused, player, playerWorld, inCombat);
+        TickQuestUse(inGame, focused, player, playerWorld, inCombat || _comboBusy);
+        TickEventUse(inGame, focused, player, playerWorld, inCombat || _comboBusy);
         TickFarmInput(inGameState, inGame, focused);
 
         _state = new RadarState(inGame, snap.AreaHash, snap.AreaLevel, map.IsVisible, map.Zoom, player,

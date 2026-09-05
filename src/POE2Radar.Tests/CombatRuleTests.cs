@@ -265,4 +265,18 @@ public sealed class CombatRuleTests
         Assert.True(restored.AnyLowResource);
         Assert.False(Assert.Single(Parse("[{\"key\":81}]")).AnyLowResource);
     }
+    [Theory]
+    [InlineData("Target", false, 0)]
+    [InlineData("Away", false, 0)]
+    [InlineData("Cursor", true, 0)]
+    [InlineData("Cursor", false, 50)]
+    public void Enemy_dependent_rules_honor_range_even_when_target_checkbox_is_off(string aim, bool rare, float finisher)
+    {
+        var skill = new CombatAssist.Skill(81, 0, Range: 5, MinTargets: 0, RequireTarget: false,
+            AimMode: aim, RareOnly: rare, TargetHpBelowPct: finisher);
+        var enemy = Enemy(hp: 1, x: 10) with { Rarity = Poe2Live.Rarity.Rare };
+        var state = State(skill) with { Entities = new[] { enemy } };
+        Assert.False(CombatAssist.Decide(state).ShouldTap);
+        Assert.True(CombatAssist.Decide(state with { Entities = new[] { enemy with { Grid = new(3, 0) } } }).ShouldTap);
+    }
 }

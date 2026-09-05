@@ -190,9 +190,9 @@ public sealed partial class RadarApp
                 sk.ManaBelowPct, sk.MinManaPct, sk.EsBelowPct, sk.TargetHpBelowPct, sk.RequireTarget, sk.Priority, sk.AimMode, sk.AnyLowResource);
         }
         // A combo macro in flight owns the keyboard: advance it and skip deciding.
-        if (!CombatArmed || !inGame || !focused || _playerDead || (watch.Flee && !_macroPriority)) AbortComboMacro();
-        var busy = RunComboMacro(now, player, playerWorld, entities) || now < _comboLockUntil;
         var vitals = inGame ? _liveRender.PlayerVitals(localPlayer) : null;
+        if (!CombatArmed || !inGame || !focused || _playerDead || vitals is { HpCur: <= 0 } || (watch.Flee && !_macroPriority)) AbortComboMacro();
+        var busy = RunComboMacro(now, player, playerWorld, entities);
         var decision = CombatAssist.Decide(new CombatAssist.Snapshot(
             Armed: CombatArmed,
             Focused: focused,
@@ -229,7 +229,6 @@ public sealed partial class RadarApp
         // Aim: PoE2 fires a skill toward the cursor, so warp it onto the target first — otherwise the
         // rotation swings at wherever the last move-click left the cursor and the mob never dies.
         var spec = specs[decision.SkillIndex];
-        if (decision.HasTarget) AimCombatSkill(spec.AimMode, decision.TargetGrid, decision.TargetWorld, player, playerWorld);
         var isCombo = spec.Repeat > 1 || spec.HoldMs > 0 || spec.DodgeAfter || spec.NextDelayMs > 0;
         if (isCombo)
         {
@@ -241,9 +240,9 @@ public sealed partial class RadarApp
                 _combatNote = $"closing in ({NumVec2.Distance(player, decision.TargetGrid):0} / {reach * 0.85f:0})";
                 return;
             }
-            StartComboMacro(spec, decision, now);
         }
-        else GameHost.TapKey(decision.Vk);
+        // Single taps use the same ownership, press duration and recovery as longer combos.
+        StartComboMacro(spec, decision, now);
         if ((uint)decision.SkillIndex < (uint)_combatFiredAt.Length)
             _combatFiredAt[decision.SkillIndex] = now;
         _combatKeyFiredAt[spec.Key] = now;
@@ -278,6 +277,7 @@ public sealed partial class RadarApp
     private void StartComboMacro(CombatAssist.Skill spec, CombatAssist.Decision d, DateTime now)
     {
         AbortComboMacro();
+        ClaimCombatInput(spec, now);
         _macroTargetId = d.TargetId;
         _macroAimMode = spec.AimMode;
         _macroPriority = spec.Priority;
@@ -303,7 +303,8 @@ public sealed partial class RadarApp
         }
         else
         {
-            _macro.Enqueue((MacroStep.Done, 0, TimeSpan.FromMilliseconds(spec.NextDelayMs)));
+            var remainingCastMs = Math.Max(0, castMs - (spec.HoldMs > 0 ? spec.HoldMs : tapMs));
+            _macro.Enqueue((MacroStep.Done, 0, TimeSpan.FromMilliseconds(remainingCastMs + spec.NextDelayMs)));
         }
         _macroNextUtc = now;
     }
@@ -382,7 +383,7 @@ public sealed partial class RadarApp
                 if (next.Step == MacroStep.Done) { _comboLockUntil = _macroNextUtc; _macro.Dequeue(); }
             }
         }
-        return _macro.Count > 0;
+        return _comboBusy = _macro.Count > 0 || now < _comboLockUntil;
     }
 
     /// <summary>The macro's target if still alive (live position), else — when <paramref name="retarget"/> — the
@@ -413,6 +414,9 @@ public sealed partial class RadarApp
         _macro.Clear();
         foreach (var k in _macroHeld) GameHost.KeyUp(k);
         _macroHeld.Clear();
+        _comboLockUntil = DateTime.MinValue;
+        _comboBusy = false;
+        _macroPriority = false;
     }
 
     /// <summary>Watchdog ignores ∪ essence-imprisoned monsters (immune until their crystal is clicked).</summary>
@@ -713,5 +717,13 @@ private void EnsureCombatClocks(IReadOnlyList<CombatSkill>? skills)
         if (away.LengthSquared() < 0.001f) away = new NumVec2(1f, 0f);
         var point = player + NumVec2.Normalize(away) * 8f;
         AimClick((int)MathF.Round(point.X), (int)MathF.Round(point.Y), playerWorld);
+    }
+    private void ClaimCombatInput(CombatAssist.Skill spec, DateTime now)
+    {
+        ReleaseHeldKeys();
+        _macroPriority = spec.Priority;
+        var pressMs = spec.HoldMs > 0 ? spec.HoldMs : Math.Clamp(_settings.CombatTapHoldMs, 30, 200);
+        _comboLockUntil = now.AddMilliseconds(Math.Max(pressMs, Math.Max(60, spec.RepeatGapMs)));
+        _comboBusy = true;
     }
 }

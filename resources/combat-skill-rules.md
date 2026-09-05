@@ -34,6 +34,10 @@ Away aiming requires an enemy direction and does not guarantee a safe landing.
 Priority skills are checked before the normal rotation and do not advance its
 cursor. They respect cooldowns and wait for an active combo to finish; they are
 not guaranteed instant interrupts. Multiple priority skills use list order.
+Every cast, including a single tap, owns movement/aim immediately, releases held
+movement keys, and blocks flee/kite and interaction input through its configured
+cast-recovery window. Set Cast interval to cover the skill animation; it is an
+estimate, not a measured game cast time. Post-cast delay is added after recovery.
 
 Names, keys, order, enable switches and readable condition summaries are on each
 card. Combo timing is expandable: repeat taps, tap interval, hold duration,
