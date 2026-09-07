@@ -90,7 +90,13 @@ public sealed partial class RadarApp
             map = _liveRender.ReadMap(inGameState, areaInstance);
             // Player name reads a StdWString (allocates a string) — read it only when the local-player
             // pointer changes (i.e. once per session), not every render frame.
-            if (localPlayer != _charNameFor) { _charNameFor = localPlayer; _charName = _liveRender.PlayerName(localPlayer); }
+            if (localPlayer != _charNameFor || areaInstance != _charIdentityArea || _charIdentity.Length == 0)
+            {
+                _charNameFor = localPlayer; _charIdentityArea = areaInstance;
+                _charName = _liveRender.PlayerName(localPlayer);
+                var league = _liveRender.LeagueName(areaInstance);
+                _charIdentity = _charName.Length > 0 && league.Length > 0 ? league + ":" + _charName : "";
+            }
             _cameraMatrix = _liveRender.CameraMatrix(inGameState);
             TickAutoFlask(localPlayer);
 
@@ -404,6 +410,7 @@ public sealed partial class RadarApp
     /// </summary>
     private void WorldTick(nint inGameState, nint areaInstance, nint localPlayer)
     {
+        RefreshBuildBindings(localPlayer);
         // AreaInstance is a fresh object per area — use its address to invalidate per-area caches.
         if (areaInstance != _lastAreaInstance) { _terrain = null; _lastAreaInstance = areaInstance; }
         var areaHash = _live.AreaHash(areaInstance);

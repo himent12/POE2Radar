@@ -494,7 +494,7 @@ public sealed partial class ApiServer
     }
 
     /// <summary>Parse the combat-assist rotation the dashboard re-POSTs on edit: each entry is
-    /// <c>{ key|vk, cooldownMs, range? }</c>. Sanitized + capped at 8; a malformed entry is skipped.
+    /// <c>{ key|vk, cooldownMs, range? }</c>. Sanitized + capped at 13; a malformed entry is skipped.
     /// An empty array is accepted (Decide no-ops until the user adds a skill).</summary>
 private static bool TryParseCombatSkills(JsonElement el, out List<CombatSkill> skills)
     {
@@ -524,6 +524,8 @@ private static bool TryParseCombatSkills(JsonElement el, out List<CombatSkill> s
             skills.Add(new CombatSkill
             {
                 Key = key, Name = name.Length > 60 ? name[..60] : name,
+                Modifiers = Number("modifiers", 0, 0, 7), SourceSlot = Number("sourceSlot", 0, 0, 13),
+                SourceLiveBinding = Flag("sourceLiveBinding"),
                 SourceMetadata = Text("sourceMetadata", 256), SourceCharacter = Text("sourceCharacter", 160),
                 CooldownMs = Number("cooldownMs", 400, 0, 60000), Range = Scalar("range", 200f),
                 MinTargets = Number("minTargets", 1, 0, 20), RareOnly = Flag("rareOnly"),
@@ -536,7 +538,7 @@ private static bool TryParseCombatSkills(JsonElement el, out List<CombatSkill> s
                 RepeatGapMs = Number("repeatGapMs", 150, 30, 2000), HoldMs = Number("holdMs", 0, 0, 10000),
                 DodgeAfter = Flag("dodgeAfter"), NextDelayMs = Number("nextDelayMs", 0, 0, 10000)
             });
-            if (skills.Count == 8) break;
+            if (skills.Count == 13) break;
         }
         return true;
     }

@@ -5,7 +5,7 @@ namespace POE2Radar.Core.Game;
 public sealed record LoadoutItem(int InventoryId, string Slot, string Metadata, string Name);
 public sealed record CharacterLoadout(bool Complete, string Character, string League, int Level,
     Poe2Live.Vitals? Vitals, IReadOnlyList<LoadoutItem> Equipment, IReadOnlyList<LoadoutItem> Skills,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings, SkillBarSnapshot? SkillBar = null);
 
 public sealed partial class Poe2Live
 {
@@ -19,7 +19,8 @@ public sealed partial class Poe2Live
         var league = "";
         var level = 0;
         Vitals? vitals = null;
-        CharacterLoadout Result(bool complete) => new(complete, character, league, level, vitals, equipment, skills, warnings);
+        SkillBarSnapshot? bar = null;
+        CharacterLoadout Result(bool complete) => new(complete, character, league, level, vitals, equipment, skills, warnings, bar);
         if (!TryResolve(out _, out var area, out var player))
         {
             warnings.Add("Load a character into a zone before scanning.");
@@ -96,6 +97,19 @@ public sealed partial class Poe2Live
                     if (ResolveComponent(entity, "SkillGem") != 0 && !metadata.EndsWith("SkillGemUnusable", StringComparison.Ordinal)) skills.Add(item);
                 }
                 else equipment.Add(item);
+            }
+        }
+        bar = ReadSkillBar();
+        if (bar.Complete)
+        {
+            // Weapon-granted skills can exist on the bar without an inventory-75 SkillGem entity.
+            foreach (var effectId in bar.Slots.Select(s => s.EffectId).Where(s => s.Length > 0).Distinct())
+            {
+                if (skills.Any(s => SkillCatalog.Find(s.Metadata)?.Effects.Any(e => e.Id == effectId) == true)) continue;
+                if (SkillCatalog.FindByEffect(effectId) is { } known)
+                    skills.Add(new(0, "Live granted skill", known.Metadata, known.Gem.Name));
+                else
+                    warnings.Add("Bound effect " + effectId + " has no unique gem catalogue match; configure it manually.");
             }
         }
         if (!TryResolve(out _, out var finalArea, out var finalPlayer) || finalArea != area || finalPlayer != player)

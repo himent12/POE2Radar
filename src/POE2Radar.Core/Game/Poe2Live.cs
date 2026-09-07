@@ -241,9 +241,9 @@ private nint _leagueFor = -1;
     // anchored on the configured offset and returns the valid pool nearest to it, or -1 if none. The
     // window is deliberately narrow so the distant decoy VitalStructs (verified live to sit well away
     // from each real pool) stay out of reach — we heal a slide, we don't hunt blindly.
-    private int ResolveVitalOffset(nint lifeComp, int configured)
+    private int ResolveVitalOffset(nint lifeComp, int configured, bool allowEmpty = false)
     {
-        if (_reader.TryReadStruct<VitalStruct>(lifeComp + configured, out var v) && v.LooksValid())
+        if (_reader.TryReadStruct<VitalStruct>(lifeComp + configured, out var v) && v.LooksValid(allowEmpty))
             return configured;
         int best = -1, bestDist = int.MaxValue;
         for (var off = Math.Max(0x80, configured - 0x18); off <= configured + 0x30; off += 4)
@@ -279,7 +279,9 @@ private nint _leagueFor = -1;
                 $"Poe2.Life + re-validate (Research --vitals).");
 
         // ES self-heals the same way; if it can't be confirmed we suppress the read (safe: ES% → 100).
-        var es = ResolveVitalOffset(lifeComp, Poe2.Life.EnergyShield);
+        // A character with no ES has a valid empty pool. Searching adjacent fields in that case
+        // can mistake another resource (observed live on the level-4 Witch) for energy shield.
+        var es = ResolveVitalOffset(lifeComp, Poe2.Life.EnergyShield, allowEmpty: true);
         _esOffKnown = es >= 0;
         if (es >= 0)
         {
@@ -308,7 +310,12 @@ private nint _leagueFor = -1;
     /// </summary>
     public Vitals? PlayerVitals(nint localPlayer)
     {
-        if (localPlayer != _plLifeFor) { _plLifeFor = localPlayer; _plLife = ResolveComponent(localPlayer, "Life"); }
+        if (localPlayer != _plLifeFor)
+        {
+            _plLifeFor = localPlayer; _plLife = ResolveComponent(localPlayer, "Life");
+            _vitalOffsetsResolved = false;
+            _healthOff = Poe2.Life.Health; _manaOff = Poe2.Life.Mana; _esOff = Poe2.Life.EnergyShield; _esOffKnown = true;
+        }
         if (_plLife == 0) return null;
         EnsureVitalOffsets(_plLife);
         if (!_reader.TryReadStruct<VitalStruct>(_plLife + _healthOff, out var hp) || hp.Max <= 0) return null;

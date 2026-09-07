@@ -356,6 +356,9 @@ public sealed partial class OverlayRenderer
             rt.FillRoundedRectangle(badge, 6f, B(sk.Enabled ? UAccentDim : UBg3));
             rt.DrawRoundedRectangle(badge, 6f, B(sk.Enabled ? UAccent : ULine), 1f);
             TC(rt, KeyLabel(sk.Key), _tfBold!, (badge.Left + badge.Right) * 0.5f, (badge.Top + badge.Bottom) * 0.5f, sk.Enabled ? UAccent : UDim);
+            if (sk.Modifiers != 0)
+                T(rt, string.Join("+", new[] { (2, "C"), (1, "S"), (4, "A") }
+                    .Where(m => (sk.Modifiers & m.Item1) != 0).Select(m => m.Item2)), _tfSmall!, x + 14f, y + 76f, UAccent);
             _legendRowRects.Add((new RawRectF(badge.Left, badge.Top, (badge.Left + badge.Right) * 0.5f, badge.Bottom), $"ins:skill:adj:{i}:key:-1"));
             _legendRowRects.Add((new RawRectF((badge.Left + badge.Right) * 0.5f, badge.Top, badge.Right, badge.Bottom), $"ins:skill:adj:{i}:key:1"));
 
@@ -391,7 +394,7 @@ public sealed partial class OverlayRenderer
             y += cardH + gap;
         }
 
-        if (skills.Count < 8)
+        if (skills.Count < 13)
         {
             var add = new RawRectF(x, y, x + 120f, y + 30f);
             rt.FillRoundedRectangle(add, 4f, B(UBg3));

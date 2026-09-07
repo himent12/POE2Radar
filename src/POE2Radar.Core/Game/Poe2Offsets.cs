@@ -462,11 +462,27 @@ public static class Poe2
         public const int Zoom = 0x390; // ✓ 0.5 with large map open.
     }
 
-    /// <summary>UiElement base — ✓ validated live (GH2's offsets drifted: Self 0x30→0x8, Flags 0x1B8→0x180).
-    /// Parent/Position/Size from the 2026-06-07 community offset dump (resources/additional offsets.txt);
-    /// Position + Size confirmed live on the atlas-node class (size = 40×40 icons, positions vary per node).</summary>
+    /// <summary>✓ 2026-09-07, standalone: named HUD/HUDRight/skills_bar; children 0..12 are bindings.</summary>
+    public static class SkillBar
+    {
+        public const int SlotCount = 13;
+        public const int ButtonSkill = 0x2D8; // shared_ptr to Actor active skill
+        public const int ButtonSkillId = 0x2E8; // uint; must equal SkillInstance.Id
+    }
+
+    public static class SkillInstance
+    {
+        public const int Id = 0x40;
+        public const int ActionRow = 0x48; // row -> UTF-16 action ID (Move, LightningArrow, ...)
+        public const int GrantedPerLevel = 0x58; // row -> GrantedEffects row -> UTF-16 effect ID
+    }
+
+    /// <summary>UiElement base — ✓ validated live. Parent/Position/Size from the 2026-06-07
+    /// community offset dump (resources/additional offsets.txt); Position + Size confirmed on
+    /// atlas nodes. Individual fields below record subsequent validation.</summary>
     public static class UiElement
     {
+        public const int Identifier = 0x98; // ✓ 2026-09-07: std::wstring HUD / HUDRight / skills_bar
         public const int Self           = 0x08;  // ✓ self pointer
         public const int Children       = 0x10;  // ✓ StdVector begin (child UiElement ptrs); End @ +0x18
         public const int ChildrenEnd    = 0x18;  // ✓ StdVector end

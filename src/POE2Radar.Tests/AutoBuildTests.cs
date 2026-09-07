@@ -115,7 +115,7 @@ public sealed class AutoBuildTests
     public void Dashboard_describes_limits_and_never_arms_combat()
     {
         Assert.Contains("Scan &amp; propose build", DashboardHtml.Page);
-        Assert.Contains("Keys need one-time confirmation", DashboardHtml.Page);
+        Assert.Contains("live skill assignments", DashboardHtml.Page);
         Assert.Contains("Apply selected build", DashboardHtml.Page);
         Assert.DoesNotContain("combatAssistEnabled", DashboardHtml.Page, StringComparison.OrdinalIgnoreCase);
     }

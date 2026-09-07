@@ -15,6 +15,14 @@ using POE2Radar.Research;
 Console.WriteLine("POE2Radar.Research");
 Console.WriteLine("==================");
 
+if (HasFlag(args, "--input-config"))
+{
+    var input = GameInputConfig.Read();
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(input,
+        new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+    return input.Complete ? 0 : 1;
+}
+
 // --pid <N> forces attach to a specific process (needed when PoE1 + PoE2 run side by side, since both
 // match the candidate names and AttachToPoE would otherwise grab whichever it finds first).
 var pidArg = TryGetIntArg(args, "--pid");
@@ -28,11 +36,16 @@ Console.WriteLine($"Attached to {process.ProcessName} (PID {process.ProcessId})"
 Console.WriteLine($"Main module base: 0x{process.MainModuleBase:X16}  size: 0x{process.MainModuleSize:X}");
 var reader = new MemoryReader(process);
 
-if (HasFlag(args, "--loadout"))
+if (HasFlag(args, "--loadout") || HasFlag(args, "--skill-bar"))
 {
     var slots = AobPatterns.GameStateRefs.SelectMany(p => AobScanner.ScanForResolvedAddresses(process, reader, p)).Distinct().ToArray();
     if (slots.Length != 1) { Console.Error.WriteLine("GameState signature is not unique."); return 1; }
     var loadout = new Poe2Live(reader, slots[0]).ReadLoadout();
+    if (HasFlag(args, "--skill-bar"))
+    {
+        Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(loadout.SkillBar, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+        return loadout.SkillBar?.Complete == true ? 0 : 1;
+    }
     Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(loadout, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
     return loadout.Complete ? 0 : 1;
 }

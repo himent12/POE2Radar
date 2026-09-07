@@ -305,7 +305,7 @@ public sealed partial class RadarApp
     private void AddCombatSkill()
     {
         _settings.CombatSkills ??= new List<CombatSkill>();
-        if (_settings.CombatSkills.Count >= 8) return;
+        if (_settings.CombatSkills.Count >= 13) return;
         var used = new HashSet<int>(_settings.CombatSkills.Select(k => k.Key));
         var key = SkillKeyCycle.FirstOrDefault(k => !used.Contains(k), 0x51);
         _settings.CombatSkills.Add(new CombatSkill { Key = key, CooldownMs = Math.Clamp(_settings.CombatCooldownMs, 0, 60000) });
@@ -338,6 +338,7 @@ public sealed partial class RadarApp
                         var n = SkillKeyCycle.Length;
                         idx = ((idx < 0 ? 0 : idx) + (d > 0 ? 1 : -1) + n) % n;
                         sk.Key = SkillKeyCycle[idx];
+                        sk.SourceSlot = 0;
                         break;
                     }
                     case "cd": sk.CooldownMs = Math.Clamp(sk.CooldownMs + (int)d, 0, 60000); break;

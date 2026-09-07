@@ -11,6 +11,27 @@ namespace POE2Radar.Tests;
 
 public sealed class CombatInputOwnershipTests
 {
+    [Fact]
+    public void Modifier_chord_brackets_the_cast_and_releases_before_recovery()
+    {
+        var app = App();
+        Call(app, "StartComboMacro", new CombatAssist.Skill(81, 700, Modifiers: 3),
+            new CombatAssist.Decision(true, 81, 0, 0, "cast"), Now);
+        var steps = ((IEnumerable)Field("_macro").GetValue(app)!).Cast<ITuple>().ToArray();
+        Assert.Equal(new[] { "Aim", "ModifierDown", "ModifierDown", "KeyDown", "KeyUp", "KeyUp", "KeyUp", "Done" },
+            steps.Select(s => s[0]!.ToString()));
+        Assert.Equal(new ushort[] { 17, 16, 81, 81, 16, 17 }, steps.Skip(1).Take(6).Select(s => (ushort)s[1]!));
+    }
+
+    [Fact]
+    public void Modified_and_unmodified_keys_have_independent_cooldowns()
+    {
+        var app = App();
+        Get<Dictionary<int, DateTime>>(app, "_combatKeyFiredAt")[81 | (2 << 8)] = Now;
+        Call(app, "EnsureCombatClocks", new List<CombatSkill> { new() { Key = 81 }, new() { Key = 81, Modifiers = 2 } });
+        Assert.Equal(new[] { DateTime.MinValue, Now }, Get<DateTime[]>(app, "_combatFiredAt"));
+    }
+
     private static readonly DateTime Now = new(2026, 9, 5, 0, 0, 0, DateTimeKind.Utc);
     private const BindingFlags Private = BindingFlags.Instance | BindingFlags.NonPublic;
 

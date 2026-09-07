@@ -45,7 +45,8 @@ public static class CombatAssist
         bool RequireTarget = true,
         bool Priority = false,
         string AimMode = "Target",
-        bool AnyLowResource = false);
+        bool AnyLowResource = false,
+        int Modifiers = 0);
 
     public readonly record struct Snapshot(
         bool Armed,
@@ -123,6 +124,7 @@ public static Decision Decide(in Snapshot s)
             if (sk.Priority != (pass == 0) || !sk.Enabled) continue;
             if (s.Fleeing && !sk.Priority) continue;
             if (sk.Key is < 1 or > 255) continue;
+            if (sk.Modifiers is < 0 or > 7) continue;
             if (s.KeyboardOnly && sk.Key is 0x01 or 0x02 or 0x04 or 0x05 or 0x06) continue;
             var needsTarget = sk.RequireTarget || sk.AimMode != "Cursor" || sk.RareOnly || sk.TargetHpBelowPct > 0f;
             if (needsTarget && !hasTarget) continue;

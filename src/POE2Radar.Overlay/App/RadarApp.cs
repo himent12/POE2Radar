@@ -217,6 +217,8 @@ public sealed partial class RadarApp : IDisposable
     private volatile bool _shutdown;
 
     private string _charName = "";
+    private string _charIdentity = "";
+    private nint _charIdentityArea;
 
     private nint _charNameFor;
 

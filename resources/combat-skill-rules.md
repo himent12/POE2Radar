@@ -1,6 +1,6 @@
 # Conditional combat skills
 
-Open F12 → Settings → Combat / Bot. Add up to eight skill cards, select the
+Open F12 → Settings → Combat / Bot. Add up to thirteen skill cards, select the
 actual bound key, then choose a starting preset. Presets configure conditions,
 not game abilities: bind the intended escape, guard or recovery skill yourself.
 Changes do not arm combat. Existing focus, in-game and local kill-switch gates remain.

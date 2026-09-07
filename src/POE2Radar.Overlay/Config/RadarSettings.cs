@@ -222,6 +222,7 @@ public sealed class RadarSettings
     public int CombatCooldownMs { get; set; } = 400;
     public int CombatAttackKey { get; set; } = 0x51; // Q
     public List<CombatSkill> CombatSkills { get; set; } = new();
+    public Dictionary<string, List<CombatSkill>> BuildProfiles { get; set; } = new();
 
     // ── Farm loop (F11 in-game kill-switch). Default OFF. FarmLoopEnabled is NOT writable via the HTTP
     //    API — same as MapClearEnabled. Clears FarmAreaCode with map-clear, casts a town portal (FarmPortalKey
@@ -480,15 +481,30 @@ public sealed class RadarSettings
     /// <summary>Persist current settings to disk. Never throws on IO error — logs and continues.</summary>
     public void Save()
     {
+        if (!TrySave(out var error)) Console.Error.WriteLine($"Settings save failed: {error}");
+    }
+
+    public bool TrySave(out string error)
+    {
+        error = "";
+        var temporary = FilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
             var dir = Path.GetDirectoryName(FilePath);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-            File.WriteAllText(FilePath, JsonSerializer.Serialize(this, Json));
+            File.WriteAllText(temporary, JsonSerializer.Serialize(this, Json));
+            File.Move(temporary, FilePath, overwrite: true);
+            return true;
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"Settings save failed: {ex.Message}");
+            error = ex.Message;
+            return false;
+        }
+        finally
+        {
+            try { if (File.Exists(temporary)) File.Delete(temporary); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         }
     }
 }

@@ -9,6 +9,9 @@ namespace POE2Radar.Overlay.Config;
 public sealed class CombatSkill
 {
     public int Key { get; set; } = 0x51; // Q
+    public int Modifiers { get; set; } // PoE modifier mask: Shift=1, Ctrl=2, Alt=4
+    public int SourceSlot { get; set; } // 1..13 confirmed game skill-bar slot; 0 = manual key
+    public bool SourceLiveBinding { get; set; } // generated from a validated live skill bar
     public int CooldownMs { get; set; } = 400;
     public float Range { get; set; }
     /// <summary>Only fire when at least this many hostiles are inside the skill's range (AoE gating).</summary>

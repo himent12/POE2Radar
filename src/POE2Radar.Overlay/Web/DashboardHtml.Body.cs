@@ -336,18 +336,22 @@ internal static partial class DashboardHtml
             <div class="row"><div class="rl">Keep distance<small>grid units; ranged builds back away while a hostile is closer than this (0 = melee, never)</small></div>
               <input class="numin" type="number" step="1" min="0" max="200" data-set="combatKeepDistance"></div>
             <section id="autoBuild" style="border:1px solid var(--line);padding:18px;border-radius:10px;margin:16px 0">
-              <h3>Auto build · starter profile</h3>
-              <p class="hint-row">Scan your equipped gear, gems and life/mana/ES pools. Generates reviewed combat rules—not a passive-tree or DPS optimizer. Keys need one-time confirmation; unsupported skills are never guessed.</p>
+              <h3>Auto build · character rotation</h3>
+              <p class="hint-row">Scan gear, gems, granted skills, resource pools, live skill assignments and your PoE2 keys. Review the generated rotation and save. Tuned rules are remembered per character.</p>
               <button type="button" class="addbtn" id="autoBuildScan">Scan &amp; propose build</button>
               <button type="button" class="addbtn" id="autoBuildUndo" disabled>Undo last generated build</button>
               <p id="autoBuildStatus" role="status" aria-live="polite"></p>
               <div id="autoBuildResult" hidden>
                 <p id="autoBuildSummary"></p>
+                <p id="autoBuildInput"></p><p id="autoBuildControls"></p>
+                <details><summary>Key configuration source</summary><p id="autoBuildSource"></p></details>
+                <label><input type="checkbox" id="autoBuildImport"> Import detected movement mode, movement keys, dodge and flask keys</label>
                 <details><summary>Detected equipment</summary><ul id="autoBuildEquipment"></ul></details>
                 <details open><summary>Limits &amp; warnings</summary><ul id="autoBuildWarnings"></ul></details>
                 <div id="autoBuildRows"></div>
+                <p id="autoBuildValidation" role="status"></p>
                 <button type="button" class="addbtn" id="autoBuildApply" disabled>Apply selected build</button>
-                <p class="hint-row">Select a supported main attack and unique, confirmed keys. Preview expires after 2 minutes. Applying does not arm combat; use F4 locally. Undo is available this session until manual edits change the generated settings.</p>
+                <p class="hint-row">Applying replaces the combat rotation, range and keep-distance, plus controls if checked. Select a main attack or summon and unique key combinations. Preview expires after 2 minutes. Disarm automation before applying; arm combat locally with F4. Undo restores the previous settings during this session.</p>
               </div>
             </section>
             <style>#autoBuild p,#autoBuild li{font-size:12px;line-height:1.6;overflow-wrap:anywhere}#autoBuild .auto-build-row{border-top:1px solid var(--line);padding:14px 0}#autoBuild label{display:block;font-size:12px}#autoBuild select{margin:8px 0;padding:8px;background:var(--panel);color:var(--text);max-width:100%;border:1px solid var(--line)}#autoBuild button:disabled{opacity:.4;cursor:default}</style>

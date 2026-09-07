@@ -443,7 +443,7 @@ async function checkVersion(){
 
 wireSettings(); wireHpBars(); wireTerrain(); wireGround(); wireHover(); wireMono(); wireExchange();
 document.querySelector('#combatSkillAdd')?.addEventListener('click',()=>{
-  if(combatSkillsData.length>=8) return;
+  if(combatSkillsData.length>=13) return;
   combatSkillsData.push({key:nextQwer(), cooldownMs:400, range:0});
   renderCombatSkills(); saveCombatSkills();
 });

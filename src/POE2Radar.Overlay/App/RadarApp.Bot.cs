@@ -13,6 +13,17 @@ namespace POE2Radar.Overlay;
 
 public sealed partial class RadarApp
 {
+    private sealed record BuildBindingRead(DateTime ReadAt, nint Player, SkillBarSnapshot Bar, GameInputSnapshot Input);
+    private volatile BuildBindingRead? _buildBindingRead;
+
+    private void RefreshBuildBindings(nint localPlayer)
+    {
+        if (!_settings.CombatSkills.Any(s => s.Enabled && s.SourceLiveBinding)) return;
+        var previous = _buildBindingRead;
+        if (previous?.Player == localPlayer && DateTime.UtcNow - previous.ReadAt < TimeSpan.FromSeconds(1)) return;
+        // World reader owns this stack; disk discovery and UI traversal never block the render loop.
+        _buildBindingRead = new(DateTime.UtcNow, localPlayer, _live.ReadSkillBar(), GameInputConfig.Read());
+    }
     // ── Auto-flask (opt-in input). Foreground + in-game gated; F8 master kill-switch.
     //    Flask keys are configurable in RadarSettings (LifeKey/ManaKey). ──
     private bool _autoFlask = true;
@@ -179,14 +190,32 @@ public sealed partial class RadarApp
     {
         var now = DateTime.UtcNow;
         var src = _settings.CombatSkills;
+        if (!inGame) { _charIdentity = ""; _charNameFor = 0; }
+        if (src?.Any(s => s.Enabled && s.SourceCharacter.Length > 0 && s.SourceCharacter != _charIdentity) == true)
+        {
+            AbortComboMacro();
+            _combatNote = "paused (generated build belongs to another character; scan again)";
+            return;
+        }
         var n = src?.Count ?? 0;
+        if (src?.Any(s => s.Enabled && s.SourceLiveBinding) == true)
+        {
+            var current = _buildBindingRead;
+            if (current is null || current.Player != localPlayer || now - current.ReadAt > TimeSpan.FromSeconds(3)
+                || !AutoBuild.BindingsMatch(src, current.Bar, current.Input))
+            {
+                AbortComboMacro();
+                _combatNote = "paused (live skill bindings changed or unavailable; scan again)";
+                return;
+            }
+        }
         var specs = new CombatAssist.Skill[n];
         for (var i = 0; i < n; i++)
         {
             var sk = src![i];
             specs[i] = new CombatAssist.Skill(sk.Key, sk.CooldownMs, sk.Range, Math.Max(0, sk.MinTargets), sk.RareOnly, sk.HpBelowPct, sk.Enabled,
                 Math.Clamp(sk.Repeat, 1, 10), Math.Clamp(sk.RepeatGapMs, 30, 2000), Math.Clamp(sk.HoldMs, 0, 10000), sk.DodgeAfter, Math.Clamp(sk.NextDelayMs, 0, 10000),
-                sk.ManaBelowPct, sk.MinManaPct, sk.EsBelowPct, sk.TargetHpBelowPct, sk.RequireTarget, sk.Priority, sk.AimMode, sk.AnyLowResource);
+                sk.ManaBelowPct, sk.MinManaPct, sk.EsBelowPct, sk.TargetHpBelowPct, sk.RequireTarget, sk.Priority, sk.AimMode, sk.AnyLowResource, sk.Modifiers);
         }
         // A combo macro in flight owns the keyboard: advance it and skip deciding.
         var vitals = inGame ? _liveRender.PlayerVitals(localPlayer) : null;
@@ -248,7 +277,8 @@ public sealed partial class RadarApp
     // ── Combo macro executor (render thread). One skill cast expanded into timed steps: N taps or a hold,
     //    then an optional dodge-roll away from the target, then a rotation lockout. Non-blocking: each tick
     //    performs whatever steps are due. ──
-    private enum MacroStep { Aim, KeyDown, KeyUp, Tap, DodgeStart, DodgeEnd, Done }
+    private enum MacroStep { Aim, ModifierDown, KeyDown, KeyUp, Tap, DodgeStart, DodgeEnd, Done }
+    private int _macroModifiers;
     private uint _macroTargetId;
     private string _macroAimMode = "Target";
     private bool _macroPriority;
@@ -281,6 +311,7 @@ public sealed partial class RadarApp
         _macroNextIndex = d.NextIndex;
         _macroTargetId = d.TargetId;
         _macroAimMode = spec.AimMode;
+        _macroModifiers = spec.Modifiers;
         _macroPriority = spec.Priority;
         _macroTargetGrid = d.TargetGrid;
         _macroTargetWorld = d.TargetWorld;
@@ -291,8 +322,12 @@ public sealed partial class RadarApp
         {
             var after = i == 0 ? TimeSpan.Zero : TimeSpan.FromMilliseconds(castMs);
             _macro.Enqueue((MacroStep.Aim, 0, after));
+            foreach (var modifier in ModifierKeys(spec.Modifiers))
+                _macro.Enqueue((MacroStep.ModifierDown, modifier, TimeSpan.Zero));
             _macro.Enqueue((MacroStep.KeyDown, d.Vk, TimeSpan.Zero));
             _macro.Enqueue((MacroStep.KeyUp, d.Vk, TimeSpan.FromMilliseconds(spec.HoldMs > 0 ? spec.HoldMs : tapMs)));
+            foreach (var modifier in ModifierKeys(spec.Modifiers).Reverse())
+                _macro.Enqueue((MacroStep.KeyUp, modifier, TimeSpan.Zero));
         }
         if (spec.DodgeAfter && _settings.CombatDodgeKey is >= 1 and <= 255)
         {
@@ -326,6 +361,12 @@ public sealed partial class RadarApp
             {
                 case MacroStep.Aim:
                 {
+                    if (ModifierKeys(7).Any(k => GameHost.IsKeyDown(k) && !_macroHeld.Contains(k)))
+                    {
+                        AbortComboMacro();
+                        _combatNote = "paused (user holds modifier)";
+                        return false;
+                    }
                     // Live target position when it is still alive. If it died mid-combo, carry the remaining
                     // casts over to the next hostile in range (the combo keeps building on the pack); with
                     // nothing left to hit, drop the rest — including the dodge — instead of casting at a corpse
@@ -341,6 +382,10 @@ public sealed partial class RadarApp
                     AimCombatSkill(_macroAimMode, grid, world, player, playerWorld);
                     break;
                 }
+                case MacroStep.ModifierDown:
+                    if (GameHost.WouldDrop(vk)) { AbortComboMacro(); return false; }
+                    GameHost.KeyDown(vk); _macroHeld.Add(vk);
+                    break;
                 case MacroStep.KeyDown:
                     if (!DispatchCombatKeyDown(vk, now, GameHost.KeyDown))
                     {
@@ -349,7 +394,9 @@ public sealed partial class RadarApp
                         return false;
                     }
                     break;
-                case MacroStep.KeyUp: GameHost.KeyUp(vk); _macroHeld.Remove(vk); break;
+                case MacroStep.KeyUp:
+                    if (_macroHeld.Remove(vk)) GameHost.KeyUp(vk);
+                    break;
                 case MacroStep.Tap: GameHost.TapKey(vk); break;
                 case MacroStep.DodgeStart:
                 {
@@ -485,7 +532,7 @@ private void EnsureCombatClocks(IReadOnlyList<CombatSkill>? skills)
         var n = skills?.Count ?? 0;
         if (_combatFiredAt.Length != n) _combatFiredAt = new DateTime[n];
         for (var i = 0; i < n; i++)
-            _combatFiredAt[i] = _combatKeyFiredAt.GetValueOrDefault(skills![i].Key, DateTime.MinValue);
+            _combatFiredAt[i] = _combatKeyFiredAt.GetValueOrDefault(skills![i].Key | (skills[i].Modifiers << 8), DateTime.MinValue);
     }
 
     /// <summary>
@@ -746,10 +793,17 @@ private void EnsureCombatClocks(IReadOnlyList<CombatSkill>? skills)
         _macroHeld.Add(vk);
         if (_macroCastPending)
         {
-            _combatKeyFiredAt[vk] = now;
+            _combatKeyFiredAt[vk | (_macroModifiers << 8)] = now;
             _combatNextIndex = _macroNextIndex;
             _macroCastPending = false;
         }
         return true;
+    }
+
+    internal static IEnumerable<ushort> ModifierKeys(int modifiers)
+    {
+        if ((modifiers & 2) != 0) yield return 0x11;
+        if ((modifiers & 1) != 0) yield return 0x10;
+        if ((modifiers & 4) != 0) yield return 0x12;
     }
 }

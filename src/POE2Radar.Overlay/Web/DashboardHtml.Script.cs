@@ -222,6 +222,7 @@ function renderCombatSkills(){
     return '<article class="skill-card" data-i="'+i+'"><header><span class="skill-order">'+(i+1)+'</span><label class="skill-name-label">Skill name<input class="skill-name" maxlength="60" value="'+esc(sk.name||'')+'" placeholder="Name this skill"></label>'+flag(sk,'enabled','Enabled',true)+'<button type="button" data-move="-1" aria-label="Move skill up" '+(i===0?'disabled':'')+'>↑</button><button type="button" data-move="1" aria-label="Move skill down" '+(i===combatSkillsData.length-1?'disabled':'')+'>↓</button><button type="button" class="sk-del">Remove</button></header>'
       +'<p class="skill-summary">'+esc(skillSummary(sk))+'</p><p class="skill-warning" '+(warning?'':'hidden')+'>'+esc(warning)+'</p>'
       +'<div class="skill-fields"><label>Key<select class="sk-key">'+keys.map(([key,label])=>'<option value="'+key+'" '+(sk.key===key?'selected':'')+'>'+label+'</option>').join('')+'</select></label>'
+      +'<label>Modifier<select class="sk-mod">'+[[0,'None'],[2,'Ctrl'],[1,'Shift'],[4,'Alt'],[3,'Ctrl + Shift'],[6,'Ctrl + Alt'],[5,'Shift + Alt'],[7,'Ctrl + Shift + Alt']].map(([m,l])=>'<option value="'+m+'" '+((sk.modifiers||0)===m?'selected':'')+'>'+l+'</option>').join('')+'</select></label>'
       +'<label>Starting preset<select class="sk-preset"><option value="">Custom rules</option>'+Object.entries(skillPresets).map(([key,p])=>'<option value="'+key+'">'+p.name+'</option>').join('')+'</select></label>'
       +numeric(sk,'cooldownMs','Cooldown · ms',60000,50,400)+numeric(sk,'range','Range · 0 = global',200,1)
       +'<label>Aim<select class="sk-aim">'+[['Target','At enemy'],['Cursor','Self / no re-aim'],['Away','Away from enemy']].map(([key,label])=>'<option value="'+key+'" '+((sk.aimMode||'Target')===key?'selected':'')+'>'+label+'</option>').join('')+'</select></label></div>'
@@ -234,7 +235,8 @@ function renderCombatSkills(){
     const i=+row.dataset.i,sk=combatSkillsData[i];
     const save=()=>{saveCombatSkills();renderCombatSkills();};
     row.querySelector('.skill-name').onchange=e=>{sk.name=e.target.value.trim().slice(0,60);save();};
-    row.querySelector('.sk-key').onchange=e=>{sk.key=+e.target.value;save();};
+    row.querySelector('.sk-key').onchange=e=>{sk.key=+e.target.value;sk.sourceSlot=0;save();};
+    row.querySelector('.sk-mod').onchange=e=>{sk.modifiers=+e.target.value;sk.sourceSlot=0;save();};
     row.querySelector('.sk-aim').onchange=e=>{sk.aimMode=e.target.value;save();};
     row.querySelectorAll('[data-num]').forEach(input=>{input.onchange=()=>{let v=Number(input.value);if(!Number.isFinite(v))return;const k=input.dataset.num;const lo=k==='repeat'?1:k==='repeatGapMs'?30:0;v=Math.max(lo,Math.min(+input.max,v));if(['cooldownMs','minTargets','repeat','repeatGapMs','holdMs','nextDelayMs'].includes(k))v=Math.round(v);sk[k]=v;save();};});
     row.querySelectorAll('[data-flag]').forEach(input=>{input.onchange=()=>{sk[input.dataset.flag]=input.checked;save();};});
