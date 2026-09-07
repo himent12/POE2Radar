@@ -335,6 +335,17 @@ internal static partial class DashboardHtml
               </select></div>
             <div class="row"><div class="rl">Keep distance<small>grid units; ranged builds back away while a hostile is closer than this (0 = melee, never)</small></div>
               <input class="numin" type="number" step="1" min="0" max="200" data-set="combatKeepDistance"></div>
+            <details><summary>Boss combat · ranged uniques</summary>
+              <p class="hint-row">Uses keep-distance and combat range above. Reacts to observed damage and terrain; attack animations and projectiles are not yet validated. Rudja oil ground is the only identified hazard; its radius is estimated. A quiet opening is not a guaranteed safe cast. F4/F3/F2 still control arming locally.</p>
+              <div class="row"><div class="rl">Coordinate boss combat<small>reposition before starting another cast; ranged builds only (keep distance &gt; 0)</small></div><input type="checkbox" data-set="bossCombatEnabled"></div>
+              <div class="row"><div class="rl">Damage reaction %<small>life percentage points lost within 500 ms; substantial ES scaled to life. 0 disables reactive dodge.</small></div><input class="numin" type="number" min="0" max="50" step="1" data-set="bossDamagePct"></div>
+              <div class="row"><div class="rl">Minimum dodge gap<small>ms; prevents repeated rolling after one damage burst. Uses the configured dodge key and recovery.</small></div><input class="numin" type="number" min="900" max="10000" step="100" data-set="bossDodgeGapMs"></div>
+              <div class="row"><div class="rl">Quiet opening<small>ms without measured damage, close pressure or player/boss movement before long channels are eligible.</small></div><input class="numin" type="number" min="300" max="5000" step="100" data-set="bossSafeOpeningMs"></div>
+              <div class="row"><div class="rl">Boss target-loss grace<small>ms to wait for a missing boss before returning to mapping. Disappearance is never counted as a kill.</small></div><input class="numin" type="number" min="1000" max="30000" step="500" data-set="bossLostGraceMs"></div>
+              <div class="row"><div class="rl">Dodge travel distance<small>estimated full roll distance to check for walls and oil; 40 grid cells observed on the bow Ranger, tune for your movement speed</small></div><input class="numin" type="number" min="10" max="80" step="1" data-set="bossDodgeDistance"></div>
+              <div class="row"><div class="rl">Escape Shot distance<small>estimated grid distance to check behind the player before allowing the backward leap; tune to actual travel.</small></div><input class="numin" type="number" min="3" max="30" step="1" data-set="bossEscapeDistance"></div>
+              <div class="row"><div class="rl">Rudja oil avoidance<small>grid radius around observed oil ground; estimated margin, not a measured hitbox</small></div><input class="numin" type="number" min="2" max="20" step="1" data-set="bossHazardRadius"></div>
+            </details>
             <section id="autoBuild" style="border:1px solid var(--line);padding:18px;border-radius:10px;margin:16px 0">
               <h3>Auto build · character rotation</h3>
               <p class="hint-row">Scan gear, gems, granted skills, resource pools, live skill assignments and your PoE2 keys. Review the generated rotation and save. Tuned rules are remembered per character.</p>

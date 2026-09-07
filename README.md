@@ -39,6 +39,8 @@ quality-of-life feature.
 - **Auto-flask** (opt-in input) — presses the life/mana flask key below a Life, Energy Shield, or
   mana threshold (selectable). Hard-gated: only when PoE2 is the foreground window, with cooldowns
   and an **F8 kill-switch**.
+- **Ranged boss combat** — observed damage reactions, checked bow positioning, bounded dodge ownership,
+  and short/long attack openings. See [tuning, reader limits and live validation](resources/boss-combat.md).
 - **Combat assist** (opt-in input, **off by default**) — while armed with **F4**, taps the next ready
   skill in a configurable rotation (default **QWER**) when a hostile monster is in grid range. Same
   gates as auto-flask (focused window, in-game, per-skill cooldown). Cannot be armed from the dashboard.

@@ -36,6 +36,36 @@ Console.WriteLine($"Attached to {process.ProcessName} (PID {process.ProcessId})"
 Console.WriteLine($"Main module base: 0x{process.MainModuleBase:X16}  size: 0x{process.MainModuleSize:X}");
 var reader = new MemoryReader(process);
 
+// Bounded external-only combat observation. Raw component bytes are diagnostic evidence, not
+// interpreted attack/targetability flags. Compare recordings to visible actions before adding offsets.
+if (HasFlag(args, "--combat-observe"))
+{
+    var slots = AobPatterns.GameStateRefs.SelectMany(p => AobScanner.ScanForResolvedAddresses(process, reader, p)).Distinct().ToArray();
+    if (slots.Length != 1) return 1;
+    var live = new Poe2Live(reader, slots[0]);
+    var until = DateTime.UtcNow.AddSeconds(Math.Clamp(TryGetIntArg(args, "--seconds") ?? 10, 1, 120));
+    var seen = new HashSet<(nint Area, uint Id)>();
+    while (DateTime.UtcNow < until)
+    {
+        if (live.TryResolve(out _, out var area, out var player) && live.PlayerGrid(player) is { } at)
+        {
+            var entities = live.Entities(area).Where(e => System.Numerics.Vector2.Distance(e.Grid, at) < 65).Take(48).ToArray();
+            Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new { at = DateTime.UtcNow, area = (long)area,
+                player = new { at.X, at.Y }, vitals = live.PlayerVitals(player),
+                entities = entities.Select(e => new { e.Id, e.Metadata, category = e.Category.ToString(), rarity = e.Rarity.ToString(),
+                    e.Grid.X, e.Grid.Y, e.HpCur, e.HpMax, e.Reaction,
+                    components = seen.Add((area, e.Id)) ? WalkComponents(reader, e.Address).Select(c => c.name).ToArray() : null,
+                    raw = new[] { "Actor", "Animated", "Targetable" }.Select(name => {
+                        var addr = ResolveComponentAddr(reader, e.Address, name);
+                        var bytes = new byte[0x200];
+                        return new { name, bytes = addr == 0 ? "" : Convert.ToHexString(bytes.AsSpan(0, reader.TryReadBytes(addr, bytes))) };
+                    }).ToArray() }) }));
+        }
+        Thread.Sleep(100);
+    }
+    return 0;
+}
+
 if (HasFlag(args, "--loadout") || HasFlag(args, "--skill-bar"))
 {
     var slots = AobPatterns.GameStateRefs.SelectMany(p => AobScanner.ScanForResolvedAddresses(process, reader, p)).Distinct().ToArray();

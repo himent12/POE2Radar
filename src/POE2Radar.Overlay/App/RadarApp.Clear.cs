@@ -236,7 +236,7 @@ public sealed partial class RadarApp
         foreach (var e in _entities)
         {
             if (!e.IsAlive || e.IconComplete) continue;
-            if (e.Category != Poe2Live.EntityCategory.Monster || e.IsFriendly) continue;
+            if (e.Category != Poe2Live.EntityCategory.Monster || !e.HasLife || e.IsFriendly) continue;
             if (imprisoned.Contains(e.Id)) continue; // immune: click the crystal instead
             // Skip monsters the fight watchdog / stuck watchdog gave up on (unreachable, untargetable).
             if (_clearIgnoredMobs.ContainsKey(e.Id) || _combatWatch.IsIgnored(e.Id)) continue;
@@ -329,8 +329,7 @@ public sealed partial class RadarApp
         {
             lock (_navLock)
             {
-                if (!_selectedIds.Contains(id) && _selectedIds.Count < MaxSelectedTargets)
-                    _selectedIds.Insert(0, id);
+                PromoteAutoTarget(_selectedIds, id, MaxSelectedTargets);
             }
             return "→ " + label;
         }
@@ -338,16 +337,18 @@ public sealed partial class RadarApp
         lock (_navLock)
         {
             if (_questFollowId is { } prev) _selectedIds.Remove(prev);
-            if (!_selectedIds.Contains(id))
-            {
-                if (_selectedIds.Count >= MaxSelectedTargets)
-                    _selectedIds.RemoveAt(_selectedIds.Count - 1);
-                _selectedIds.Insert(0, id);
-            }
+            PromoteAutoTarget(_selectedIds, id, MaxSelectedTargets);
         }
         _questFollowId = id;
         Console.WriteLine($"\n{logPrefix}: {label}");
         return "→ " + label;
+    }
+
+    internal static void PromoteAutoTarget(List<string> selected, string id, int capacity)
+    {
+        selected.Remove(id); // an already selected route must still become the mover's first route
+        if (selected.Count >= capacity) selected.RemoveAt(selected.Count - 1);
+        selected.Insert(0, id);
     }
 
     private void PublishQuestGrid(string id)

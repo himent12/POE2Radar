@@ -108,11 +108,11 @@ public sealed class CombatWatchTests
     public void Lifeless_monster_never_holds_the_bot()
     {
         var w = Watch();
-        // HpMax 0 reads as "alive" forever; it can never show damage → stalls out and is skipped.
-        Assert.True(w.Update([Mob(7, 2, 0, hp: 0, hpMax: 0)], NumVec2.Zero, 20, T0).PauseMove);
+        // Arena blockers are categorized Monster but have no Life: never acquire them as combat targets.
+        Assert.False(w.Update([Mob(7, 2, 0, hp: 0, hpMax: 0)], NumVec2.Zero, 20, T0).PauseMove);
         var r = w.Update([Mob(7, 2, 0, hp: 0, hpMax: 0)], NumVec2.Zero, 20, T0.AddSeconds(4));
         Assert.False(r.PauseMove);
-        Assert.True(w.IsIgnored(7));
+        Assert.False(w.IsIgnored(7));
     }
 
     [Fact]

@@ -190,6 +190,7 @@ public sealed partial class RadarApp : IDisposable
         IReadOnlyList<LegendEntry> Legend,
         IReadOnlyList<string> SelectedSnapshot)
     {
+        public DateTime ObservedAt { get; init; } = DateTime.UtcNow;
         public static readonly WorldSnapshot Empty = new(
             false, 0, 0, "", 0, Array.Empty<Poe2Live.EntityDot>(), Array.Empty<Poe2Live.Landmark>(), null,
             Array.Empty<HpBarSpec>(), Array.Empty<ItemLabelSpec>(), Array.Empty<SelectedPath>(),
@@ -620,6 +621,8 @@ public sealed partial class RadarApp : IDisposable
     public void Dispose()
     {
         _shutdown = true;
+        _bossDodge.Cancel(GameHost.KeyUp);
+        AbortComboMacro();
         ReleaseHeldKeys();          // never leave W/Space pressed in the game after we exit
         GameHost.RestoreInputState();
         _worldThread?.Join(1000);   // let the background world loop observe _shutdown and exit

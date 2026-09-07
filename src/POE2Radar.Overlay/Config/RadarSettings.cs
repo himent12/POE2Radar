@@ -219,6 +219,15 @@ public sealed class RadarSettings
     public string CombatRotationMode { get; set; } = "RoundRobin";
     // Ranged kiting: back off while any hostile is closer than this (0 = melee, never back off).
     public float CombatKeepDistance { get; set; } = 0f;
+    // Ranged unique encounters only; these tune policy, never arm input.
+    public bool BossCombatEnabled { get; set; } = true;
+    public float BossDamagePct { get; set; } = 6;
+    public int BossDodgeGapMs { get; set; } = 1800;
+    public int BossSafeOpeningMs { get; set; } = 1200;
+    public int BossLostGraceMs { get; set; } = 8000;
+    public float BossHazardRadius { get; set; } = 6;
+    public float BossDodgeDistance { get; set; } = 40;
+    public float BossEscapeDistance { get; set; } = 10;
     public int CombatCooldownMs { get; set; } = 400;
     public int CombatAttackKey { get; set; } = 0x51; // Q
     public List<CombatSkill> CombatSkills { get; set; } = new();

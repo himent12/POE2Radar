@@ -176,7 +176,8 @@ public sealed partial class RadarApp
         // zone change its entities/terrain/route still belong to the PREVIOUS area. Only draw them once the
         // snapshot's area hash matches the live one; otherwise draw none this frame (player blip + map still
         // draw). The API still serves the latest snapshot regardless (no visual artifact there).
-        var worldFresh = inGame && snap.InGame && snap.AreaHash == _areaHash;
+        var worldFresh = inGame && snap.InGame && snap.AreaHash == _areaHash
+            && DateTime.UtcNow - snap.ObservedAt < TimeSpan.FromMilliseconds(500);
         var entities = worldFresh ? snap.Entities : Array.Empty<Poe2Live.EntityDot>();
         var landmarks = worldFresh ? snap.Landmarks : Array.Empty<Poe2Live.Landmark>();
         var terrain = worldFresh ? snap.Terrain : null;
@@ -205,12 +206,15 @@ public sealed partial class RadarApp
         _combatWatch.FleeBelowPct = _settings.CombatFleeHpPct;
         _combatWatch.FleeRecoverPct = _settings.CombatFleeRecoverPct;
         _combatWatch.KeepDistance = _settings.CombatKeepDistance;
+        if (_bossCombat.TargetId != 0) _combatWatch.Reset();
         var watch = CombatArmed && inGame
             ? _combatWatch.Update(combatEntities, player, _settings.CombatEngageRange, DateTime.UtcNow, _hpPct, _settings.CombatRange)
             : default;
+        UpdateBoss(inGame && focused && !_playerDead, worldFresh, player, localPlayer, combatEntities, terrain);
+        if (_bossDecision.Active) watch = default; // Boss phase loss must never enter the normal stall blacklist.
         var inCombat = watch.PauseMove;
-        _inCombat = inCombat || watch.Flee;
-        TickCombatAssist(inGame, focused, player, combatEntities, playerWorld, watch, localPlayer);
+        _inCombat = inCombat || watch.Flee || _bossDecision.Active;
+        TickCombatAssist(inGame && worldFresh, focused, player, combatEntities, playerWorld, watch, localPlayer);
         // Low HP: the mover runs the flee point instead of the route (attacks are held above).
         IReadOnlyList<SelectedPath> movePaths = selectedPaths;
         if ((watch.Flee || watch.Kite) && CombatWatch.TryFleePoint(combatEntities, player, _settings.CombatRange,
@@ -220,9 +224,18 @@ public sealed partial class RadarApp
             movePaths = new[] { new SelectedPath(0, new List<(int x, int y)> { ((int)MathF.Round(fleeTo.X), (int)MathF.Round(fleeTo.Y)) }) };
         }
         // A running combo pauses movement (and kiting) — a roll or run press mid-cast cancels the cast.
-        TickPathMove(inGame, focused, player, movePaths, playerWorld, inCombat || _comboBusy, (watch.Flee || watch.Kite) && !_comboBusy);
-        TickQuestUse(inGame, focused, player, playerWorld, inCombat || _comboBusy);
-        TickEventUse(inGame, focused, player, playerWorld, inCombat || _comboBusy);
+        var bossRoll = TickBossDodge(inGame && focused && !_playerDead && worldFresh && CombatArmed,
+            localPlayer, player, playerWorld);
+        var bossMove = _bossDecision.Active && _combatBindingSafe && !_comboBusy && !bossRoll
+            && _bossDecision.Intent == BossCombat.Intent.Reposition;
+        if (bossMove)
+            movePaths = new[] { new SelectedPath(0, new List<(int x, int y)> {
+                ((int)MathF.Round(_bossDecision.Destination.X), (int)MathF.Round(_bossDecision.Destination.Y)) }) };
+        TickPathMove(inGame && worldFresh, focused, player, movePaths, playerWorld,
+            inCombat || _comboBusy || bossRoll || (_bossDecision.Active && !bossMove),
+            bossMove || (watch.Flee || watch.Kite) && !_comboBusy, bossMove);
+        TickQuestUse(inGame && worldFresh, focused, player, playerWorld, inCombat || _comboBusy || _bossDecision.Active || bossRoll);
+        TickEventUse(inGame && worldFresh, focused, player, playerWorld, inCombat || _comboBusy || _bossDecision.Active || bossRoll);
         TickFarmInput(inGameState, inGame, focused);
 
         _state = new RadarState(inGame, snap.AreaHash, snap.AreaLevel, map.IsVisible, map.Zoom, player,

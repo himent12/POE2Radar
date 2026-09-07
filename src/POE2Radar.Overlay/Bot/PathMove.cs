@@ -271,6 +271,15 @@ public static class PathMove
         var best = Advance(pts, nextIdx, s.PlayerGrid, look, hasTerrain ? 1 : 0, hasTerrain ? s.Walkable : null, s.Width, s.Height);
         if (best == pts[nextIdx] && hasTerrain)
             best = Advance(pts, nextIdx, s.PlayerGrid, look * 0.5f, 0, s.Walkable, s.Width, s.Height);
+        // Smoothed routes can have their FIRST next waypoint hundreds of cells away. Advance only
+        // bounded later nodes, so that first node bypassed LookAhead and could project off-screen.
+        var delta = new NumVec2(best.x, best.y) - s.PlayerGrid;
+        if (IsClick(s.Method) && delta.LengthSquared() > look * look)
+        {
+            var near = s.PlayerGrid + NumVec2.Normalize(delta) * look;
+            var bounded = ((int)MathF.Round(near.X), (int)MathF.Round(near.Y));
+            if (!hasTerrain || HasLineOfSight(s.Walkable!, s.Width, s.Height, s.PlayerGrid, bounded)) return bounded;
+        }
         return best;
     }
 

@@ -32,6 +32,46 @@ public sealed class CombatInputOwnershipTests
         Assert.Equal(new[] { DateTime.MinValue, Now }, Get<DateTime[]>(app, "_combatFiredAt"));
     }
 
+    [Fact]
+    public void Boss_openings_filter_snipe_and_buffs_without_overwriting_manual_timing()
+    {
+        var app = App();
+        Field("_bossDecision").SetValue(app, new BossCombat.Decision(BossCombat.Intent.Attack, 10));
+        var source = new CombatSkill { Name = "Snipe", HoldMs = 2100, Repeat = 3 };
+        var channel = new CombatAssist.Skill(69, 0, HoldMs: 2100, Repeat: 3);
+        CombatAssist.Skill Filter(CombatAssist.Skill skill) => (CombatAssist.Skill)Call(app, "BossSkill", skill, source, default(System.Numerics.Vector2))!;
+        Assert.False(Filter(channel).Enabled);
+        Assert.Equal(1, Filter(channel with { HoldMs = 0, RepeatGapMs = 150 }).Repeat);
+        Field("_bossDecision").SetValue(app, new BossCombat.Decision(BossCombat.Intent.Attack, 10, LongWindow: true));
+        Assert.True(Filter(channel).Enabled);
+        Assert.Equal(3, Filter(channel).Repeat);
+        Field("_bossDecision").SetValue(app, new BossCombat.Decision(BossCombat.Intent.Reposition, 10));
+        Assert.False(Filter(channel with { HoldMs = 0, Priority = true }).Enabled);
+        Assert.True(Filter(channel with { Priority = true, HpBelowPct = 35 }).Enabled);
+        Field("_bossDecision").SetValue(app, new BossCombat.Decision(BossCombat.Intent.Dodge, 10));
+        Assert.False(Filter(channel with { Priority = true, HpBelowPct = 35 }).Enabled);
+        Assert.Equal(2100, source.HoldMs); Assert.Equal(3, source.Repeat);
+    }
+
+    [Fact]
+    public void Escape_shot_requires_a_verified_backward_landing()
+    {
+        var app = App();
+        Field("_bossDecision").SetValue(app, new BossCombat.Decision(BossCombat.Intent.Attack, 10, LongWindow: true));
+        var boss = new Poe2Live.EntityDot(10, 1, new(50,50), default, Poe2Live.EntityCategory.Monster, "Boss", 100,100,false,2,Poe2Live.Rarity.Unique,false);
+        Field("_bossEntities").SetValue(app, new[] { boss });
+        var nav = POE2Radar.Core.Pathfinding.NavGrid.Build(Enumerable.Repeat((byte)1,10000).ToArray(),100,100);
+        Field("_bossNav").SetValue(app, nav);
+        var source = new CombatSkill { Name = "Escape Shot" };
+        var skill = new CombatAssist.Skill(81, 0, AimMode: "Target");
+        CombatAssist.Skill Filter(System.Numerics.Vector2 player, CombatAssist.Skill value) => (CombatAssist.Skill)Call(app,"BossSkill",value,source,player)!;
+        Assert.True(Filter(new(30,50),skill).Enabled);
+        Assert.False(Filter(new(5,50),skill).Enabled); // backward jump would cross arena edge
+        Assert.False(Filter(new(30,50),skill with { AimMode = "Away" }).Enabled);
+        Field("_bossNav").SetValue(app, null);
+        Assert.False(Filter(new(30,50),skill).Enabled);
+    }
+
     private static readonly DateTime Now = new(2026, 9, 5, 0, 0, 0, DateTimeKind.Utc);
     private const BindingFlags Private = BindingFlags.Instance | BindingFlags.NonPublic;
 
@@ -207,4 +247,74 @@ public sealed class CombatInputOwnershipTests
         Call(app, "EnsureCombatClocks", (object)new[] { new CombatSkill { Key = 82 }, new CombatSkill { Key = 81 }, new CombatSkill { Key = 81 } });
         Assert.Equal(new[] { DateTime.MinValue, pressedAt, pressedAt }, Get<DateTime[]>(app, "_combatFiredAt"));
     }
+    [Fact]
+    public void Interrupted_held_channel_releases_key_and_modifiers_then_allows_movement()
+    {
+        var app = App(); var held = new HashSet<ushort>();
+        app.CombatKeyDown = k => Assert.True(held.Add(k));
+        app.CombatKeyUp = k => Assert.True(held.Remove(k));
+        Call(app, "StartComboMacro", new CombatAssist.Skill(69, 2000, HoldMs: 1200, Modifiers: 2, AimMode: "Cursor"),
+            new CombatAssist.Decision(true, 69, 0, 1, "channel"), Now);
+        TickEmptyMacro(app, Now); TickEmptyMacro(app, Now.AddMilliseconds(10));
+        Assert.Contains((ushort)69, held); Assert.Contains((ushort)17, held);
+        Call(app, "AbortComboMacro");
+        Assert.Empty(held); Assert.True(Flee(app, "Click").Moving);
+        Assert.False(TickEmptyMacro(app, Now.AddSeconds(2)));
+        Assert.Equal(Now.AddMilliseconds(10), Get<Dictionary<int,DateTime>>(app, "_combatKeyFiredAt")[69 | (2 << 8)]);
+    }
+
+    [Fact]
+    public void Manual_binding_edit_aborts_real_channel_and_releases_old_key()
+    {
+        var app = App(); var held = new HashSet<ushort>();
+        app.CombatKeyDown = k => held.Add(k); app.CombatKeyUp = k => held.Remove(k);
+        var skills = new[] { new CombatSkill { Key = 69, HoldMs = 1200 } };
+        Call(app, "SyncCombatSettings", (object)skills);
+        Call(app, "StartComboMacro", new CombatAssist.Skill(69,2000,HoldMs:1200,AimMode:"Cursor"),
+            new CombatAssist.Decision(true,69,0,1,"cast"),Now);
+        TickEmptyMacro(app,Now); Assert.Contains((ushort)69,held);
+        skills[0].Key = 82; Call(app,"SyncCombatSettings",(object)skills);
+        Assert.Empty(held); Assert.False(Get<bool>(app,"_comboBusy"));
+    }
+
+    [Fact]
+    public void Boss_target_loss_interrupts_held_channel_without_retargeting_an_add()
+    {
+        var app = App(); var held = new HashSet<ushort>();
+        app.CombatKeyDown = k => held.Add(k); app.CombatKeyUp = k => held.Remove(k);
+        Call(app,"StartComboMacro",new CombatAssist.Skill(69,2000,HoldMs:1200,AimMode:"Cursor"),
+            new CombatAssist.Decision(true,69,0,1,"cast",TargetId:10),Now);
+        TickEmptyMacro(app,Now);
+        Field("_macroAimMode").SetValue(app,"Target");
+        Field("_bossDecision").SetValue(app,new BossCombat.Decision(BossCombat.Intent.Wait,10));
+        Assert.False(TickEmptyMacro(app,Now.AddMilliseconds(100))); Assert.Empty(held);
+    }
+
+    [Fact]
+    public void Claiming_cast_releases_movement_and_clears_run_linger()
+    {
+        var app=App(); var released=new List<ushort>(); app.CombatKeyUp=released.Add;
+        Get<HashSet<ushort>>(app,"_heldKeys").UnionWith(new ushort[] {87,32});
+        Field("_runHoldUntil").SetValue(app,Now.AddSeconds(1));
+        Call(app,"ClaimCombatInput",new CombatAssist.Skill(69,2000),Now);
+        Assert.Contains((ushort)87,released); Assert.Contains((ushort)32,released);
+        Assert.Empty(Get<HashSet<ushort>>(app,"_heldKeys"));
+        Assert.Equal(DateTime.MinValue,Get<DateTime>(app,"_runHoldUntil"));
+    }
+
+    [Fact]
+    public void Boss_reposition_finishes_current_press_but_does_not_start_remaining_repeats()
+    {
+        var app=App(); var held=new HashSet<ushort>();var presses=0;
+        app.CombatKeyDown=k=>{held.Add(k);presses++;}; app.CombatKeyUp=k=>held.Remove(k);
+        Call(app,"StartComboMacro",new CombatAssist.Skill(87,900,Repeat:3,RepeatGapMs:150,AimMode:"Cursor"),
+            new CombatAssist.Decision(true,87,0,1,"cast"),Now);
+        TickEmptyMacro(app,Now); Assert.Single(held);
+        Field("_bossDecision").SetValue(app,new BossCombat.Decision(BossCombat.Intent.Reposition,10));
+        Assert.True(TickEmptyMacro(app,Now.AddMilliseconds(30)));Assert.Single(held);
+        TickEmptyMacro(app,Now.AddMilliseconds(60));Assert.Empty(held);
+        Assert.False(TickEmptyMacro(app,Now.AddMilliseconds(210))); Assert.Equal(1,presses);
+        Assert.True(Flee(app,"WASD").Moving);
+    }
+
 }

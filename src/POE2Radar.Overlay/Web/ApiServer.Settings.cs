@@ -58,6 +58,14 @@ public sealed partial class ApiServer
         combatTargetMode = _settings.CombatTargetMode,
         combatRotationMode = _settings.CombatRotationMode,
         combatKeepDistance = _settings.CombatKeepDistance,
+        bossCombatEnabled = _settings.BossCombatEnabled,
+        bossDamagePct = _settings.BossDamagePct,
+        bossDodgeGapMs = _settings.BossDodgeGapMs,
+        bossSafeOpeningMs = _settings.BossSafeOpeningMs,
+        bossLostGraceMs = _settings.BossLostGraceMs,
+        bossHazardRadius = _settings.BossHazardRadius,
+        bossEscapeDistance = _settings.BossEscapeDistance,
+        bossDodgeDistance = _settings.BossDodgeDistance,
         combatSkills = _settings.CombatSkills,
         questUseKey = _settings.QuestUseKey,
         questUseRadius = _settings.QuestUseRadius,
@@ -166,6 +174,14 @@ public sealed partial class ApiServer
                     && (tm is "Nearest" or "Rarity" or "LowestHp" or "HighestHp"): _settings.CombatTargetMode = tm; applied.Add(p.Name); break;
                 case "combatRotationMode" when p.Value.ValueKind == JsonValueKind.String && p.Value.GetString() is { } rm
                     && (rm is "RoundRobin" or "Priority"): _settings.CombatRotationMode = rm; applied.Add(p.Name); break;
+                case "bossCombatEnabled" when TryBool(p.Value, out var b): _settings.BossCombatEnabled = b; applied.Add(p.Name); break;
+                case "bossDamagePct" when TryFloat(p.Value, out var f): _settings.BossDamagePct = Math.Clamp(f, 0f, 50f); applied.Add(p.Name); break;
+                case "bossDodgeGapMs" when TryInt(p.Value, out var n): _settings.BossDodgeGapMs = Math.Clamp(n, 900, 10000); applied.Add(p.Name); break;
+                case "bossSafeOpeningMs" when TryInt(p.Value, out var n): _settings.BossSafeOpeningMs = Math.Clamp(n, 300, 5000); applied.Add(p.Name); break;
+                case "bossLostGraceMs" when TryInt(p.Value, out var n): _settings.BossLostGraceMs = Math.Clamp(n, 1000, 30000); applied.Add(p.Name); break;
+                case "bossHazardRadius" when TryFloat(p.Value, out var f): _settings.BossHazardRadius = Math.Clamp(f, 2f, 20f); applied.Add(p.Name); break;
+                case "bossDodgeDistance" when TryFloat(p.Value, out var f): _settings.BossDodgeDistance = Math.Clamp(f, 10f, 80f); applied.Add(p.Name); break;
+                case "bossEscapeDistance" when TryFloat(p.Value, out var f): _settings.BossEscapeDistance = Math.Clamp(f, 3f, 30f); applied.Add(p.Name); break;
                 case "combatKeepDistance" when TryFloat(p.Value, out var f): _settings.CombatKeepDistance = Math.Clamp(f, 0f, 200f); applied.Add(p.Name); break;
                 case "combatIgnoreMs" when TryInt(p.Value, out var n): _settings.CombatIgnoreMs = Math.Clamp(n, 1000, 300000); applied.Add(p.Name); break;
                 case "autoRespawn" when TryBool(p.Value, out var b): _settings.AutoRespawn = b; applied.Add(p.Name); break;

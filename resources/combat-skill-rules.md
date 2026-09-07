@@ -48,3 +48,8 @@ Names, keys, order, enable switches and readable condition summaries are on each
 card. Combo timing is expandable: repeat taps, tap interval, hold duration,
 post-cast delay and optional dodge. The in-game Insert Skills tab exposes compact
 controls; use the dashboard for presets, OR mode, aiming and full conditions.
+
+Ranged unique encounters can enable the [boss policy](boss-combat.md). It filters
+new long casts/buffs to quiet openings, checks Escape Shot backward landings,
+and may interrupt on observed danger. These runtime choices do not overwrite
+manual skill timing or bypass the live-binding/per-character checks.

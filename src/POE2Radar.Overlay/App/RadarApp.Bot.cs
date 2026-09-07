@@ -18,7 +18,7 @@ public sealed partial class RadarApp
 
     private void RefreshBuildBindings(nint localPlayer)
     {
-        if (!_settings.CombatSkills.Any(s => s.Enabled && s.SourceLiveBinding)) return;
+        if (!_settings.BossCombatEnabled && !_settings.CombatSkills.Any(s => s.Enabled && s.SourceLiveBinding)) return;
         var previous = _buildBindingRead;
         if (previous?.Player == localPlayer && DateTime.UtcNow - previous.ReadAt < TimeSpan.FromSeconds(1)) return;
         // World reader owns this stack; disk discovery and UI traversal never block the render loop.
@@ -189,6 +189,7 @@ public sealed partial class RadarApp
         CombatWatch.Result watch, nint localPlayer)
     {
         var now = DateTime.UtcNow;
+        _combatBindingSafe = false;
         var src = _settings.CombatSkills;
         if (!inGame) { _charIdentity = ""; _charNameFor = 0; }
         if (src?.Any(s => s.Enabled && s.SourceCharacter.Length > 0 && s.SourceCharacter != _charIdentity) == true)
@@ -209,6 +210,21 @@ public sealed partial class RadarApp
                 return;
             }
         }
+        _combatBindingSafe = true;
+        SyncCombatSettings(src);
+        if (_bossDecision.Active && !BossBindingsSafe(localPlayer, now))
+        {
+            _combatBindingSafe = false;
+            AbortComboMacro();
+            _combatNote = "waiting: boss movement/dodge bindings changed or unavailable";
+            return;
+        }
+        if (_bossDecision.Active && _bossDecision.Interrupt) AbortComboMacro();
+        if (_bossDodge.Busy)
+        {
+            if (!CombatArmed || !inGame || !focused || _playerDead) _bossDodge.Cancel(SendKeyUp);
+            else { _bossDodge.Tick(now, SendKeyUp); _combatNote = "recovering: dodge"; return; }
+        }
         var specs = new CombatAssist.Skill[n];
         for (var i = 0; i < n; i++)
         {
@@ -217,6 +233,8 @@ public sealed partial class RadarApp
                 Math.Clamp(sk.Repeat, 1, 10), Math.Clamp(sk.RepeatGapMs, 30, 2000), Math.Clamp(sk.HoldMs, 0, 10000), sk.DodgeAfter, Math.Clamp(sk.NextDelayMs, 0, 10000),
                 sk.ManaBelowPct, sk.MinManaPct, sk.EsBelowPct, sk.TargetHpBelowPct, sk.RequireTarget, sk.Priority, sk.AimMode, sk.AnyLowResource, sk.Modifiers);
         }
+        if (_bossDecision.Active)
+            for (var i = 0; i < n; i++) specs[i] = BossSkill(specs[i], src![i], player);
         // A combo macro in flight owns the keyboard: advance it and skip deciding.
         var vitals = inGame ? _liveRender.PlayerVitals(localPlayer) : null;
         if (!CombatArmed || !inGame || !focused || _playerDead || vitals is { HpCur: <= 0 } || (watch.Flee && !_macroPriority)) AbortComboMacro();
@@ -239,7 +257,7 @@ public sealed partial class RadarApp
             PlayerHpPct: vitals?.HpPct ?? 100f,
             KeyboardOnly: GameHost.IsBackgroundActive && !GameHost.BackgroundSupportsMouse,
             Busy: busy,
-            PreferredTargetId: _lastTargetId,
+            PreferredTargetId: _bossDecision.Active ? _bossDecision.TargetId : _lastTargetId,
             PlayerManaPct: vitals?.ManaPct ?? 100f, PlayerEsPct: vitals?.EsPct ?? 100f,
             HasEs: vitals?.HasEs ?? false, VitalsKnown: vitals is not null, Fleeing: watch.Flee));
         _comboBusy = busy;
@@ -254,6 +272,7 @@ public sealed partial class RadarApp
             : watch.Fighting ? $"{decision.Note} ({watch.Note})"
             : decision.Note;
         // Priority recovery/escape slots remain eligible while the watchdog is fleeing.
+        if (_bossDecision.Active) _combatNote = _bossDecision.Note + (busy ? " (finishing cast)" : "");
         if (!decision.ShouldTap) return;
         // Aim: PoE2 fires a skill toward the cursor, so warp it onto the target first — otherwise the
         // rotation swings at wherever the last move-click left the cursor and the mob never dies.
@@ -282,6 +301,7 @@ public sealed partial class RadarApp
     private uint _macroTargetId;
     private string _macroAimMode = "Target";
     private bool _macroPriority;
+    private string _macroSettingsSignature = "";
     private bool _macroCastPending;
     private int _macroNextIndex;
     private uint _macroAreaHash;
@@ -350,6 +370,9 @@ public sealed partial class RadarApp
     private bool RunComboMacro(DateTime now, NumVec2 player, POE2Radar.Core.Game.Vector3? playerWorld,
         IReadOnlyList<Poe2Live.EntityDot> entities)
     {
+        if (_bossDecision.Active && _macroAimMode != "Cursor" && _comboBusy
+            && !entities.Any(e => e.Id == _macroTargetId && e.HasLife && CombatAssist.IsHostile(e)))
+        { AbortComboMacro(); return false; }
         if (_macroAreaHash != _areaHash) { AbortComboMacro(); return false; }
         // One step per tick at most for DOWN/UP pairs: never collapse a press and its release into the same
         // instant even after a frame hitch.
@@ -361,6 +384,10 @@ public sealed partial class RadarApp
             {
                 case MacroStep.Aim:
                 {
+                    if (_bossDecision.Active && !_macroCastPending
+                        && (_bossDecision.Intent != BossCombat.Intent.Attack || !_bossDecision.LongWindow))
+                    { AbortComboMacro(); return false; } // current cast recovered; yield the remaining repeats
+
                     if (ModifierKeys(7).Any(k => GameHost.IsKeyDown(k) && !_macroHeld.Contains(k)))
                     {
                         AbortComboMacro();
@@ -379,15 +406,19 @@ public sealed partial class RadarApp
                         return false;
                     }
                     _macroTargetGrid = grid;
-                    AimCombatSkill(_macroAimMode, grid, world, player, playerWorld);
+                    if (!AimCombatSkill(_macroAimMode, grid, world, player, playerWorld))
+                    { AbortComboMacro(); _combatNote = "waiting: target projection unavailable"; return false; }
                     break;
                 }
                 case MacroStep.ModifierDown:
                     if (GameHost.WouldDrop(vk)) { AbortComboMacro(); return false; }
-                    GameHost.KeyDown(vk); _macroHeld.Add(vk);
+                    SendKeyDown(vk); _macroHeld.Add(vk);
                     break;
                 case MacroStep.KeyDown:
-                    if (!DispatchCombatKeyDown(vk, now, GameHost.KeyDown))
+                    // Target can disappear after Aim but before the queued press (or during modifiers).
+                    if (_macroAimMode != "Cursor" && !TryLiveMacroTarget(entities, player, out _, out _, retarget: false))
+                    { AbortComboMacro(); return false; }
+                    if (!DispatchCombatKeyDown(vk, now, SendKeyDown))
                     {
                         AbortComboMacro();
                         _combatNote = "cast cancelled (input unavailable)";
@@ -395,11 +426,13 @@ public sealed partial class RadarApp
                     }
                     break;
                 case MacroStep.KeyUp:
-                    if (_macroHeld.Remove(vk)) GameHost.KeyUp(vk);
+                    if (_macroHeld.Remove(vk)) SendKeyUp(vk);
                     break;
                 case MacroStep.Tap: GameHost.TapKey(vk); break;
                 case MacroStep.DodgeStart:
                 {
+                    if (_bossDecision.Active) { AbortComboMacro(); return false; }
+
                     // The last cast killed it: nothing to roll away from. Skip the dodge (it would only cancel
                     // the combo on the next mob) and fall through to the rotation lockout.
                     if (!TryLiveMacroTarget(entities, player, out _, out _, retarget: false))
@@ -420,13 +453,14 @@ public sealed partial class RadarApp
                     AimClick((int)MathF.Round(aim.X), (int)MathF.Round(aim.Y), playerWorld);
                     // If the mover still holds the dodge key as "run", let go first — a press on an already-held
                     // key is not a new roll.
-                    if (_heldKeys.Remove(vk)) GameHost.KeyUp(vk);
-                    foreach (var k in keys) { GameHost.KeyDown(k); _macroHeld.Add(k); }
-                    GameHost.KeyDown(vk); _macroHeld.Add(vk);
+                    if (_heldKeys.Remove(vk)) SendKeyUp(vk);
+                    if (!PathMove.IsClick(_settings.MoveMethod))
+                        foreach (var k in keys) { SendKeyDown(k); _macroHeld.Add(k); }
+                    SendKeyDown(vk); _macroHeld.Add(vk);
                     break;
                 }
                 case MacroStep.DodgeEnd:
-                    foreach (var k in _macroHeld) GameHost.KeyUp(k);
+                    foreach (var k in _macroHeld) SendKeyUp(k);
                     _macroHeld.Clear();
                     break;
                 case MacroStep.Done:
@@ -451,11 +485,11 @@ public sealed partial class RadarApp
         foreach (var e in entities)
         {
             if (e.Id != _macroTargetId) continue;
-            if (!CombatAssist.IsHostile(e)) break;
+            if (!CombatAssist.IsHostile(e) || NumVec2.Distance(player, e.Grid) > _settings.CombatRange) break;
             grid = e.Grid; world = e.World;
             return true;
         }
-        if (!retarget) return false;
+        if (!retarget || _bossDecision.Active) return false;
         if (!CombatAssist.TryPickTarget(entities, player, _settings.CombatRange, out var next, CombatIgnoreIds(),
                 CombatAssist.ParseTargetMode(_settings.CombatTargetMode)))
             return false;
@@ -468,7 +502,7 @@ public sealed partial class RadarApp
     private void AbortComboMacro()
     {
         _macro.Clear();
-        foreach (var k in _macroHeld) GameHost.KeyUp(k);
+        foreach (var k in _macroHeld) SendKeyUp(k);
         _macroHeld.Clear();
         _comboLockUntil = DateTime.MinValue;
         _comboBusy = false;
@@ -479,7 +513,9 @@ public sealed partial class RadarApp
     /// <summary>Watchdog ignores ∪ essence-imprisoned monsters (immune until their crystal is clicked).</summary>
     private IReadOnlyCollection<uint> CombatIgnoreIds()
     {
-        var ign = _combatWatch.IgnoredIds;
+        var ign = _bossDecision.Active
+            ? _combatWatch.IgnoredIds.Where(id => id != _bossDecision.TargetId).ToArray()
+            : _combatWatch.IgnoredIds;
         var imp = _imprisonedIds;
         if (imp.Count == 0) return ign;
         if (ign.Count == 0) return imp;
@@ -542,7 +578,7 @@ private void EnsureCombatClocks(IReadOnlyList<CombatSkill>? skills)
     /// this method only taps (and aims the cursor for Click) and updates the status note.
     /// </summary>
     private void TickPathMove(bool inGame, bool focused, NumVec2 player,
-        IReadOnlyList<SelectedPath> paths, POE2Radar.Core.Game.Vector3? playerWorld, bool inCombat, bool fleeing = false)
+        IReadOnlyList<SelectedPath> paths, POE2Radar.Core.Game.Vector3? playerWorld, bool inCombat, bool fleeing = false, bool bossMove = false)
     {
         var now = DateTime.UtcNow;
         IReadOnlyList<(int x, int y)> waypoints = paths.Count > 0
@@ -550,7 +586,7 @@ private void EnsureCombatClocks(IReadOnlyList<CombatSkill>? skills)
             : Array.Empty<(int x, int y)>();
         var terrain = _terrain;
         var decision = PathMove.Decide(new PathMove.Snapshot(
-            Armed: MoveArmed,
+            Armed: MoveArmed || bossMove,
             Focused: focused,
             InGame: inGame,
             PlayerGrid: player,
@@ -573,7 +609,7 @@ private void EnsureCombatClocks(IReadOnlyList<CombatSkill>? skills)
             Diagonals: _settings.MoveDiagonals,
             AxisRotationDeg: _settings.MoveAxisRotationDeg,
             RunKey: _settings.MoveRunKey,
-            RunEnabled: _settings.MoveRunEnabled,
+            RunEnabled: _settings.MoveRunEnabled && !bossMove,
             PrevHoldKeys: _prevDirKeys));
         _moveNote = fleeing ? "kite → " + decision.Note : decision.Note;
 
@@ -645,19 +681,25 @@ private void EnsureCombatClocks(IReadOnlyList<CombatSkill>? skills)
         // The run key is the dodge roll: never press it with a hostile inside attack range (walking between
         // two mobs of a pack is fine; a roll cancels the cast and resets a built-up combo).
         var hostileNear = CombatArmed && _hostilesNear > 0;
-        var hardStop = !MoveArmed || !focused || !inGame || inCombat || hostileNear;
-        if (decision.Moving && !hostileNear) _runHoldUntil = now + RunLinger;
+        var hardStop = bossMove || !MoveArmed || !focused || !inGame || inCombat || hostileNear;
+        if (decision.Moving && !hostileNear && !bossMove) _runHoldUntil = now + RunLinger;
         else if (hardStop) _runHoldUntil = DateTime.MinValue;
         if (now < _runHoldUntil && _settings.MoveRunEnabled && _settings.MoveRunKey is >= 1 and <= 255)
             _wantKeys.Add((ushort)_settings.MoveRunKey);
         ApplyHeldKeys();
 
         if (!decision.ShouldTap) return;
-        if (PathMove.IsClick(_settings.MoveMethod))
-            AimClick(decision.TargetX, decision.TargetY, playerWorld);
+        if (PathMove.IsClick(_settings.MoveMethod) && !AimClick(decision.TargetX, decision.TargetY, playerWorld))
+        { ReleaseHeldKeys(); _runHoldUntil = DateTime.MinValue; _moveNote = "waiting: movement projection unavailable"; return; }
         GameHost.TapKey(decision.Vk);
         _moveFiredAt = now;
     }
+
+    // Input seams allow regression tests to exercise the real executor without a game window.
+    internal Action<ushort> CombatKeyDown { get; set; } = GameHost.KeyDown;
+    internal Action<ushort> CombatKeyUp { get; set; } = GameHost.KeyUp;
+    private void SendKeyDown(ushort key) => (CombatKeyDown ?? GameHost.KeyDown)(key);
+    private void SendKeyUp(ushort key) => (CombatKeyUp ?? GameHost.KeyUp)(key);
 
     private readonly HashSet<ushort> _heldKeys = new();
 
@@ -694,41 +736,43 @@ private void EnsureCombatClocks(IReadOnlyList<CombatSkill>? skills)
     {
         _keyScratch.Clear();
         foreach (var k in _heldKeys) if (!_wantKeys.Contains(k)) _keyScratch.Add(k);
-        foreach (var k in _keyScratch) { GameHost.KeyUp(k); _heldKeys.Remove(k); }
-        foreach (var k in _wantKeys) if (_heldKeys.Add(k)) GameHost.KeyDown(k);
+        foreach (var k in _keyScratch) { SendKeyUp(k); _heldKeys.Remove(k); }
+        foreach (var k in _wantKeys) if (_heldKeys.Add(k)) SendKeyDown(k);
     }
 
     /// <summary>Let go of every held movement/run key (shutdown, disarm, focus loss).</summary>
     private void ReleaseHeldKeys()
     {
-        foreach (var k in _heldKeys) GameHost.KeyUp(k);
+        // Dodge has its own recovery owner; shutdown/disarm explicitly cancels it.
+        foreach (var k in _heldKeys) SendKeyUp(k);
         _heldKeys.Clear();
     }
 
     /// <summary>Warp the cursor onto the projected waypoint so a click-to-move tap walks there.</summary>
-    private void AimClick(int gridX, int gridY, POE2Radar.Core.Game.Vector3? playerWorld)
+    private bool AimClick(int gridX, int gridY, POE2Radar.Core.Game.Vector3? playerWorld)
         => AimWorld(
             gridX * POE2Radar.Core.Pathfinding.GridConstants.GridToWorld,
             gridY * POE2Radar.Core.Pathfinding.GridConstants.GridToWorld,
             playerWorld?.Z ?? 0f);
 
     /// <summary>Warp the cursor onto a monster: its own world position when read, else its grid at player height.</summary>
-    private void AimAtEntity(NumVec2 grid, POE2Radar.Core.Game.Vector3 world, POE2Radar.Core.Game.Vector3? playerWorld)
+    private bool AimAtEntity(NumVec2 grid, POE2Radar.Core.Game.Vector3 world, POE2Radar.Core.Game.Vector3? playerWorld)
     {
         if (world.X != 0f || world.Y != 0f)
-            AimWorld(world.X, world.Y, world.Z != 0f ? world.Z : playerWorld?.Z ?? 0f);
+            return AimWorld(world.X, world.Y, world.Z != 0f ? world.Z : playerWorld?.Z ?? 0f);
         else
-            AimClick((int)MathF.Round(grid.X), (int)MathF.Round(grid.Y), playerWorld);
+            return AimClick((int)MathF.Round(grid.X), (int)MathF.Round(grid.Y), playerWorld);
     }
 
-    private void AimWorld(float wx, float wy, float wz)
+    private bool AimWorld(float wx, float wy, float wz)
     {
-        if (_cameraMatrix is not { } m) return;
+        if (_cameraMatrix is not { } m) return false;
         if (!POE2Radar.Core.Pathfinding.MapProjection.TryWorldToScreen(m, wx, wy, wz, _window.Width, _window.Height, out var sx, out var sy))
-            return;
+            return false;
         const float pad = 8f;
-        if (sx < pad || sy < pad || sx > _window.Width - pad || sy > _window.Height - pad) return;
+        if (sx < pad || sy < pad || sx > _window.Width - pad || sy > _window.Height - pad) return false;
         GameHost.SetCursorPos(_window.OriginX + (int)MathF.Round(sx), _window.OriginY + (int)MathF.Round(sy));
+        return true;
     }
 
     /// <summary>
@@ -765,19 +809,27 @@ private void EnsureCombatClocks(IReadOnlyList<CombatSkill>? skills)
 
     private bool MoveArmed => _moveEnabled || _botEnabled || _mapClear || _farmLoop;
 
-    private void AimCombatSkill(string mode, NumVec2 target, POE2Radar.Core.Game.Vector3 world,
+    private bool AimCombatSkill(string mode, NumVec2 target, POE2Radar.Core.Game.Vector3 world,
         NumVec2 player, POE2Radar.Core.Game.Vector3? playerWorld)
     {
-        if (mode == "Cursor") return;
-        if (mode != "Away") { AimAtEntity(target, world, playerWorld); return; }
+        if (mode == "Cursor") return true;
+        if (mode != "Away") return AimAtEntity(target, world, playerWorld);
         var away = player - target;
         if (away.LengthSquared() < 0.001f) away = new NumVec2(1f, 0f);
         var point = player + NumVec2.Normalize(away) * 8f;
-        AimClick((int)MathF.Round(point.X), (int)MathF.Round(point.Y), playerWorld);
+        return AimClick((int)MathF.Round(point.X), (int)MathF.Round(point.Y), playerWorld);
     }
+    private void SyncCombatSettings(IReadOnlyList<CombatSkill>? skills)
+    {
+        var signature = System.Text.Json.JsonSerializer.Serialize(skills);
+        if (_comboBusy && _macroSettingsSignature != signature) AbortComboMacro();
+        _macroSettingsSignature = signature;
+    }
+
     private void ClaimCombatInput(CombatAssist.Skill spec, DateTime now)
     {
         ReleaseHeldKeys();
+        _runHoldUntil = DateTime.MinValue;
         _macroAreaHash = _areaHash;
         _macroPriority = spec.Priority;
         var pressMs = spec.HoldMs > 0 ? spec.HoldMs : Math.Clamp(_settings.CombatTapHoldMs, 30, 200);
@@ -793,6 +845,7 @@ private void EnsureCombatClocks(IReadOnlyList<CombatSkill>? skills)
         _macroHeld.Add(vk);
         if (_macroCastPending)
         {
+            if (_bossDecision.Active && _macroAimMode == "Target" && !_macroPriority) _bossCombat.DidAttack(now);
             _combatKeyFiredAt[vk | (_macroModifiers << 8)] = now;
             _combatNextIndex = _macroNextIndex;
             _macroCastPending = false;

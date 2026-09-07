@@ -115,7 +115,7 @@ public sealed partial class RadarApp
     /// <summary>Render thread: perform the requested one-shot input and probe the waypoint menu.</summary>
     private void TickFarmInput(nint inGameState, bool inGame, bool focused)
     {
-        if (!_farmLoop || !inGame || !focused || _playerDead) return;
+        if (!_farmLoop || !inGame || !focused || _playerDead || _comboBusy || _bossDecision.Active || _bossDodge.Busy) return;
         var now = DateTime.UtcNow;
         var phase = FarmPhase;
 

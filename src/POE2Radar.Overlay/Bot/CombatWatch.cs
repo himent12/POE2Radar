@@ -118,7 +118,7 @@ public sealed class CombatWatch
             {
                 foreach (var e in entities)
                 {
-                    if (e.Category != Poe2Live.EntityCategory.Monster) continue;
+                    if (e.Category != Poe2Live.EntityCategory.Monster || !e.HasLife) continue;
                     if ((e.Reaction & 0x7F) == 1) continue;
                     if (_ignoreUntil.ContainsKey(e.Id)) continue;
 

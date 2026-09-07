@@ -170,9 +170,9 @@ public static Decision Decide(in Snapshot s)
 
     private static Decision Idle(int next, string note) => new(false, 0, 0, next, note);
 
-    /// <summary>Alive, non-friendly monster (<c>(Reaction &amp; 0x7F) != 1</c>).</summary>
+    /// <summary>Known living, non-friendly monster (<c>(Reaction &amp; 0x7F) != 1</c>).</summary>
     public static bool IsHostile(in Poe2Live.EntityDot e)
-        => e.Category == Poe2Live.EntityCategory.Monster && e.IsAlive && (e.Reaction & 0x7F) != 1;
+        => e.Category == Poe2Live.EntityCategory.Monster && e.HasLife && e.IsAlive && (e.Reaction & 0x7F) != 1;
 
     /// <summary>
     /// Primary target inside <paramref name="range"/> per <paramref name="mode"/>:

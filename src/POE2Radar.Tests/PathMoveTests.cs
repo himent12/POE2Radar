@@ -242,7 +242,7 @@ public sealed class PathMoveTests
     [Fact]
     public void ClickMethod_tapsClickKeyTowardWaypoint()
     {
-        var d = PathMove.Decide(Base(method: "Click", waypoints: [(0, 20)]));
+        var d = PathMove.Decide(Base(method: "Click", waypoints: [(0, 20)]) with { LookAhead = 40 });
         Assert.True(d.ShouldTap);
         Assert.Equal(PathMove.VkClick, d.Vk);
         Assert.Equal("click", d.Note);
@@ -254,7 +254,7 @@ public sealed class PathMoveTests
     public void ClickToMoveAlias_tapsConfiguredClickKey()
     {
         const int vkF = 0x46;
-        var d = PathMove.Decide(Base(method: "ClickToMove", clickKey: vkF, waypoints: [(30, 0)]));
+        var d = PathMove.Decide(Base(method: "ClickToMove", clickKey: vkF, waypoints: [(30, 0)]) with { LookAhead = 40 });
         Assert.True(d.ShouldTap);
         Assert.Equal((ushort)vkF, d.Vk);
         Assert.Equal("click", d.Note);
