@@ -4,7 +4,7 @@
 The item appraisal needs two things the live read can't give it:
   * affix tiers: every rollable prefix/suffix with its family, required level, stat ranges and ordered spawn
     tags, so a rolled mod can be placed as "T2 of 9 on boots, 92% of the best roll";
-  * base stats: each equipment base's tags and its base damage / attack time / crit / armour / evasion / ES,
+  * base stats: each equipment base's tags and its base damage / attack time / armour / evasion / ES,
     so weapon DPS and total defences can be computed from the base plus the item's local mods.
 
 Run after a content patch (the RePoE site tracks the game version):
@@ -94,12 +94,9 @@ def main():
             entry["dmax"] = p["physical_damage_max"]
         if p.get("attack_time"):
             entry["at"] = p["attack_time"]
-        if p.get("critical_strike_chance"):
-            entry["cr"] = p["critical_strike_chance"]
-        if p.get("block"):
-            entry["bl"] = p["block"]
         out_bases[path] = entry
 
+    # source/version record where the table came from (provenance only; the overlay doesn't read them).
     data = {"source": SOURCE, "version": version(), "affixes": affixes, "bases": out_bases}
     with open(OUT, "w", encoding="utf-8") as f:
         json.dump(data, f, separators=(",", ":"), sort_keys=True)

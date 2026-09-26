@@ -71,9 +71,12 @@ public sealed class ItemAppraisalTests
         var hybrid = a.Affixes.Single(x => x.ModId == "LocalIncreasedEvasionAndEnergyShield7");
         Assert.Equal("defences", hybrid.CountedIn);
         Assert.Equal(1, hybrid.Tier);
-        // 96% increased on the 140 EV / 43 ES base.
+        // 96% increased on the 140 EV / 43 ES base; the driver carries the trade site's Q20 figure (×1.2).
         Assert.Equal(274, a.Defence!.Evasion);
         Assert.Equal(84, a.Defence.EnergyShield);
+        var es = a.Drivers.Single(d => d.Key == "es");
+        Assert.Equal("84 ES", es.Label);
+        Assert.Equal(100.8, es.Value, 6);
     }
 
     [Fact]
@@ -211,6 +214,17 @@ public sealed class ItemAppraisalTests
         var a = Appraise(EsEvBoots, Item(Poe2Live.Rarity.Magic, A("MovementVelocity6", 35)));
         Assert.Equal(0, a.OpenPrefixes);
         Assert.Equal(1, a.OpenSuffixes);
+    }
+
+    [Fact]
+    public void An_affix_missing_from_the_table_never_shows_as_an_open_slot()
+    {
+        var withUnknown = Rare(A("MovementVelocity6", 35), A("IncreasedLife9", 142), A("FireResist8", 43),
+            new ItemAffix("explicit", "SomeNewPatchMod", [5], ["5% increased Something New"]));
+        var a = Appraise(EsEvBoots, withUnknown);
+        Assert.Equal(0, a.OpenPrefixes);
+        Assert.Equal(0, a.OpenSuffixes);
+        Assert.Equal(0, a.Affixes.Single(x => x.ModId == "SomeNewPatchMod").Score);
     }
 
     [Fact]

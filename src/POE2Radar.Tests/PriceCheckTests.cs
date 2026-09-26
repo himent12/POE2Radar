@@ -72,6 +72,12 @@ public sealed class PriceCheckTests
     [InlineData("Metadata/Items/Quivers/FourQuiver8", "armour.quiver")]
     [InlineData("Metadata/Items/Amulets/FourAmulet9", "accessory.amulet")]
     [InlineData("Metadata/Items/Maps/MapKeyTier6", "map.waystone")]
+    [InlineData("Metadata/Items/Weapons/OneHandWeapons/OneHandSpears/FourSpear8Endgame", "weapon.spear")]
+    [InlineData("Metadata/Items/Armours/Focii/FourFocus10Endgame", "armour.focus")]
+    [InlineData("Metadata/Items/Weapons/TwoHandWeapons/Staves/FourQuarterstaff10", "weapon.warstaff")]   // not a staff
+    [InlineData("Metadata/Items/Weapons/TwoHandWeapons/Staves/FourStaff9", "weapon.staff")]
+    [InlineData("Metadata/Items/Armours/Shields/FourShieldDex10", "armour.buckler")]                     // not a shield
+    [InlineData("Metadata/Items/Armours/Shields/FourShieldStr10", "armour.shield")]
     [InlineData("Metadata/Items/Something/New", null)]
     public void Maps_item_metadata_to_the_trade_category(string metadata, string? expected)
         => Assert.Equal(expected, PriceCheck.Category(metadata)?.Id);

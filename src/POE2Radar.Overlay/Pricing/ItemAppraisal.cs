@@ -20,8 +20,6 @@ public sealed record AppraisedAffix(string Kind, string ModId, string Text, int?
 /// top-tier roll of the same base.</summary>
 public sealed record WeaponDps(double Physical, double Elemental, double Chaos, double AttacksPerSecond, double Quality)
 {
-    public double Total => Physical + Elemental + Chaos;
-
     /// <summary>Physical DPS as the trade site shows it: every weapon normalised to 20% quality, which multiplies
     /// physical damage by 1.2 (verified against a live listing: 176–261 phys, 1.2 APS, no quality → 314.4 pDPS).</summary>
     public double PhysicalQ20 => Physical * 1.2;
@@ -31,12 +29,18 @@ public sealed record WeaponDps(double Physical, double Elemental, double Chaos, 
 }
 
 /// <summary>Local defences at the item's rolls (quality not included) and how they compare with a top-tier roll.</summary>
-public sealed record Defences(int Armour, int Evasion, int EnergyShield, double Quality);
+public sealed record Defences(int Armour, int Evasion, int EnergyShield, double Quality)
+{
+    /// <summary>The trade site shows armour, evasion and ES at 20% quality, a ×1.2 on the unqualitied value (checked live
+    /// 2026-09-26: helmets showing 139 / 198 ES are indexed as 167 / 237).</summary>
+    public static double TradeValue(int value) => value * 1.2;
+}
 
 /// <summary>What a price hinges on: an aggregate buyers filter on (weapon DPS, total life, total resistance, movement
-/// speed, local defences) or one valuable affix. <see cref="Key"/>: "pdps", "edps", "dps" (Q20 trade DPS), "ar", "ev",
-/// "es", "life" (incl. 2 per Strength, as the trade site's pseudo total counts it), "ele_res", "chaos_res", "ms", or
-/// "mod" for <see cref="Affix"/>'s strongest line <see cref="Line"/>. <see cref="Importance"/> is its share of the score.</summary>
+/// speed, local defences) or one valuable affix. <see cref="Key"/>: "pdps", "edps", "dps", "ar", "ev", "es" (trade-site
+/// figures at Q20), "life" (incl. 2 per Strength, as the trade site's pseudo total counts it), "ele_res", "chaos_res",
+/// "ms", or "mod" for <see cref="Affix"/>'s strongest line <see cref="Line"/>. <see cref="Value"/> is what the trade
+/// site filters on; <see cref="Label"/> what the player reads. <see cref="Importance"/> is its share of the score.</summary>
 public sealed record ValueDriver(string Key, string Label, double Value, double Importance, AppraisedAffix? Affix = null, string? Line = null);
 
 /// <summary>A rare/magic item judged on what its slot's buyers pay for.</summary>
@@ -106,7 +110,7 @@ public static class ItemAppraiser
         var scored = new List<AppraisedAffix>();
         var buckets = new Dictionary<string, double>(StringComparer.Ordinal);
         var drivers = new List<ValueDriver>();
-        int prefixes = 0, suffixes = 0;
+        int prefixes = 0, suffixes = 0, unknown = 0;
 
         // Totals count every source the trade site's pseudo stats count: implicits (a ring's resistance, a Runeforged
         // boot's movement speed) as well as explicits. Implicits aren't in the affix table; their stat ids come from
@@ -130,7 +134,9 @@ public static class ItemAppraiser
         {
             if (a.Kind != "explicit") continue;
             var info = data.AffixFor(a.Id);
-            if (info is not null) { if (info.Prefix) prefixes++; else suffixes++; }
+            if (info is null) unknown++;
+            else if (info.Prefix) prefixes++;
+            else suffixes++;
             var (affix, groups) = ScoreAffix(a, info, itemBase, slot, attack, armour, data, implicitSpeed);
             scored.Add(affix);
 
@@ -177,7 +183,7 @@ public static class ItemAppraiser
             if (itemBase.Armour > 0) kinds.Add(("ar", defence.Armour, "armour"));
             if (itemBase.Evasion > 0) kinds.Add(("ev", defence.Evasion, "evasion"));
             foreach (var (key, value, name) in kinds)
-                drivers.Add(new ValueDriver(key, $"{value} {name}", value, importance / kinds.Count));
+                drivers.Add(new ValueDriver(key, $"{value} {name}", Defences.TradeValue(value), importance / kinds.Count));
         }
         if (buckets.GetValueOrDefault("ms") is > 0 and var ms)
             drivers.Add(new ValueDriver("ms", $"{totals.MoveSpeed}% move speed", totals.MoveSpeed, ms));
@@ -200,10 +206,11 @@ public static class ItemAppraiser
         if (dps is not null && dps.Quality < 0.6 && !scored.Any(s => s.CountedIn is null && s.Role == AffixRole.Premium && s.Quality >= 0.5))
             cap = Cap(ref grade, AppraisalGrade.Low, "low damage for its base") ?? cap;
 
+        // An affix missing from the table fills a slot of unknown kind: claim no open slots rather than a false one.
         var (maxPrefix, maxSuffix) = item.Rarity == Poe2Live.Rarity.Magic ? (1, 1) : (3, 3);
+        var (openPrefixes, openSuffixes) = unknown > 0 ? (0, 0) : (Math.Max(0, maxPrefix - prefixes), Math.Max(0, maxSuffix - suffixes));
         return new ItemAppraisal(slot, SlotName(itemBase.Class), grade, Math.Round(score, 2), scored, dps, defence,
-            totals.Life, totals.EleRes, totals.ChaosRes, totals.MoveSpeed,
-            Math.Max(0, maxPrefix - prefixes), Math.Max(0, maxSuffix - suffixes), drivers, cap);
+            totals.Life, totals.EleRes, totals.ChaosRes, totals.MoveSpeed, openPrefixes, openSuffixes, drivers, cap);
     }
 
     private static string? Cap(ref AppraisalGrade grade, AppraisalGrade max, string why)
@@ -307,12 +314,14 @@ public static class ItemAppraiser
 
     /// <summary>The rendered line of a multi-line affix that carries <paramref name="stat"/>: the one sharing the most
     /// words with the stat id ("spell_damage_+%" → "…increased Spell Damage", not "+30 to maximum Mana").</summary>
-    private static string? LineFor(string stat, IReadOnlyList<string> lines)
-    {
-        if (lines.Count <= 1) return lines.Count == 1 ? lines[0] : null;
-        var words = stat.Split('_', StringSplitOptions.RemoveEmptyEntries).Where(w => w.Length > 2 && w != "base").ToArray();
-        return lines.OrderByDescending(l => words.Count(w => l.Contains(w, StringComparison.OrdinalIgnoreCase))).First();
-    }
+    private static string? LineFor(string stat, IReadOnlyList<string> lines) =>
+        lines.Count <= 1 ? lines.FirstOrDefault() : lines.MaxBy(l => WordOverlap(stat, l));
+
+    /// <summary>How many words of a stat id ("local_attack_speed_+%") appear in a rendered line ("…Attack Speed"),
+    /// ignoring the id's scaffolding words.</summary>
+    internal static int WordOverlap(string stat, string line) =>
+        stat.Split('_', StringSplitOptions.RemoveEmptyEntries)
+            .Count(w => w.Length > 2 && w is not ("base" or "local" or "minimum" or "maximum") && line.Contains(w, StringComparison.OrdinalIgnoreCase));
 
     private static double FirstNumber(string line)
     {

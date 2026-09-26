@@ -40,7 +40,8 @@ public sealed partial class RadarApp
     private DateTime _tradeHoverSince, _tradeProfileAt;
     private ItemTradeProfile? _tradeProfile;
     private Pricing.ItemAppraisal? _tradeAppraisal;
-    private string _tradeMetadata = "";
+    // The hovered rare's trade search, built once per profile read (null = graded too low to look up).
+    private (string Key, bool NeedsStats, Func<IReadOnlyList<Pricing.TradeComparison.TradeStat>?, Pricing.QueryPlan> Plan)? _tradePlan;
     private volatile object? _hoverDiagnostic;
 
     // Waystone check cache: one mod read per hovered waystone (the item address changes when another is hovered).
@@ -370,7 +371,7 @@ public sealed partial class RadarApp
             _settings.GroundItems.MinQuantity, cfg.HighlightMinEx);
         if (h.Item != _tradeHoverItem)
         {
-            _tradeHoverItem = h.Item; _tradeHoverSince = now; _tradeProfile = null; _tradeAppraisal = null;
+            _tradeHoverItem = h.Item; _tradeHoverSince = now; _tradeProfile = null; _tradeAppraisal = null; _tradePlan = null;
         }
         var danger = false;
         if (_settings.MapCheck.Enabled && MapCheckFor(h) is { } mc)
@@ -393,21 +394,22 @@ public sealed partial class RadarApp
             {
                 if (_tradeProfile == null || (now - _tradeProfileAt).TotalMilliseconds >= 750)
                 {
-                    _tradeMetadata = _live.ItemMetadata(h.Item);
+                    var metadata = _live.ItemMetadata(h.Item);
                     _tradeProfile = _live.ReadItemTradeProfile(h); _tradeProfileAt = now;
-                    _tradeAppraisal = Pricing.ItemAppraiser.Appraise(_tradeProfile, _tradeMetadata);
+                    _tradeAppraisal = Pricing.ItemAppraiser.Appraise(_tradeProfile, metadata);
+                    _tradePlan = _tradeAppraisal is { Grade: <= Pricing.AppraisalGrade.Low } ? null
+                        : Pricing.PriceCheck.For(_tradeProfile, null, metadata, _tradeAppraisal);
                 }
                 var appraisal = _tradeAppraisal;
-                if (appraisal is { Grade: <= Pricing.AppraisalGrade.Low })
+                if (appraisal is { Grade: <= Pricing.AppraisalGrade.Low } low)
                 {
-                    text = appraisal.Summary;
-                    detail = (appraisal.Cap is { } cap ? $"Held back by {cap}" : "Nothing on it that buyers search for")
+                    text = low.Summary;
+                    detail = (low.Cap is { } cap ? $"Held back by {cap}" : "Nothing on it that buyers search for")
                         + " — not worth a trade lookup";
                 }
-                else
+                else if (_tradePlan is { } tradePlan)
                 {
-                    var (key, needsStats, plan) = Pricing.PriceCheck.For(_tradeProfile, null, _tradeMetadata, appraisal);
-                    var search = _tradeComparison.GetOrQueueSearch(key, plan, needsStats, _priceBook);
+                    var search = _tradeComparison.GetOrQueueSearch(tradePlan.Key, tradePlan.Plan, tradePlan.NeedsStats, _priceBook);
                     url = search.Url;
                     var head = appraisal?.Summary;
                     if (search.Pending) { text = head ?? "Checking comparable listings…"; detail = search.Status; }

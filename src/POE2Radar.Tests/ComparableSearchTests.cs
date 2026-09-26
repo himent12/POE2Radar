@@ -31,9 +31,31 @@ public sealed class ComparableSearchTests
         Assert.Equal("explicit.stat_681332047", TradeComparison.MatchLine("explicit", "7% increased Attack Speed", Stats, local: false)!.Id);
         Assert.Equal("explicit.stat_4052037485", TradeComparison.MatchLine("explicit", "+60 to maximum Energy Shield", Stats, local: true)!.Id);
         Assert.Equal("explicit.stat_3489782002", TradeComparison.MatchLine("explicit", "+60 to maximum Energy Shield", Stats)!.Id);
-        Assert.True(TradeComparison.IsLocal("LocalIncreasedAttackSpeed5"));
-        Assert.False(TradeComparison.IsLocal("IncreasedLife9"));
+        Assert.True(TradeComparison.IsLocalLine("LocalIncreasedAttackSpeed5", "18% increased Attack Speed"));
+        Assert.False(TradeComparison.IsLocalLine("IncreasedLife9", "+142 to maximum Life"));
     }
+
+    [Fact]
+    public void Locality_is_decided_per_line_so_a_hybrids_global_half_stays_global()
+    {
+        // Alloy hybrid: global accuracy + local attack speed on a weapon.
+        const string hybrid = "AlloyAccuracyAttackSpeedHybrid1";
+        Assert.False(TradeComparison.IsLocalLine(hybrid, "+400 to Accuracy Rating"));
+        Assert.True(TradeComparison.IsLocalLine(hybrid, "7% increased Attack Speed"));
+        TradeComparison.TradeStat[] stats =
+            [new("explicit.stat_803737631", "# to Accuracy Rating"), new("explicit.stat_691932474", "# to Accuracy Rating (Local)")];
+        Assert.Equal("explicit.stat_803737631",
+            TradeComparison.MatchLine("explicit", "+400 to Accuracy Rating", stats, TradeComparison.IsLocalLine(hybrid, "+400 to Accuracy Rating"))!.Id);
+    }
+
+    [Theory]
+    [InlineData(3, 0.9, 3)]       // +3 levels stays +3 — flooring 2.7 would let +2 items in
+    [InlineData(1, 0.8, 1)]
+    [InlineData(35, 0.9, 32)]     // only the 35% movement speed tier
+    [InlineData(100, 0.8, 80)]    // 80.000000001 in floating point, still 80
+    [InlineData(4.41, 0.9, 3.96)] // fractional values keep two decimals
+    public void Search_minimums_never_drop_a_whole_step_on_small_stats(double value, double factor, double expected)
+        => Assert.Equal(expected, PriceCheck.MinFor(value, factor), 6);
 
     [Fact]
     public void Lines_the_trade_site_words_differently_are_aliased()
@@ -92,9 +114,12 @@ public sealed class ComparableSearchTests
         var stats = q.GetProperty("stats")[0];
         Assert.Equal("and", stats.GetProperty("type").GetString());
         var byId = stats.GetProperty("filters").EnumerateArray().ToDictionary(f => f.GetProperty("id").GetString()!, f => f.GetProperty("value"));
-        Assert.Equal(31, byId["pseudo.pseudo_increased_movement_speed"].GetProperty("min").GetDouble());   // 35 × 0.9 → only 35% tiers
-        Assert.Equal(112, byId["pseudo.pseudo_total_elemental_resistance"].GetProperty("min").GetDouble());
-        Assert.Equal(127, byId["pseudo.pseudo_total_life"].GetProperty("min").GetDouble());
+        Assert.Equal(32, byId["pseudo.pseudo_increased_movement_speed"].GetProperty("min").GetDouble());   // 35 × 0.9 → only 35% tiers
+        Assert.Equal(113, byId["pseudo.pseudo_total_elemental_resistance"].GetProperty("min").GetDouble());
+        Assert.Equal(128, byId["pseudo.pseudo_total_life"].GetProperty("min").GetDouble());
+        // Local defences are searched at the trade site's Q20 figure: 84 ES × 1.2 × 0.9.
+        var equipment = filters.GetProperty("equipment_filters").GetProperty("filters");
+        Assert.Equal(90.72, equipment.GetProperty("es").GetProperty("min").GetDouble(), 6);
         Assert.All(byId.Values, v => Assert.False(v.TryGetProperty("max", out _)));   // better items are comparables too
         // The looser rung keeps only the two most important stats, at 80%.
         var core = Query(steps[2]).GetProperty("stats")[0].GetProperty("filters");
@@ -108,7 +133,7 @@ public sealed class ComparableSearchTests
         var plan = PriceCheck.For(TopBow, null, Bow).Plan(Stats);
         var q = Query(plan);
         Assert.Equal("weapon.bow", q.GetProperty("filters").GetProperty("type_filters").GetProperty("filters").GetProperty("category").GetProperty("option").GetString());
-        Assert.Equal(671, q.GetProperty("filters").GetProperty("equipment_filters").GetProperty("filters").GetProperty("pdps").GetProperty("min").GetDouble());
+        Assert.Equal(671.11, q.GetProperty("filters").GetProperty("equipment_filters").GetProperty("filters").GetProperty("pdps").GetProperty("min").GetDouble(), 6);
         var ids = q.GetProperty("stats")[0].GetProperty("filters").EnumerateArray().Select(f => f.GetProperty("id").GetString()).ToList();
         Assert.Equal(["explicit.stat_1202301673", "explicit.stat_2694482655"], ids);   // +4 projectile levels, crit damage — never attack speed again
     }
@@ -137,5 +162,61 @@ public sealed class ComparableSearchTests
     {
         var plan = PriceCheck.For(TopBoots, null, "Metadata/Items/Something/New").Plan(Stats);
         Assert.StartsWith("all ", plan.Note);   // "all N matched mods within ±20%"
+        var steps = Steps(plan);
+        Assert.All(steps[..^1], p => Assert.True(p.Comparable));
+        Assert.False(steps[^1].Comparable);   // "all rare X — mods not compared" doesn't price the item
+    }
+
+    [Fact]
+    public void Rares_searched_by_base_alone_are_not_comparables()
+    {
+        Assert.False(PriceCheck.For(TopBoots with { Identified = false }, null, EsEvBoots).Plan(null).Comparable);
+        Assert.False(PriceCheck.For(TopBoots with { Complete = false }, null, EsEvBoots).Plan(null).Comparable);
+        Assert.True(PriceCheck.For(new("Exalted Orb", POE2Radar.Core.Game.Poe2Live.Rarity.Normal, true, [], true), null).Plan(null).Comparable);
+    }
+
+    [Fact]
+    public async Task A_few_real_comparables_beat_hundreds_of_unrelated_listings()
+    {
+        var path = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(path, JsonSerializer.Serialize(new PriceBook.Snapshot
+            {
+                League = "Test", FetchedUtc = DateTime.UtcNow, ExPerDivine = 200, ExPerChaos = 10,
+                ByName = new() { ["Divine Orb"] = new("Divine Orb", 200, 0, "Currency") },
+            }));
+            var prices = new PriceBook(path, "Test");
+            // Full criteria: 2, top 60%: 1, top two: 0 — the base-only step (400) must not win.
+            var handler = new CountingHandler(2, 1, 0, 400);
+            using var http = new HttpClient(handler);
+            var service = new TradeComparison(http);
+            var (key, _, plan) = PriceCheck.For(TopBoots, null, EsEvBoots);
+            service.GetOrQueueSearch(key, _ => plan(Stats), needsStats: false, prices);
+            await service.Pending;
+            var done = service.GetOrQueueSearch(key, _ => plan(Stats), needsStats: false, prices);
+            Assert.True(done.Comparable);
+            Assert.Equal(2, done.Total);
+            Assert.DoesNotContain("Closest match", done.Note);   // step 1 won
+            Assert.Equal(3, handler.Searches);   // the base-only step is never searched once a comparable exists
+        }
+        finally { File.Delete(path); }
+    }
+
+    private sealed class CountingHandler(params int[] totals) : HttpMessageHandler
+    {
+        public int Searches;
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            string json;
+            if (request.Method == HttpMethod.Post)
+            {
+                var total = totals[Math.Min(Searches++, totals.Length - 1)];
+                var ids = string.Join(",", Enumerable.Range(0, Math.Min(total, 10)).Select(i => $"\"r{i}\""));
+                json = $$"""{"id":"q{{Searches}}","total":{{total}},"result":[{{ids}}]}""";
+            }
+            else json = """{"result":[{"listing":{"price":{"amount":3,"currency":"exalted"},"account":{"name":"A"}}}]}""";
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = new StringContent(json) });
+        }
     }
 }

@@ -20,28 +20,25 @@ public sealed class ItemAffixData
     public sealed record Affix(string Id, string Family, bool Prefix, bool Desecrated, int Level,
         IReadOnlyList<StatRange> Stats, IReadOnlyList<string> SpawnTags);
 
-    /// <summary>An equipment base. Damage is the base physical range, <see cref="AttackTimeMs"/> the base attack time,
-    /// <see cref="CritChance"/> in hundredths of a percent; defences are the base values (0 = none).</summary>
+    /// <summary>An equipment base. Damage is the base physical range, <see cref="AttackTimeMs"/> the base attack time;
+    /// defences are the base values (0 = none).</summary>
     public sealed record ItemBase(string Metadata, string Name, string Class, IReadOnlyList<string> Tags,
-        int Armour, int Evasion, int EnergyShield, int DamageMin, int DamageMax, int AttackTimeMs, int CritChance, int Block);
+        int Armour, int Evasion, int EnergyShield, int DamageMin, int DamageMax, int AttackTimeMs);
 
     private readonly Dictionary<string, Affix> _affixes;
     private readonly Dictionary<string, ItemBase> _bases;
     private readonly ConcurrentDictionary<string, BaseIndex> _byBase = new(StringComparer.OrdinalIgnoreCase);
 
-    public ItemAffixData(IEnumerable<Affix> affixes, IEnumerable<ItemBase> bases, string version = "")
+    public ItemAffixData(IEnumerable<Affix> affixes, IEnumerable<ItemBase> bases)
     {
         _affixes = affixes.ToDictionary(a => a.Id, StringComparer.Ordinal);
         _bases = new Dictionary<string, ItemBase>(StringComparer.OrdinalIgnoreCase);
         foreach (var b in bases) _bases[b.Metadata] = b;
-        Version = version;
     }
 
     /// <summary>The shared table, loaded once from the embedded resource.</summary>
     public static ItemAffixData Shared { get; } = LoadEmbedded();
 
-    /// <summary>The RePoE export's game version the table was generated from.</summary>
-    public string Version { get; }
     public bool IsLoaded => _affixes.Count > 0 && _bases.Count > 0;
 
     public Affix? AffixFor(string modId) => _affixes.GetValueOrDefault(modId);
@@ -142,9 +139,8 @@ public sealed class ItemAffixData
             int Int(string key) => b.TryGetProperty(key, out var v) ? v.GetInt32() : 0;
             bases.Add(new ItemBase(p.Name, b.GetProperty("n").GetString()!, b.GetProperty("c").GetString()!,
                 b.GetProperty("t").EnumerateArray().Select(t => t.GetString()!).ToArray(),
-                Int("ar"), Int("ev"), Int("es"), Int("dmin"), Int("dmax"), Int("at"), Int("cr"), Int("bl")));
+                Int("ar"), Int("ev"), Int("es"), Int("dmin"), Int("dmax"), Int("at")));
         }
-        var version = root.TryGetProperty("version", out var ver) ? ver.GetString() ?? "" : "";
-        return new ItemAffixData(affixes, bases, version);
+        return new ItemAffixData(affixes, bases);
     }
 }

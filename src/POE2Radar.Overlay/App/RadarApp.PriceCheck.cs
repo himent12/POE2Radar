@@ -110,12 +110,18 @@ public sealed partial class RadarApp
         var verdict = summary.Verdict;
         double? worthEx = est?.Exalted ?? summary.Suggested ?? summary.Median;
         string? worth = null, worthSource = null;
+        var points = summary.Points;
+        string? minText = summary.Min is { } mn ? Fmt(mn) : null, medianText = summary.Median is { } md ? Fmt(md) : null;
         if (rare && !search.Pending && search.Error is null)
         {
             if (!search.Comparable)
             {
-                // The only listings found are "every item of this base": they don't price this item.
+                // The only listings found are "every item of this base": they don't price this item, so the circle, ring
+                // and spread strip stay empty (the rows still show what the base lists at).
                 worthEx = null;
+                points = [];
+                minText = medianText = null;
+                worthSource = "no comparable listing";
                 verdict = pc.Appraisal is { } ap
                     ? $"No comparable listings · {ap.GradeName}{(ap.Grade <= AppraisalGrade.Low ? " — not worth listing" : " — price it by hand")}"
                     : "No comparable listings — price it by hand";
@@ -158,8 +164,7 @@ public sealed partial class RadarApp
         if (tier == "Unknown" && pc.Appraisal is { Grade: <= AppraisalGrade.Low }) tier = "Vendor";
         return new PriceCheckView(h.BoxX, h.BoxY, h.BoxW, h.BoxH, name, baseLine, RarityRgb(h.Rarity, h.Art), mods,
             estimate, estimateSub, search.Status, search.Note, search.Pending, search.Error,
-            rows, summary.Points, est?.Exalted,
-            summary.Min is { } mn ? Fmt(mn) : null, summary.Median is { } md ? Fmt(md) : null,
+            rows, points, est?.Exalted, minText, medianText,
             verdict, url, _priceBook.ComparisonLeague, tier, appraisalLine, weights, worth, worthSource);
     }
 

@@ -39,7 +39,9 @@ public static class PriceCheck
         var note = item.Rarity is Poe2Live.Rarity.Rare or Poe2Live.Rarity.Magic
             ? (item.Identified ? "Affixes unreadable — base type only" : "Unidentified — base type only")
             : "Same base type";
-        return ($"base\n{baseType}\n{item.Rarity}", false, _ => new QueryPlan(BaseQuery(baseType, null, item.Rarity), note));
+        // A rare/magic searched by base alone (unidentified, unreadable mods) isn't compared on anything that prices it.
+        var comparable = item.Rarity is not (Poe2Live.Rarity.Rare or Poe2Live.Rarity.Magic);
+        return ($"base\n{baseType}\n{item.Rarity}", false, _ => new QueryPlan(BaseQuery(baseType, null, item.Rarity), note, Comparable: comparable));
     }
 
     /// <summary>One trade filter an appraisal driver turns into: a stat filter (<see cref="StatId"/>, trade-site id) or an
@@ -70,7 +72,7 @@ public static class PriceCheck
                 "ele_res" => new(d.Label, d.Importance, "pseudo.pseudo_total_elemental_resistance", null, d.Value),
                 "chaos_res" => new(d.Label, d.Importance, "pseudo.pseudo_total_chaos_resistance", null, d.Value),
                 "mod" when stats is not null && d.Line is { } line && d.Affix is { } a
-                    && TradeComparison.MatchLine("explicit", line, stats, TradeComparison.IsLocal(a.ModId)) is { } m
+                    && TradeComparison.MatchLine("explicit", line, stats, TradeComparison.IsLocalLine(a.ModId, line)) is { } m
                     => new(d.Label, d.Importance, m.Id, null, m.Value),
                 _ => null,
             };
@@ -115,12 +117,21 @@ public static class PriceCheck
         return new QueryPlan(CriteriaQuery(type, category?.Id, criteria, 0.9), $"any {slot} with at least your {Names(criteria)}", next);
     }
 
+    /// <summary>A search minimum <paramref name="factor"/> × <paramref name="value"/> below the item's own value. Whole-number
+    /// stats round up, so the slack never costs a whole step on a small stat (+3 levels × 0.9 stays +3; flooring would let
+    /// +2 items in as "comparable"); fractional values keep two decimals.</summary>
+    internal static double MinFor(double value, double factor)
+    {
+        var scaled = value * factor;
+        return Math.Abs(value - Math.Round(value)) < 1e-9 ? Math.Min(value, Math.Ceiling(scaled - 1e-9)) : Math.Floor(scaled * 100) / 100;
+    }
+
     /// <summary>Trade query JSON: rarity non-unique, not mirrored/sanctified, one listing per seller, cheapest first; stat
     /// criteria in one "and" group and equipment criteria as equipment filters, each with a minimum of
     /// <paramref name="factor"/> × the item's value.</summary>
     private static string CriteriaQuery(string? baseType, string? category, IReadOnlyList<TradeCriterion> criteria, double factor)
     {
-        object Min(TradeCriterion c) => new { min = Math.Floor(c.Value!.Value * factor) };
+        object Min(TradeCriterion c) => new { min = MinFor(c.Value!.Value, factor) };
         var statFilters = criteria.Where(c => c.StatId is not null)
             .Select(c => c.Value is > 0 ? (object)new { id = c.StatId, value = Min(c) } : new { id = c.StatId }).ToList();
         var equipment = criteria.Where(c => c.Equipment is not null && c.Value is > 0).ToDictionary(c => c.Equipment!, Min);
@@ -142,7 +153,7 @@ public static class PriceCheck
     {
         var baseType = item.Name;
         var rarity = Rarity(item.Rarity);
-        var baseOnly = new QueryPlan(BaseQuery(baseType, null, item.Rarity), $"all {rarity} {baseType} — mods not compared");
+        var baseOnly = new QueryPlan(BaseQuery(baseType, null, item.Rarity), $"all {rarity} {baseType} — mods not compared", Comparable: false);
         if (stats is null) return baseOnly;
         var matched = TradeComparison.MatchStats(item, stats, out var ignored);
         var n = matched.Count;
@@ -172,7 +183,7 @@ public static class PriceCheck
         string group, int min, double lo, double? hi)
     {
         var filters = matched.Select(m => m.Value is { } v
-            ? (object)new { id = m.Id, value = hi is { } h ? new { min = Math.Floor(v * lo), max = (double?)Math.Ceiling(v * h) } : new { min = Math.Floor(v * lo), max = (double?)null } }
+            ? (object)new { id = m.Id, value = hi is { } h ? new { min = MinFor(v, lo), max = (double?)Math.Ceiling(v * h) } : new { min = MinFor(v, lo), max = (double?)null } }
             : new { id = m.Id }).ToList();
         var query = new Dictionary<string, object> { ["status"] = new { option = Status } };
         if (baseType is not null) query["type"] = baseType;
@@ -198,10 +209,13 @@ public static class PriceCheck
     }
 
     /// <summary>The trade site's item category for an item's metadata path (e.g. Metadata/Items/Rings/… →
-    /// accessory.ring), or null when unknown. Ids from the official /api/trade2/data/filters list.</summary>
+    /// accessory.ring), or null when unknown. Ids from the official /api/trade2/data/filters list. Equipment is mapped by
+    /// its base's item class — paths can't tell a quarterstaff (…/Staves/FourQuarterstaff1) from a staff, or a buckler
+    /// (…/Shields/FourShieldDex1) from a shield; anything outside the base table falls back to the path.</summary>
     public static (string Id, string Name)? Category(string? metadata)
     {
         if (string.IsNullOrEmpty(metadata)) return null;
+        if (ItemAffixData.Shared.BaseFor(metadata) is { } b && ClassCategory(b.Class) is { } byClass) return byClass;
         var m = metadata;
         (string, string)? C(string id, string name) => (id, name);
         if (m.Contains("/Rings/")) return C("accessory.ring", "Ring");
@@ -212,9 +226,9 @@ public static class PriceCheck
         if (m.Contains("/Gloves/")) return C("armour.gloves", "Gloves");
         if (m.Contains("/Boots/")) return C("armour.boots", "Boots");
         if (m.Contains("/Quivers/")) return C("armour.quiver", "Quiver");
-        if (m.Contains("/Bucklers/")) return C("armour.buckler", "Buckler");
+        if (m.Contains("/Bucklers/") || m.Contains("/FourShieldDex")) return C("armour.buckler", "Buckler");
         if (m.Contains("/Shields/")) return C("armour.shield", "Shield");
-        if (m.Contains("/Focus")) return C("armour.focus", "Focus");
+        if (m.Contains("/Focii/") || m.Contains("/Focus")) return C("armour.focus", "Focus");
         if (m.Contains("/Jewels/")) return C("jewel", "Jewel");
         if (m.Contains("/Charms/") || m.Contains("Charm")) return C("flask.charm", "Charm");
         if (m.Contains("/Flasks/")) return m.Contains("Mana") ? C("flask.mana", "Mana flask") : C("flask.life", "Life flask");
@@ -222,9 +236,9 @@ public static class PriceCheck
         if (m.Contains("/Bows/")) return C("weapon.bow", "Bow");
         if (m.Contains("/Wands/")) return C("weapon.wand", "Wand");
         if (m.Contains("/Sceptres/")) return C("weapon.sceptre", "Sceptre");
-        if (m.Contains("/Warstaves/") || m.Contains("/Quarterstaves/")) return C("weapon.warstaff", "Quarterstaff");
+        if (m.Contains("/Warstaves/") || m.Contains("/Quarterstaves/") || m.Contains("Quarterstaff")) return C("weapon.warstaff", "Quarterstaff");
         if (m.Contains("/Staves/")) return C("weapon.staff", "Staff");
-        if (m.Contains("/Spears/")) return C("weapon.spear", "Spear");
+        if (m.Contains("Spears/")) return C("weapon.spear", "Spear");
         if (m.Contains("/Flails/")) return C("weapon.flail", "Flail");
         if (m.Contains("/Claws/")) return C("weapon.claw", "Claw");
         if (m.Contains("/Daggers/")) return C("weapon.dagger", "Dagger");
@@ -238,6 +252,22 @@ public static class PriceCheck
         if (m.Contains("/Maps/") || m.Contains("MapKey")) return C("map.waystone", "Waystone");
         return null;
     }
+
+    private static (string Id, string Name)? ClassCategory(string itemClass) => itemClass switch
+    {
+        "Ring" => ("accessory.ring", "Ring"), "Amulet" => ("accessory.amulet", "Amulet"), "Belt" => ("accessory.belt", "Belt"),
+        "Helmet" => ("armour.helmet", "Helmet"), "Body Armour" => ("armour.chest", "Body armour"), "Gloves" => ("armour.gloves", "Gloves"),
+        "Boots" => ("armour.boots", "Boots"), "Quiver" => ("armour.quiver", "Quiver"), "Buckler" => ("armour.buckler", "Buckler"),
+        "Shield" => ("armour.shield", "Shield"), "Focus" => ("armour.focus", "Focus"), "Jewel" => ("jewel", "Jewel"),
+        "Crossbow" => ("weapon.crossbow", "Crossbow"), "Bow" => ("weapon.bow", "Bow"), "Wand" => ("weapon.wand", "Wand"),
+        "Sceptre" => ("weapon.sceptre", "Sceptre"), "Warstaff" => ("weapon.warstaff", "Quarterstaff"), "Staff" => ("weapon.staff", "Staff"),
+        "Spear" => ("weapon.spear", "Spear"), "Flail" => ("weapon.flail", "Flail"), "Claw" => ("weapon.claw", "Claw"),
+        "Dagger" => ("weapon.dagger", "Dagger"), "Talisman" => ("weapon.talisman", "Talisman"),
+        "Two Hand Sword" => ("weapon.twosword", "Two-handed sword"), "One Hand Sword" => ("weapon.onesword", "One-handed sword"),
+        "Two Hand Axe" => ("weapon.twoaxe", "Two-handed axe"), "One Hand Axe" => ("weapon.oneaxe", "One-handed axe"),
+        "Two Hand Mace" => ("weapon.twomace", "Two-handed mace"), "One Hand Mace" => ("weapon.onemace", "One-handed mace"),
+        _ => null,
+    };
 
     /// <summary>Trade query JSON for a base type (+ optional unique name / rarity), cheapest first.</summary>
     public static string? BaseQuery(string? baseType, string? uniqueName, Poe2Live.Rarity rarity)

@@ -104,9 +104,11 @@ public sealed class TradeComparison
     public const int MinComparable = 3;
 
     /// <summary>
-    /// Walk a plan and its looser fallbacks (at most 5 searches). The first step with at least
-    /// <see cref="MinComparable"/> results wins; if none gets there, the step with the most results (earliest on a
-    /// tie). Only the chosen step's listings are fetched, so a ladder costs searches, not fetches.
+    /// Walk a plan and its looser fallbacks (at most 5 searches). The first comparable step with at least
+    /// <see cref="MinComparable"/> results wins; if none gets there, the comparable step with the most results
+    /// (earliest on a tie) — even one or two real comparables say more than hundreds of unrelated listings. The
+    /// non-comparable last resort (<see cref="QueryPlan.Comparable"/> false) is searched only when no comparable step
+    /// found anything. Only the chosen step's listings are fetched, so a ladder costs searches, not fetches.
     /// </summary>
     private async Task<MarketSearch> SearchLadderAsync(QueryPlan plan, string league, PriceBook.Snapshot market)
     {
@@ -115,13 +117,14 @@ public sealed class TradeComparison
         for (var p = plan; p is not null && step < 5; p = p.Next)
         {
             if (p.Query is null) continue;
+            if (!p.Comparable && best is { Total: > 0 }) break;
             step++;
             var (id, ids, total) = await SearchIdsAsync(p.Query, league);
+            if (!p.Comparable || total >= MinComparable) { best = (p, id, ids, total, step); break; }
             if (best is null || total > best.Value.Total) best = (p, id, ids, total, step);
-            if (total >= MinComparable) { best = (p, id, ids, total, step); break; }
         }
         if (best is not { } b) return new("Nothing to search for", [], 0, null, plan.Note);
-        var note = b.Step == 1 ? b.Plan.Note : "Closest match — " + b.Plan.Note;
+        var note = b.Step == 1 || !b.Plan.Comparable ? b.Plan.Note : "Closest match — " + b.Plan.Note;
         return await FetchListingsAsync(b.Id, b.Ids, b.Total, league, market, note) with { Comparable = b.Plan.Comparable };
     }
 
@@ -234,8 +237,17 @@ public sealed class TradeComparison
         return candidates.Count == 1 ? new MatchedStat(candidates[0].Id, value, line) : null;
     }
 
-    /// <summary>Whether a mod acts on the item itself (any of its stats is a "local_" stat).</summary>
-    public static bool IsLocal(string modId) => ItemModTranslator.Shared.StatIdsFor(modId)?.Any(s => s.StartsWith("local_", StringComparison.Ordinal)) == true;
+    /// <summary>Whether a rendered line of affix <paramref name="modId"/> acts on the item itself: the affix stat the line
+    /// shares the most words with decides, so the global half of a hybrid ("+400 to Accuracy Rating" beside local attack
+    /// speed) keeps its global trade stat.</summary>
+    public static bool IsLocalLine(string modId, string line)
+    {
+        var stats = ItemModTranslator.Shared.StatIdsFor(modId);
+        if (stats is not { Length: > 0 }) return false;
+        var locals = stats.Count(s => s.StartsWith("local_", StringComparison.Ordinal));
+        if (locals == 0 || locals == stats.Length) return locals > 0;
+        return stats.MaxBy(s => ItemAppraiser.WordOverlap(s, line))!.StartsWith("local_", StringComparison.Ordinal);
+    }
 
     /// <summary>
     /// Match each mod line to exactly one trade stat (see <see cref="MatchLine"/>). Lines with no match, or with
@@ -245,7 +257,8 @@ public sealed class TradeComparison
     {
         var localLines = new HashSet<string>(StringComparer.Ordinal);
         foreach (var a in item.Affixes ?? [])
-            if (IsLocal(a.Id)) foreach (var line in a.Lines) localLines.Add(line);
+            foreach (var line in a.Lines)
+                if (IsLocalLine(a.Id, line)) localLines.Add(line);
         var result = new List<MatchedStat>(); var used = new HashSet<string>();
         ignored = 0;
         foreach (var mod in item.Mods)
