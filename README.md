@@ -1,10 +1,12 @@
 # POE2Radar
 
-An external, mostly read-only **map/radar overlay for Path of Exile 2**.
+An external **map overlay + trade companion for Path of Exile 2**.
 
 It attaches to the PoE2 client, reads game state directly out of process memory (no injection, no
-hooks), and draws a terrain + entity overlay on top of the game's map — plus an optional auto-flask
-quality-of-life feature.
+hooks), and draws a terrain + entity overlay on top of the game's map. It also covers the everyday
+quality-of-life tools of overlays like PoE Overlay II: price checks, a trade panel and earnings tracker,
+waystone checks, chat-command hotkeys, bookmarks, and a buff keeper that recasts a buff when it runs out.
+It does **not** bot. Nothing moves your character, targets monsters or runs skill rotations.
 
 > ⚠️ **Use at your own risk.** This reads another process's memory and can send keystrokes to the
 > game. Automating input may violate Path of Exile's Terms of Service and could put your account at
@@ -12,48 +14,68 @@ quality-of-life feature.
 
 ## Features
 
-- **Map overlay** — when the in-game map is open, draws the walkable-terrain mask + entity dots,
-  projected player-centered onto the game's map.
-- **Entity radar** — alive enemies (red), NPCs, chests, area transitions, other players, and
-  **POIs** (anything the game flags with a minimap icon) shown with a ring. Optional world-space
-  **HP bars** over monsters.
-- **Tile landmarks** — static features pulled from terrain tile data (boss arenas, area
-  transitions, …), shown the moment you enter an area, with community-curated friendly names.
-- **Atlas overlay** — on the open Atlas, highlights and labels nodes by content/map type, draws
-  off-screen arrows to tracked maps, and auto-routes: shortest-hop route lines from where you are
-  to every tracked tile, with hop counts. Track boss tiers (Deadly, Twinned, …), special maps
-  (Citadels, Towers, Unique maps), and any content type; biome-coloured borders on tracked labels.
-- **Loot values** — prices dropped items from poe.ninja and draws the value on the drop / its loot
-  tag, including revealing what **unidentified uniques** are. Filter by category and value floor.
-- **League reward values** — see what a reward is worth before you commit: value chips on every
-  **Ritual** tribute-shop tile, a **Runeshape monolith's** best reward and rune count shown on the
-  map *before* you open it, and prices on the **Runeforge** (Runeshape Combinations) panel.
-- **Monster threat detection** — flags dangerous rare/magic monster mods and auras.
-- **Navigation** — pick any landmark, POI, or entity as a destination and the overlay draws a
-  smoothed A* route to it: on the in-game map when it's open, or as waypoints on the world ground
-  when it's closed. Multi-select (each route its own color). Auto-nav patterns (e.g. the expedition
-  encounter) re-acquire their target automatically in each new zone.
-- **Customizable icons & display rules** — per-rule icon shape/color/size/opacity, editable live in
-  the dashboard; drop your own `*.svg` into the `icons/` folder next to the exe to add or override
-  any icon.
-- **Auto-flask** (opt-in input) — presses the life/mana flask key below a Life, Energy Shield, or
-  mana threshold (selectable). Hard-gated: only when PoE2 is the foreground window, with cooldowns
-  and an **F8 kill-switch**.
-- **Ranged boss combat** — observed damage reactions, checked bow positioning, bounded dodge ownership,
-  and short/long attack openings. See [tuning, reader limits and live validation](resources/boss-combat.md).
-- **Combat assist** (opt-in input, **off by default**) — while armed with **F4**, taps the next ready
-  skill in a configurable rotation (default **QWER**) when a hostile monster is in grid range. Same
-  gates as auto-flask (focused window, in-game, per-skill cooldown). Cannot be armed from the dashboard.
-- **Bot** (opt-in, **off by default**) — **F3** is the master kill-switch (quest follow + path move
-  along the selected A* route + combat rotation). **F5** toggles path move on its own; **F4** still
-  toggles combat independently. Path move is WASD or click-to-move; quest follow taps interact/use
-  on arrival. Skill keys, range, and move tunables live in the dashboard Combat / Bot card; arm
-  bits cannot be set over HTTP.
-- **Web dashboard** (`http://localhost:7777`, or **F12** in-game) — a local control panel: a
-  searchable list of every entity/landmark you can click to navigate to, plus settings tabs (radar
-  display + icon styling, monster HP bars, atlas tracking, loot-value pricing/league, monster-mod
-  rules, auto-flask tuning). Served same-origin only; setting/navigation writes are loopback-gated.
-  Read endpoints: `GET /state`, `/entities`, `/landmarks`, `/api/icons`.
+### Map & radar
+- **Map overlay**: when the in-game map is open, draws the walkable terrain plus entity dots, centred on
+  the player.
+- **Entity radar**: enemies by rarity, NPCs, chests, area transitions, other players, and **POIs**
+  (anything the game flags with a minimap icon). Optional world-space **monster HP bars**.
+- **Tile landmarks**: boss arenas, transitions and other static features from the terrain data, labelled
+  with community-curated names as soon as you enter an area.
+- **Navigation**: pick any landmark, POI or entity and the overlay draws a smoothed A* route to it. The
+  route shows on the map when it's open and as ground waypoints when it's closed. **F6** adds the nearest
+  target, **F7** clears. Routes are drawn only; nothing walks them for you.
+- **Atlas overlay**: highlights and labels nodes by content or map type, points off-screen arrows at
+  tracked maps, and routes the shortest hop path to them.
+- **Monster threat detection**: flags dangerous rare/magic monster mods and auras.
+- **Custom icons & display rules**: set each rule's icon shape, colour, size and opacity in the dashboard.
+  Drop your own `*.svg` into `icons/` next to the exe to add or override icons.
+
+### Trade & items
+- **Price check (Ctrl+D)**: hover any item (inventory, stash, vendor, ground) and press **Ctrl+D**. A panel
+  opens with the poe.ninja estimate next to the cheapest live trade listings (price, seller, how long ago),
+  where the prices spread, and a suggested list price to sell fast.
+  - Rares and magics are compared on their actual affixes; uniques by name; currency and other items by base
+    type.
+  - **Open on trade site** opens the exact search; **Refresh** re-checks. Esc or the × closes it.
+  - The hotkey is configurable (dashboard → Item Value).
+- **Price on hover**: a quick poe.ninja estimate under the item tooltip. Rare/magic gear is compared
+  automatically after a short hover.
+- **Loot values**: prices drops on the ground and on their loot tags, and reveals which unique an
+  unidentified unique is.
+- **Trade panel**: reads the game's `Client.txt`, so incoming buy whispers and your own purchase whispers
+  appear as cards on screen. Each card shows who is in your area, the item, price and stash position, with
+  **Invite · Trade · Thanks · Kick · Sold** buttons (or **Hideout · Trade · Thanks** for purchases). Each
+  click types one chat command.
+- **Earnings tracker**: completed trades are logged with totals for today, the last 7 days and all time,
+  converted to exalted where a price is known. History, a profit chart and trade-message settings are on
+  the dashboard's **Trade** page.
+- **Waystone checker**: hover a waystone to see any mods on your dangerous-mod list (plain text, or
+  `re:` + regex). Edit the list on the dashboard.
+- **Item inspect**: **Alt+W** opens the hovered item on the PoE2 wiki, **Alt+G** on poe2db.
+- **League reward values**: value chips on Ritual tribute-shop tiles, Runeshape monolith rewards shown on
+  the map before you open them, Runeforge prices, and a Currency Exchange order-book depth panel.
+
+### Macros (opt-in input)
+- **Buff keeper**: re-activates an ability whose buff has run out. Each rule watches a buff by name and
+  presses its skill key when the buff is **missing**, **about to expire**, or simply every N seconds
+  (**interval**). Rules can wait for hostiles nearby and skip town/hideout. Off by default. Arm or disarm
+  with **F4** (configurable) or the Insert menu. The Insert menu and dashboard list the buffs on you right
+  now, and clicking one creates a rule for it.
+- **Chat commands**: bind any chat line to a hotkey (**F5 → `/hideout`** by default). Placeholders:
+  `@char`, `@last` (last whisper partner), `{league}`, `{area}`. Multiple lines send multiple messages.
+- **Bookmarks**: open websites (trade, poe.ninja, poe2db, wiki, your own) from the dashboard or a hotkey.
+- **Auto-flask**: presses the life/mana flask below a Life, Energy Shield or mana threshold. **F8** toggles
+  it.
+
+Every input is gated: PoE2 must be the foreground window, you must be in game (and alive, for flasks and
+buffs), and each action has a cooldown. The arm switches can't be flipped over HTTP.
+
+### UI
+- **Insert**: in-game control center with Overview, Flask, Macros, Trade and Radar sections. It uses a
+  PoE-style design with warm charcoal and gold, Cinzel headings, and vitals shown as rings.
+- **F12 / `http://localhost:7777`**: web dashboard with Overview (vitals, module status, today's profit,
+  hotkey cheat-sheet, quick links), Trade, Macros, Radar rules & landmarks, Atlas, Item Value and
+  Settings. Writes are loopback-only.
 
 This is a Linux-capable fork of [Sikaka/POE2Radar](https://github.com/Sikaka/POE2Radar). On Arch
 (and other Linux) it attaches to the Proton/Wine PoE2 process via `process_vm_readv` and draws a
@@ -116,11 +138,23 @@ dotnet build POE2Radar.slnx
 
 Reading another process generally requires Administrator (Windows) or ptrace permission (Linux).
 
-Hotkeys: **F8** toggles auto-flask; **F4** toggles combat assist; **F3** toggles the bot master
-(quest follow + path move + combat); **F5** toggles path move; **F9** quits; **F12** opens the web dashboard;
-**F6** routes to the nearest landmark/POI and **F7** clears routes; **F10** (with the Atlas open)
-inspects the hovered tile and sets a route start/end. All other settings live in the dashboard
-(no calibration hotkeys, to avoid accidental presses).
+### Hotkeys
+
+| Key | Action |
+|---|---|
+| **Insert** | In-game control center |
+| **F12** | Open the web dashboard |
+| **F8** | Toggle auto-flask |
+| **F4** | Toggle the buff keeper (configurable) |
+| **F5** | `/hideout` (default chat command — editable) |
+| **Ctrl+D** | Price check the hovered item (estimate vs. live listings) |
+| **Alt+W / Alt+G** | Hovered item on the wiki / poe2db |
+| **F6 / F7** | Route to the nearest landmark / clear routes |
+| **F10** | With the Atlas open: inspect the hovered tile, set a route start/end |
+| **F9** | Quit |
+
+Chat commands, bookmarks, inspect keys and the buff-keeper toggle are all rebindable on the dashboard's
+**Macros** page. The dashboard also works without the game running: `POE2Radar.Overlay --demo`.
 
 ## Architecture
 
@@ -128,9 +162,9 @@ Three projects:
 
 - `src/POE2Radar.Core` — memory plumbing (Win32 `ReadProcessMemory` / Linux `process_vm_readv` against
   Proton), the PoE2 offset table (`Game/Poe2Offsets.cs`), and the live read layer (`Game/Poe2Live.cs`).
-- `src/POE2Radar.Overlay` — the radar: attaches, AOB-resolves the game roots, runs the tick loop,
-  renders a Skia overlay (Win32 layered window or X11 ARGB), serves the API, and (opt-in) drives
-  auto-flask input.
+- `src/POE2Radar.Overlay` — the overlay: attaches, AOB-resolves the game roots, runs the tick loop,
+  renders a Skia overlay (Win32 layered window or X11 ARGB), serves the API + dashboard, tails
+  `Client.txt` for the trade panel, and (opt-in) drives flask / buff-keeper / chat-macro input.
 - `src/POE2Radar.Research` — dev-time offset discovery/validation tools (AOB scan, HP value-scan,
   entity/tile/UI probes, an area-change watcher). Never linked into the overlay binary.
 

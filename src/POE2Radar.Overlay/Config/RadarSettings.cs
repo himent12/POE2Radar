@@ -67,6 +67,9 @@ public sealed class RadarSettings
     // Auto-flask stays foreground-gated regardless (safety). Default off (overlay hides when unfocused).
     public bool AlwaysShowOverlay { get; set; } = false;
 
+    // Still the in-game menus: no spinning sigils, drifting motes, pulses or entrance animations.
+    public bool ReduceMotion { get; set; } = false;
+
     // NOTE: the atlas canvas→screen projection has NO stored settings — it's derived live from the game
     // window height (UIscale = winH/1600 × live zoom) in RadarApp.AtlasProjection, so it's resolution-
     // correct everywhere with no calibration. (The old F10/F11 homography calibration + its AtlasScale/
@@ -176,136 +179,18 @@ public sealed class RadarSettings
     public int LifeKey { get; set; } = 0x31;
     public int ManaKey { get; set; } = 0x32;
 
-    // ── Bot master arm (F3 in-game kill-switch). Default OFF. Top-level so it is never inside a
-    //    nested object the dashboard re-POSTs. BotEnabled is NOT writable via the HTTP API — same
-    //    as AutoFlaskEnabled / CombatAssistEnabled. When on, quest follow runs, path move is
-    //    armed, and the combat rotation is armed. F4 combat stays independently toggleable. ──
-    public bool BotEnabled { get; set; }
+    // ── Buff keeper (recast expired self-buffs). Its Enabled flag is the persisted ARM state — toggled by
+    //    its hotkey / the INSERT menu only, never over HTTP. ──
+    public BuffKeeperSettings BuffKeeper { get; set; } = new();
 
-    // ── Combat assist (F4 in-game kill-switch). Default OFF. CombatAssistEnabled is NOT writable
-    //    via the HTTP API — same as AutoFlaskEnabled. Range is grid units; rotation is an ordered
-    //    list of skills (VK + per-skill cooldown). CombatAttackKey / CombatCooldownMs are the
-    //    legacy one-key fields used only to seed CombatSkills when the list is empty. ──
-    public bool CombatAssistEnabled { get; set; }
-    public float CombatRange { get; set; } = 35f;
-    // Movement pauses only while a live hostile is inside THIS tighter radius (grid units) — skills still
-    // fire out to CombatRange, and the bot keeps walking toward farther mobs instead of standing still.
-    public float CombatEngageRange { get; set; } = 20f;
-    // Fight watchdog: if no hostile inside the engage radius loses HP for this long, give up on those
-    // monsters for CombatIgnoreMs (movement resumes, map-clear routes elsewhere), then re-consider them.
-    //    0 = never give up. Default 6 s: a monster that takes NO damage at all for that long is immune
-    //    (essence-imprisoned, phase-shielded, untargetable) and is skipped instead of holding the bot forever.
-    public int CombatStallMs { get; set; } = 6000;
-    public bool CombatStallMigrated { get; set; }
-    // Auto-respawn: when the character dies, tap the resurrect key until alive again. PoE2 death screen:
-    // Space/Enter = "Resurrect at Checkpoint".
-    public bool AutoRespawn { get; set; } = true;
-    public int RespawnKey { get; set; } = 0x20; // Space
-    public int RespawnDelayMs { get; set; } = 2500;
-    // Dodge roll key used by "dodge after" skill steps (PoE2 default: Space).
-    public int CombatDodgeKey { get; set; } = 0x20;
-    // Combo timing: how long a "tap" is physically held (the game polls per frame — 0-length presses are
-    // missed) and how long a dodge roll locks the rotation afterwards (roll animation).
-    public int CombatTapHoldMs { get; set; } = 60;
-    public int CombatDodgeRecoverMs { get; set; } = 650;
-    public int CombatIgnoreMs { get; set; } = 20000;
-    // Low-HP flee: below CombatFleeHpPct the bot stops attacking and runs CombatFleeDistance cells away
-    // from the pack (most open direction), until HP is back at CombatFleeRecoverPct. 0 = never flee.
-    public float CombatFleeHpPct { get; set; } = 35f;
-    public float CombatFleeRecoverPct { get; set; } = 60f;
-    public float CombatFleeDistance { get; set; } = 25f;
-    // Target pick: Nearest | Rarity | LowestHp | HighestHp. Rotation: RoundRobin | Priority (list order, first ready).
-    public string CombatTargetMode { get; set; } = "Nearest";
-    public string CombatRotationMode { get; set; } = "RoundRobin";
-    // Ranged kiting: back off while any hostile is closer than this (0 = melee, never back off).
-    public float CombatKeepDistance { get; set; } = 0f;
-    // Ranged unique encounters only; these tune policy, never arm input.
-    public bool BossCombatEnabled { get; set; } = true;
-    public float BossDamagePct { get; set; } = 6;
-    public int BossDodgeGapMs { get; set; } = 1800;
-    public int BossSafeOpeningMs { get; set; } = 1200;
-    public int BossLostGraceMs { get; set; } = 8000;
-    public float BossHazardRadius { get; set; } = 6;
-    public float BossDodgeDistance { get; set; } = 40;
-    public float BossEscapeDistance { get; set; } = 10;
-    public int CombatCooldownMs { get; set; } = 400;
-    public int CombatAttackKey { get; set; } = 0x51; // Q
-    public List<CombatSkill> CombatSkills { get; set; } = new();
-    public Dictionary<string, List<CombatSkill>> BuildProfiles { get; set; } = new();
+    // ── Chat macros, bookmarks and item-inspect hotkeys. ──
+    public CommandSettings Commands { get; set; } = new();
 
-    // ── Farm loop (F11 in-game kill-switch). Default OFF. FarmLoopEnabled is NOT writable via the HTTP
-    //    API — same as MapClearEnabled. Clears FarmAreaCode with map-clear, casts a town portal (FarmPortalKey
-    //    = the key the built-in Portal skill is bound to), takes it, uses the town waypoint and ctrl-clicks the
-    //    area back for a fresh instance, repeat. FarmClearSettleMs = how long "cleared + nothing near" must hold. ──
-    public bool FarmLoopEnabled { get; set; }
-    public string FarmAreaCode { get; set; } = "";
-    public int FarmPortalKey { get; set; }
-    public int FarmClearSettleMs { get; set; } = 2500;
+    // ── Waystone mod checker (flags dangerous mods when hovering a waystone). ──
+    public MapCheckSettings MapCheck { get; set; } = new();
 
-    // ── Quest follow (F3 bot-master also arms this). Default OFF. QuestFollowEnabled is NOT writable
-    //    via the HTTP API — same as CombatAssistEnabled / AutoFlaskEnabled / BotEnabled. When armed,
-    //    each zone auto-selects one nav target from zone notes (or a Transition/waypoint/boss fallback)
-    //    and taps interact/use on arrival. ──
-    public bool QuestFollowEnabled { get; set; }
-    public int QuestUseKey { get; set; } = 0x01; // VK_LBUTTON (PoE2 default interact is click)
-    public float QuestUseRadius { get; set; } = 6f;
-    public int QuestUseCooldownMs { get; set; } = 400;
-
-    // ── Map clear (F2 in-game kill-switch). Default OFF. MapClearEnabled is NOT writable via the
-    //    HTTP API — same as BotEnabled / CombatAssistEnabled. When armed, path move + combat are
-    //    armed and the bot walks unexplored walkable cells (unique bosses first). F3 quest follow
-    //    is paused while this is on. Stamp radius is grid cells marked visited around the player. ──
-    public bool MapClearEnabled { get; set; }
-    public int MapClearStampRadius { get; set; } = 24;
-    // One-shot migration marker: pre-sweep configs carried the old 16-cell stamp, which re-walked ground the
-    // player had plainly already seen. Bumped once to the new default; user changes after that are kept.
-    public bool MapClearStampMigrated { get; set; }
-    // Only chase non-unique hostiles this close (grid units; 0 = any distance). Farther packs get
-    // reached by the frontier walk instead of a cross-map detour.
-    public float MapClearAggroRange { get; set; } = 80f;
-    // Give up on a target (cell or mob) the bot has not gotten closer to for this long while not fighting.
-    public int MapClearStuckMs { get; set; } = 8000;
-    // In-map events the clear routine walks to and clicks (essence crystals, strongboxes, shrines, breach
-    // hands, ritual altars, plain chests) + "click a monster nothing lands on" (essence-encased rares).
-    public bool EventEssence { get; set; } = true;
-    public bool EventStrongbox { get; set; } = true;
-    public bool EventShrine { get; set; } = true;
-    public bool EventBreach { get; set; } = true;
-    public bool EventRitual { get; set; }
-    public bool EventChests { get; set; }
-    public bool EventClickStalled { get; set; } = true;
-    public float EventRange { get; set; } = 120f;     // only detour to events this close (0 = any)
-    public float EventUseRadius { get; set; } = 7f;   // click when this close
-    public int EventUseCooldownMs { get; set; } = 900;
-    public int EventMaxClicks { get; set; } = 4;      // give up (blacklist 90 s) after this many clicks without effect
-
-    // ── Path move (F5 in-game kill-switch). Default OFF. MoveEnabled is NOT writable
-    //    via the HTTP API — same as CombatAssistEnabled / QuestFollowEnabled / BotEnabled. When armed
-    //    (F5 or F3 bot master), taps WASD (or the configured method) toward the next waypoint of the
-    //    first selected path. Arrive radius is grid cells; keys are Win32 VKs. ──
-    public bool MoveEnabled { get; set; }
-    public string MoveMethod { get; set; } = "WASD";
-    public float MoveArriveRadius { get; set; } = 3f;
-    public int MoveCooldownMs { get; set; } = 80;
-    public int MoveKeyW { get; set; } = 0x57; // W
-    public int MoveKeyA { get; set; } = 0x41; // A
-    public int MoveKeyS { get; set; } = 0x53; // S
-    public int MoveKeyD { get; set; } = 0x44; // D
-    public int MoveClickKey { get; set; } = 0x01; // VK_LBUTTON
-    // Movement quality: hold a run key while travelling (PoE2: Space), steer at a look-ahead point on the
-    // route (string-pulled over walkable terrain), allow two keys at once (8-way), and a grid→key axis
-    // rotation for calibrating the isometric camera (degrees).
-    // Keep playing while PoE2 is NOT the foreground window (alt-tabbed): input is addressed to the game
-    // window (PostMessage / XSendEvent) instead of synthesized globally, so nothing leaks into other apps.
-    public bool PlayInBackground { get; set; }
-    // Linux only: X display of a NESTED server the game runs in (gamescope / Xephyr), e.g. ":1"; "auto" scans
-    // for one hosting a Path of Exile window. Input is sent there, where the game is always focused.
-    public string InputDisplay { get; set; } = "auto";
-    public bool MoveRunEnabled { get; set; } = true;
-    public int MoveRunKey { get; set; } = 0x20; // Space
-    public float MoveLookAhead { get; set; } = 12f;
-    public bool MoveDiagonals { get; set; } = true;
-    public float MoveAxisRotationDeg { get; set; } = 0f;
+    // ── Trade assistant: Client.txt-driven trade panel + earnings tracker. ──
+    public TradeSettings Trade { get; set; } = new();
 
     // ── HTTP API. ──
     public int ApiPort { get; set; } = 7777;
@@ -356,7 +241,6 @@ public sealed class RadarSettings
             if (!File.Exists(FilePath))
             {
                 var fresh = new RadarSettings();
-                fresh.EnsureCombatSkills();
                 fresh.Save();
                 return fresh;
             }
@@ -375,9 +259,7 @@ public sealed class RadarSettings
         catch (Exception ex)
         {
             Console.Error.WriteLine($"Settings load failed ({ex.Message}); using defaults.");
-            var fallback = new RadarSettings();
-            fallback.EnsureCombatSkills();
-            return fallback;
+            return new RadarSettings();
         }
     }
 
@@ -400,29 +282,6 @@ public sealed class RadarSettings
             string.Equals(p, "ExpeditionEncounter", StringComparison.OrdinalIgnoreCase);
 
         var changed = false;
-
-        // Combat rotation: empty list (fresh config / pre-rotation JSON) seeds QWER (or a custom
-        // CombatAttackKey) so a one-key upgrade survives.
-        if (EnsureCombatSkills()) changed = true;
-
-        // Pre-BotEnabled configs that had quest follow on: promote to the master bot arm.
-        if (QuestFollowEnabled && !BotEnabled) { BotEnabled = true; changed = true; }
-
-        // Immune-target skip: configs written while "never give up" was the default → 6 s once.
-        if (!CombatStallMigrated)
-        {
-            if (CombatStallMs == 0) CombatStallMs = 6000;
-            CombatStallMigrated = true;
-            changed = true;
-        }
-
-        // Sweep planner: old 16-cell stamp → 24 once.
-        if (!MapClearStampMigrated)
-        {
-            if (MapClearStampRadius == 16) MapClearStampRadius = 24;
-            MapClearStampMigrated = true;
-            changed = true;
-        }
 
         static bool IsBroadStrongbox(string p) => string.Equals(p, "Strongbox", StringComparison.OrdinalIgnoreCase);
 
@@ -461,30 +320,6 @@ public sealed class RadarSettings
                 if (IsStaleExp(AutoNavPatterns[i])) { AutoNavPatterns[i] = precise; changed = true; }
 
         return changed;
-    }
-
-    /// <summary>
-    /// Seed <see cref="CombatSkills"/> when the list is empty. Default rotation is QWER at
-    /// <see cref="CombatCooldownMs"/>. A custom <see cref="CombatAttackKey"/> (not Q) seeds that
-    /// one skill so a pre-rotation key survives the upgrade.
-    /// Returns true if the list was created/seeded.
-    /// </summary>
-    public bool EnsureCombatSkills()
-    {
-        CombatSkills ??= new List<CombatSkill>();
-        if (CombatSkills.Count > 0) return false;
-        var cd = Math.Clamp(CombatCooldownMs, 0, 60000);
-        var custom = CombatAttackKey is >= 1 and <= 255 && CombatAttackKey != 0x51;
-        if (custom)
-        {
-            CombatSkills.Add(new CombatSkill { Key = CombatAttackKey, CooldownMs = cd });
-        }
-        else
-        {
-            foreach (var key in new[] { 0x51, 0x57, 0x45, 0x52 }) // Q W E R
-                CombatSkills.Add(new CombatSkill { Key = key, CooldownMs = cd });
-        }
-        return true;
     }
 
     /// <summary>Persist current settings to disk. Never throws on IO error — logs and continues.</summary>

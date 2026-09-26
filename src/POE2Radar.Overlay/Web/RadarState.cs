@@ -41,18 +41,10 @@ public sealed record RadarState(
     IReadOnlyList<ExchangeRow>? ExchangeWanted = null,
     int ExchangeHaveQty = 0,
     string ExchangeFillNote = "",
-    bool CombatAssist = false,
-    string CombatNote = "",
-    bool QuestFollow = false,
-    string QuestFollowNote = "",
-    bool PathMove = false,
-    string PathMoveNote = "",
-    bool Bot = false,
-    string BotNote = "",
-    bool MapClear = false,
-    string MapClearNote = "",
-    bool FarmLoop = false,
-    string FarmNote = "")
+    bool BuffKeeper = false,
+    string BuffNote = "",
+    int TradeOpen = 0,
+    string ChatNote = "")
 {
     public static readonly RadarState Empty =
         new(false, 0, 0, false, 0, System.Numerics.Vector2.Zero,

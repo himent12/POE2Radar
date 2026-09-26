@@ -118,6 +118,22 @@ public static partial class LinuxX11
     [LibraryImport(X11, EntryPoint = "XDestroyWindow")]
     public static partial int XDestroyWindow(nint display, nuint w);
 
+    [StructLayout(LayoutKind.Sequential)]
+    public struct XWMHints
+    {
+        public nint Flags;          // long
+        public int Input;           // Bool
+        public int InitialState;
+        public nuint IconPixmap, IconWindow;
+        public int IconX, IconY;
+        public nuint IconMask, WindowGroup;
+    }
+
+    public const long InputHint = 1L << 0;
+
+    [LibraryImport(X11, EntryPoint = "XSetWMHints")]
+    public static partial int XSetWMHints(nint display, nuint w, ref XWMHints hints);
+
     [LibraryImport(X11, EntryPoint = "XMapRaised")]
     public static partial int XMapRaised(nint display, nuint w);
 

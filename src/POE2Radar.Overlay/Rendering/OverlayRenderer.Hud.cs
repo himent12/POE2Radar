@@ -17,10 +17,25 @@ public sealed partial class OverlayRenderer
     private const float NavMargin = 6f;
 
     // ASCII corner buttons (Consolas lacks reliable ↖↗↙↘ glyphs, so we use these per spec).
-    private static readonly (string Label, string Corner)[] NavCorners =
+    private static readonly (string Label, string Corner, string Action)[] NavCorners =
     {
-        ("[TL]", "TopLeft"), ("[TR]", "TopRight"), ("[BL]", "BottomLeft"), ("[BR]", "BottomRight"),
+        ("[TL]", "TopLeft", "corner:TopLeft"), ("[TR]", "TopRight", "corner:TopRight"),
+        ("[BL]", "BottomLeft", "corner:BottomLeft"), ("[BR]", "BottomRight", "corner:BottomRight"),
     };
+
+    // Memoized two-part concatenations for strings the HUD rebuilds from the same pieces every frame (legend
+    // rows, click actions, status lines) — the render loop would otherwise allocate them per frame. Bounded:
+    // cleared wholesale if it ever grows past the cap (e.g. after many zones' worth of legend names).
+    private readonly Dictionary<(string, string), string> _concat = new();
+
+    private string Cat(string a, string b)
+    {
+        if (b.Length == 0) return a;
+        if (a.Length == 0) return b;
+        if (_concat.TryGetValue((a, b), out var s)) return s;
+        if (_concat.Count >= 2048) _concat.Clear();
+        return _concat[(a, b)] = a + b;
+    }
 
     /// <summary>
     /// The collapsible, corner-pinnable "POE2Radar" navigation menu. Always drawn (map open or not)
@@ -65,23 +80,24 @@ public sealed partial class OverlayRenderer
         // "POE2Radar" chip (click → toggle dropdown). Sized to its text so the corner buttons sit after it.
         const string chip = "POE2Radar";
         var chipW = chip.Length * 7.3f + 8f;
+        const string chipOpen = "v " + chip, chipClosed = "> " + chip;
         var chipRect = new RawRectF(left + NavPad, headerY, left + NavPad + chipW, headerY + NavHeaderH - 2f);
         rt.FillRectangle(chipRect, _bPanel!);
         rt.DrawRectangle(chipRect, _bPlayer!, 1f);
-        rt.DrawText((expanded ? "v " : "> ") + chip, _tf!,
+        rt.DrawText(expanded ? chipOpen : chipClosed, _tf!,
             new Rect(chipRect.Left + 4f, headerY + 2f, chipRect.Right, headerY + NavHeaderH), _bText!, DrawTextOptions.Clip);
         _legendRowRects.Add((chipRect, "menu-toggle"));
 
         // Four corner buttons after the chip. The one matching the current corner is highlighted.
         var bx = chipRect.Right + 6f;
-        foreach (var (label, c) in NavCorners)
+        foreach (var (label, c, action) in NavCorners)
         {
             var bw = label.Length * 7.3f + 4f;
             var bRect = new RawRectF(bx, headerY, bx + bw, headerY + NavHeaderH - 2f);
             var sel = c == corner;
             rt.DrawText(label, _tf!, new Rect(bRect.Left, headerY + 2f, bRect.Right + 6f, headerY + NavHeaderH),
                 sel ? _bPlayer! : _bOther!, DrawTextOptions.Clip);
-            _legendRowRects.Add((bRect, "corner:" + c));
+            _legendRowRects.Add((bRect, action));
             bx += bw + 4f;
         }
 
@@ -90,10 +106,11 @@ public sealed partial class OverlayRenderer
         // Dropdown rows. For Bottom corners the chip is at the bottom, so rows fill from the panel top.
         var rowTop = isBottom ? top + NavPad : headerY + NavHeaderH;
         var y = rowTop;
-        foreach (var row in ctx.Legend)
+        for (var i = 0; i < ctx.Legend.Count; i++)
         {
+            var row = ctx.Legend[i];
             var rowRect = new RawRectF(left, y, left + panelW, y + NavRowH);
-            _legendRowRects.Add((rowRect, "target:" + row.Target.Id)); // click → TogglePathTarget(id)
+            _legendRowRects.Add((rowRect, Cat("target:", row.Target.Id))); // click → TogglePathTarget(id)
 
             // Swatch: selected rows fill with their selection-order route color (matches DrawPaths);
             // unselected rows get just a dim outline so the click target is still visible.
@@ -112,7 +129,7 @@ public sealed partial class OverlayRenderer
             // Selected rows get a "> " marker + the highlight color. Entity POIs get a "*" prefix so
             // they're distinguishable from tile landmarks at a glance. Name is already prettified/curated.
             var prefix = row.IsSelected ? "> " : (row.Target.IsEntity ? "* " : "  ");
-            var text = prefix + row.Target.Name;
+            var text = Cat(prefix, row.Target.Name);
             var textBrush = row.IsSelected ? _bPlayer! : (row.Target.IsEntity ? _bLandmark! : _bText!);
             rt.DrawText(text, _tf!, new Rect(left + NavPad + NavSwatch + 5f, y, left + panelW - 4f, y + NavRowH), textBrush, DrawTextOptions.Clip);
             y += NavRowH;
@@ -124,14 +141,14 @@ public sealed partial class OverlayRenderer
     private static readonly Color4 ColOff = new(0.55f, 0.50f, 0.42f, 0.85f);
 
     /// <summary>
-    /// Live ON/OFF strip for bot/clear/combat/move/quest/flask. Top-right unless the nav menu is
+    /// Live ON/OFF strip for the input modules (flask, macros, …). Top-right unless the nav menu is
     /// already pinned there, in which case it drops to the bottom-right. Not clickable.
     /// </summary>
-    private void DrawBotStatus(DrawTarget rt, RenderContext ctx)
+    private void DrawStatusStrip(DrawTarget rt, RenderContext ctx)
     {
+        if (ctx.Status is not { Count: > 0 } chips) return;
         const float w = 228f, rowH = 16f, pad = 6f, titleH = 16f, dot = 7f;
-        const int n = 6;
-        var h = pad * 2f + titleH + n * rowH;
+        var h = pad * 2f + titleH + chips.Count * rowH;
         var x = ctx.WindowWidth - NavMargin - w;
         var y = NavMargin;
         if (ctx.NavMenuCorner is "TopRight")
@@ -139,13 +156,12 @@ public sealed partial class OverlayRenderer
 
         rt.FillRectangle(new RawRectF(x, y, x + w, y + h), _bPanel!);
         rt.DrawText("STATUS", _tf!, new Rect(x + pad, y + pad, x + w - pad, y + pad + titleH), _bText!, DrawTextOptions.Clip);
-
-        DrawStatusRow(rt, x, y + pad + titleH, w, rowH, pad, dot, "F3 Bot", ctx.BotEnabled, ctx.BotNote);
-        DrawStatusRow(rt, x, y + pad + titleH + rowH, w, rowH, pad, dot, "F2 Clear", ctx.MapClear, ctx.MapClearNote);
-        DrawStatusRow(rt, x, y + pad + titleH + rowH * 2, w, rowH, pad, dot, "F4 Combat", ctx.CombatAssist, ctx.CombatNote);
-        DrawStatusRow(rt, x, y + pad + titleH + rowH * 3, w, rowH, pad, dot, "F5 Move", ctx.PathMove, ctx.PathMoveNote);
-        DrawStatusRow(rt, x, y + pad + titleH + rowH * 4, w, rowH, pad, dot, "Quest", ctx.QuestFollow, ctx.QuestFollowNote);
-        DrawStatusRow(rt, x, y + pad + titleH + rowH * 5, w, rowH, pad, dot, "F8 Flask", ctx.AutoFlask, ctx.FlaskNote);
+        for (var i = 0; i < chips.Count; i++)
+        {
+            var c = chips[i];
+            var label = c.Hotkey.Length > 0 ? Cat(Cat(c.Hotkey, " "), c.Name) : c.Name;
+            DrawStatusRow(rt, x, y + pad + titleH + rowH * i, w, rowH, pad, dot, label, c.On, c.Note);
+        }
     }
 
     private void DrawStatusRow(DrawTarget rt, float x, float y, float w, float rowH, float pad, float dot,
@@ -153,15 +169,20 @@ public sealed partial class OverlayRenderer
     {
         _bStyle!.Color = on ? ColOn : ColOff;
         rt.FillEllipse(new Ellipse(new NumVec2(x + pad + dot * 0.5f, y + rowH * 0.5f), dot * 0.45f, dot * 0.45f), _bStyle);
-        var tag = on ? "ON " : "off";
-        var extra = string.IsNullOrEmpty(note) ? "" : " " + TrimNote(note);
-        var line = tag + " " + label + extra;
+        var tag = on ? "ON  " : "off ";   // "ON "/"off" + the separating space
+        var extra = string.IsNullOrEmpty(note) ? "" : Cat(" ", TrimNote(note));
+        var line = Cat(Cat(tag, label), extra);
         rt.DrawText(line, _tf!, new Rect(x + pad + dot + 4f, y, x + w - pad, y + rowH), _bStyle, DrawTextOptions.Clip);
     }
 
-    private static string TrimNote(string note)
+    private readonly Dictionary<string, string> _trimmedNotes = new();
+
+    private string TrimNote(string note)
     {
         if (note.StartsWith("OFF ", StringComparison.Ordinal)) return "";
-        return note.Length <= 18 ? note : note[..17] + "…";
+        if (note.Length <= 18) return note;
+        if (_trimmedNotes.TryGetValue(note, out var t)) return t;
+        if (_trimmedNotes.Count >= 256) _trimmedNotes.Clear();
+        return _trimmedNotes[note] = note[..17] + "…";
     }
 }

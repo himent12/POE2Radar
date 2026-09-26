@@ -4,6 +4,8 @@ using POE2Radar.Overlay;
 Console.WriteLine("POE2Radar — map/radar overlay");
 Console.WriteLine("=============================");
 
+if (args.Contains("--demo")) return DemoDashboard.Run();
+
 ProcessHandle? process;
 try
 {

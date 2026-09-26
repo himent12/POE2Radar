@@ -141,10 +141,13 @@ public sealed partial class OverlayWindow
     private void PresentWindows()
     {
         if (_hwnd == 0 || _memDC == 0 || PixelBuffer == 0 || _dibBits == 0) return;
-        unsafe
+        if (PixelBuffer != _dibBits)   // fallback only: normally Skia renders straight into the DIB
         {
-            var n = (nuint)(PixelRowBytes * Height);
-            Buffer.MemoryCopy((void*)PixelBuffer, (void*)_dibBits, (long)n, (long)n);
+            unsafe
+            {
+                var n = (nuint)(PixelRowBytes * Height);
+                Buffer.MemoryCopy((void*)PixelBuffer, (void*)_dibBits, (long)n, (long)n);
+            }
         }
         OverlayNative.GdiFlush();
         var screenDC = OverlayNative.GetDC(0);

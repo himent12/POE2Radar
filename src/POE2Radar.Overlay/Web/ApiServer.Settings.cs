@@ -11,9 +11,8 @@ public sealed partial class ApiServer
 {
     /// <summary>
     /// The settings the dashboard may read AND write. Covers radar/visual options plus auto-flask
-    /// tuning (thresholds, cooldowns, keys) and bot-profile tunables (combat range/skills, move
-    /// keys/CDs). Arm flags (autoFlaskEnabled, combatAssistEnabled, questFollowEnabled, moveEnabled,
-    /// botEnabled, mapClearEnabled) are omitted — F-keys only. All writes are loopback-Host-gated (see Handle). The
+    /// tuning (thresholds, cooldowns, keys). Arm flags (autoFlaskEnabled, the buff keeper's Enabled) are
+    /// omitted — hotkeys / INSERT menu only. All writes are loopback-Host-gated (see Handle). The
     /// API port is read-only here (changing it needs a restart). This object also doubles as the GET payload.
     /// </summary>
     private object ReadSettings() => new
@@ -21,6 +20,7 @@ public sealed partial class ApiServer
         hideJunk = _settings.HideJunk,
         showPath = _settings.ShowPath,
         alwaysShowOverlay = _settings.AlwaysShowOverlay,
+        reduceMotion = _settings.ReduceMotion,
         useCuratedLandmarks = _settings.UseCuratedLandmarks,
         landmarkClusterGap = _settings.LandmarkClusterGap,
         showMonsters = _settings.ShowMonsters,
@@ -42,73 +42,17 @@ public sealed partial class ApiServer
         manaCooldownMs = _settings.ManaCooldownMs,
         lifeKey = _settings.LifeKey,
         manaKey = _settings.ManaKey,
-        combatRange = _settings.CombatRange,
-        combatEngageRange = _settings.CombatEngageRange,
-        combatStallMs = _settings.CombatStallMs,
-        autoRespawn = _settings.AutoRespawn,
-        respawnKey = _settings.RespawnKey,
-        respawnDelayMs = _settings.RespawnDelayMs,
-        combatDodgeKey = _settings.CombatDodgeKey,
-        combatTapHoldMs = _settings.CombatTapHoldMs,
-        combatDodgeRecoverMs = _settings.CombatDodgeRecoverMs,
-        combatIgnoreMs = _settings.CombatIgnoreMs,
-        combatFleeHpPct = _settings.CombatFleeHpPct,
-        combatFleeRecoverPct = _settings.CombatFleeRecoverPct,
-        combatFleeDistance = _settings.CombatFleeDistance,
-        combatTargetMode = _settings.CombatTargetMode,
-        combatRotationMode = _settings.CombatRotationMode,
-        combatKeepDistance = _settings.CombatKeepDistance,
-        bossCombatEnabled = _settings.BossCombatEnabled,
-        bossDamagePct = _settings.BossDamagePct,
-        bossDodgeGapMs = _settings.BossDodgeGapMs,
-        bossSafeOpeningMs = _settings.BossSafeOpeningMs,
-        bossLostGraceMs = _settings.BossLostGraceMs,
-        bossHazardRadius = _settings.BossHazardRadius,
-        bossEscapeDistance = _settings.BossEscapeDistance,
-        bossDodgeDistance = _settings.BossDodgeDistance,
-        combatSkills = _settings.CombatSkills,
-        questUseKey = _settings.QuestUseKey,
-        questUseRadius = _settings.QuestUseRadius,
-        questUseCooldownMs = _settings.QuestUseCooldownMs,
-        farmPortalKey = _settings.FarmPortalKey,
-        farmClearSettleMs = _settings.FarmClearSettleMs,
-        farmAreaCode = _settings.FarmAreaCode,
-        farmAreaName = string.IsNullOrEmpty(_settings.FarmAreaCode) ? "" : ZoneGuide.Shared.FriendlyName(_settings.FarmAreaCode),
-        mapClearStampRadius = _settings.MapClearStampRadius,
-        mapClearAggroRange = _settings.MapClearAggroRange,
-        mapClearStuckMs = _settings.MapClearStuckMs,
-        eventEssence = _settings.EventEssence,
-        eventStrongbox = _settings.EventStrongbox,
-        eventShrine = _settings.EventShrine,
-        eventBreach = _settings.EventBreach,
-        eventRitual = _settings.EventRitual,
-        eventChests = _settings.EventChests,
-        eventClickStalled = _settings.EventClickStalled,
-        eventRange = _settings.EventRange,
-        eventUseRadius = _settings.EventUseRadius,
-        eventMaxClicks = _settings.EventMaxClicks,
-        moveMethod = _settings.MoveMethod,
-        moveArriveRadius = _settings.MoveArriveRadius,
-        moveRunEnabled = _settings.MoveRunEnabled,
-        playInBackground = _settings.PlayInBackground,
-        inputDisplay = _settings.InputDisplay,
-        inputDisplayResolved = POE2Radar.Core.Native.GameHost.NestedInputDisplay,
-        moveRunKey = _settings.MoveRunKey,
-        moveLookAhead = _settings.MoveLookAhead,
-        moveDiagonals = _settings.MoveDiagonals,
-        moveAxisRotationDeg = _settings.MoveAxisRotationDeg,
-        moveCooldownMs = _settings.MoveCooldownMs,
-        moveKeyW = _settings.MoveKeyW,
-        moveKeyA = _settings.MoveKeyA,
-        moveKeyS = _settings.MoveKeyS,
-        moveKeyD = _settings.MoveKeyD,
-        moveClickKey = _settings.MoveClickKey,
         apiPort = _settings.ApiPort, // display only — changing it needs a restart
         styles = _settings.Styles,   // per-item icon shapes/colors/sizes + mechanic overrides
         hpBars = _settings.HpBars,   // monster HP-bar geometry (width/height/offset)
         terrain = _settings.Terrain, // walkable-terrain bitmap colors/transparency
         groundItems = _settings.GroundItems, // ground-item value overlay (enabled / highlight threshold / league)
         hoverPrice = _settings.HoverPrice, // hover-tooltip price chip (enabled / highlight threshold)
+        mapCheck = _settings.MapCheck,     // waystone dangerous-mod list
+        // Buff keeper WITHOUT its arm bit (hotkey / INSERT menu only).
+        buffKeeper = new { toggleHotkey = _settings.BuffKeeper.ToggleHotkey, globalGapMs = _settings.BuffKeeper.GlobalGapMs, rules = _settings.BuffKeeper.Rules },
+        commands = _settings.Commands,     // chat macros, bookmarks, inspect hotkeys
+        trade = _settings.Trade,           // trade panel + tracker options
         monoliths = _settings.Monoliths, // runeshape-monolith (expedition) reward overlay + value gate
         currencyExchange = _settings.CurrencyExchange, // currency-exchange order-book depth panel (enabled / max rows)
         // Atlas declutter / content-icon / route-chevron options + colour groups (#3/#4/#5/#7).
@@ -137,6 +81,7 @@ public sealed partial class ApiServer
                 case "hideJunk" when TryBool(p.Value, out var b): _settings.HideJunk = b; applied.Add(p.Name); break;
                 case "showPath" when TryBool(p.Value, out var b): _settings.ShowPath = b; applied.Add(p.Name); break;
                 case "alwaysShowOverlay" when TryBool(p.Value, out var b): _settings.AlwaysShowOverlay = b; applied.Add(p.Name); break;
+                case "reduceMotion" when TryBool(p.Value, out var b): _settings.ReduceMotion = b; applied.Add(p.Name); break;
                 case "useCuratedLandmarks" when TryBool(p.Value, out var b): _settings.UseCuratedLandmarks = b; applied.Add(p.Name); break;
                 case "landmarkClusterGap" when TryInt(p.Value, out var n): _settings.LandmarkClusterGap = Math.Clamp(n, 0, 64); applied.Add(p.Name); break;
                 case "scaleMul" when TryFloat(p.Value, out var f): _settings.ScaleMul = f; applied.Add(p.Name); break;
@@ -159,77 +104,7 @@ public sealed partial class ApiServer
                 case "manaCooldownMs" when TryInt(p.Value, out var n): _settings.ManaCooldownMs = Math.Clamp(n, 0, 60000); applied.Add(p.Name); break;
                 case "lifeKey" when TryInt(p.Value, out var n): _settings.LifeKey = Math.Clamp(n, 1, 255); applied.Add(p.Name); break;
                 case "manaKey" when TryInt(p.Value, out var n): _settings.ManaKey = Math.Clamp(n, 1, 255); applied.Add(p.Name); break;
-                // Combat assist ARM (CombatAssistEnabled) is F4-only — never a settings POST key.
-                // Quest follow ARM (QuestFollowEnabled) is F3-only — never a settings POST key.
-                // Path move ARM (MoveEnabled) is F5-only (also armed by F3 bot master) — never a settings POST key.
-                // Bot master ARM (BotEnabled) is F3-only — never a settings POST key, never nested.
-                // Map clear ARM (MapClearEnabled) is F2-only — never a settings POST key.
-                case "combatRange" when TryFloat(p.Value, out var f): _settings.CombatRange = Math.Clamp(f, 1f, 200f); applied.Add(p.Name); break;
-                case "combatEngageRange" when TryFloat(p.Value, out var f): _settings.CombatEngageRange = Math.Clamp(f, 1f, 200f); applied.Add(p.Name); break;
-                case "combatStallMs" when TryInt(p.Value, out var n): _settings.CombatStallMs = n <= 0 ? 0 : Math.Clamp(n, 500, 60000); applied.Add(p.Name); break;
-                case "combatFleeHpPct" when TryFloat(p.Value, out var f): _settings.CombatFleeHpPct = Math.Clamp(f, 0f, 100f); applied.Add(p.Name); break;
-                case "combatFleeRecoverPct" when TryFloat(p.Value, out var f): _settings.CombatFleeRecoverPct = Math.Clamp(f, 0f, 100f); applied.Add(p.Name); break;
-                case "combatFleeDistance" when TryFloat(p.Value, out var f): _settings.CombatFleeDistance = Math.Clamp(f, 1f, 200f); applied.Add(p.Name); break;
-                case "combatTargetMode" when p.Value.ValueKind == JsonValueKind.String && p.Value.GetString() is { } tm
-                    && (tm is "Nearest" or "Rarity" or "LowestHp" or "HighestHp"): _settings.CombatTargetMode = tm; applied.Add(p.Name); break;
-                case "combatRotationMode" when p.Value.ValueKind == JsonValueKind.String && p.Value.GetString() is { } rm
-                    && (rm is "RoundRobin" or "Priority"): _settings.CombatRotationMode = rm; applied.Add(p.Name); break;
-                case "bossCombatEnabled" when TryBool(p.Value, out var b): _settings.BossCombatEnabled = b; applied.Add(p.Name); break;
-                case "bossDamagePct" when TryFloat(p.Value, out var f): _settings.BossDamagePct = Math.Clamp(f, 0f, 50f); applied.Add(p.Name); break;
-                case "bossDodgeGapMs" when TryInt(p.Value, out var n): _settings.BossDodgeGapMs = Math.Clamp(n, 900, 10000); applied.Add(p.Name); break;
-                case "bossSafeOpeningMs" when TryInt(p.Value, out var n): _settings.BossSafeOpeningMs = Math.Clamp(n, 300, 5000); applied.Add(p.Name); break;
-                case "bossLostGraceMs" when TryInt(p.Value, out var n): _settings.BossLostGraceMs = Math.Clamp(n, 1000, 30000); applied.Add(p.Name); break;
-                case "bossHazardRadius" when TryFloat(p.Value, out var f): _settings.BossHazardRadius = Math.Clamp(f, 2f, 20f); applied.Add(p.Name); break;
-                case "bossDodgeDistance" when TryFloat(p.Value, out var f): _settings.BossDodgeDistance = Math.Clamp(f, 10f, 80f); applied.Add(p.Name); break;
-                case "bossEscapeDistance" when TryFloat(p.Value, out var f): _settings.BossEscapeDistance = Math.Clamp(f, 3f, 30f); applied.Add(p.Name); break;
-                case "combatKeepDistance" when TryFloat(p.Value, out var f): _settings.CombatKeepDistance = Math.Clamp(f, 0f, 200f); applied.Add(p.Name); break;
-                case "combatIgnoreMs" when TryInt(p.Value, out var n): _settings.CombatIgnoreMs = Math.Clamp(n, 1000, 300000); applied.Add(p.Name); break;
-                case "autoRespawn" when TryBool(p.Value, out var b): _settings.AutoRespawn = b; applied.Add(p.Name); break;
-                case "respawnKey" when TryInt(p.Value, out var n): _settings.RespawnKey = Math.Clamp(n, 1, 255); applied.Add(p.Name); break;
-                case "respawnDelayMs" when TryInt(p.Value, out var n): _settings.RespawnDelayMs = Math.Clamp(n, 500, 30000); applied.Add(p.Name); break;
-                case "combatDodgeKey" when TryInt(p.Value, out var n): _settings.CombatDodgeKey = Math.Clamp(n, 1, 255); applied.Add(p.Name); break;
-                case "combatTapHoldMs" when TryInt(p.Value, out var n): _settings.CombatTapHoldMs = Math.Clamp(n, 30, 200); applied.Add(p.Name); break;
-                case "combatDodgeRecoverMs" when TryInt(p.Value, out var n): _settings.CombatDodgeRecoverMs = Math.Clamp(n, 0, 3000); applied.Add(p.Name); break;
-                case "combatSkills" when p.Value.ValueKind == JsonValueKind.Array:
-                    if (TryParseCombatSkills(p.Value, out var csk)) { _settings.CombatSkills = csk; applied.Add(p.Name); }
-                    break;
-                case "questUseKey" when TryInt(p.Value, out var n): _settings.QuestUseKey = Math.Clamp(n, 1, 255); applied.Add(p.Name); break;
-                case "questUseRadius" when TryFloat(p.Value, out var f): _settings.QuestUseRadius = Math.Clamp(f, 0f, 64f); applied.Add(p.Name); break;
-                case "questUseCooldownMs" when TryInt(p.Value, out var n): _settings.QuestUseCooldownMs = Math.Clamp(n, 0, 60000); applied.Add(p.Name); break;
-                case "farmPortalKey" when TryInt(p.Value, out var n): _settings.FarmPortalKey = Math.Clamp(n, 0, 255); applied.Add(p.Name); break;
-                case "farmClearSettleMs" when TryInt(p.Value, out var n): _settings.FarmClearSettleMs = Math.Clamp(n, 500, 60000); applied.Add(p.Name); break;
-                case "farmAreaCode" when p.Value.ValueKind == JsonValueKind.String: _settings.FarmAreaCode = (p.Value.GetString() ?? "").Trim(); applied.Add(p.Name); break;
-                case "mapClearStampRadius" when TryInt(p.Value, out var n): _settings.MapClearStampRadius = Math.Clamp(n, 4, 64); applied.Add(p.Name); break;
-                case "mapClearAggroRange" when TryFloat(p.Value, out var f): _settings.MapClearAggroRange = Math.Clamp(f, 0f, 500f); applied.Add(p.Name); break;
-                case "mapClearStuckMs" when TryInt(p.Value, out var n): _settings.MapClearStuckMs = Math.Clamp(n, 1000, 120000); applied.Add(p.Name); break;
-                case "eventEssence" when TryBool(p.Value, out var b): _settings.EventEssence = b; applied.Add(p.Name); break;
-                case "eventStrongbox" when TryBool(p.Value, out var b): _settings.EventStrongbox = b; applied.Add(p.Name); break;
-                case "eventShrine" when TryBool(p.Value, out var b): _settings.EventShrine = b; applied.Add(p.Name); break;
-                case "eventBreach" when TryBool(p.Value, out var b): _settings.EventBreach = b; applied.Add(p.Name); break;
-                case "eventRitual" when TryBool(p.Value, out var b): _settings.EventRitual = b; applied.Add(p.Name); break;
-                case "eventChests" when TryBool(p.Value, out var b): _settings.EventChests = b; applied.Add(p.Name); break;
-                case "eventClickStalled" when TryBool(p.Value, out var b): _settings.EventClickStalled = b; applied.Add(p.Name); break;
-                case "eventRange" when TryFloat(p.Value, out var f): _settings.EventRange = Math.Clamp(f, 0f, 500f); applied.Add(p.Name); break;
-                case "eventUseRadius" when TryFloat(p.Value, out var f): _settings.EventUseRadius = Math.Clamp(f, 1f, 30f); applied.Add(p.Name); break;
-                case "eventMaxClicks" when TryInt(p.Value, out var n): _settings.EventMaxClicks = Math.Clamp(n, 1, 20); applied.Add(p.Name); break;
-                case "moveMethod" when p.Value.ValueKind == JsonValueKind.String && p.Value.GetString() is { } mm
-                    && (mm is "WASD" or "Click" or "ClickToMove"): _settings.MoveMethod = mm; applied.Add(p.Name); break;
-                case "moveArriveRadius" when TryFloat(p.Value, out var f): _settings.MoveArriveRadius = Math.Clamp(f, 0f, 64f); applied.Add(p.Name); break;
-                case "moveRunEnabled" when TryBool(p.Value, out var b): _settings.MoveRunEnabled = b; applied.Add(p.Name); break;
-                case "playInBackground" when TryBool(p.Value, out var b): _settings.PlayInBackground = b; applied.Add(p.Name); break;
-                case "inputDisplay" when p.Value.ValueKind == JsonValueKind.String && p.Value.GetString() is { } idn && idn.Length <= 32
-                    && System.Text.RegularExpressions.Regex.IsMatch(idn, "^(auto|:[0-9]+(\\.[0-9]+)?)?$"):
-                    _settings.InputDisplay = idn; applied.Add(p.Name); break;
-                case "moveRunKey" when TryInt(p.Value, out var n): _settings.MoveRunKey = Math.Clamp(n, 1, 255); applied.Add(p.Name); break;
-                case "moveLookAhead" when TryFloat(p.Value, out var f): _settings.MoveLookAhead = Math.Clamp(f, 1f, 60f); applied.Add(p.Name); break;
-                case "moveDiagonals" when TryBool(p.Value, out var b): _settings.MoveDiagonals = b; applied.Add(p.Name); break;
-                case "moveAxisRotationDeg" when TryFloat(p.Value, out var f): _settings.MoveAxisRotationDeg = Math.Clamp(f, -180f, 180f); applied.Add(p.Name); break;
-                case "moveCooldownMs" when TryInt(p.Value, out var n): _settings.MoveCooldownMs = Math.Clamp(n, 0, 60000); applied.Add(p.Name); break;
-                case "moveKeyW" when TryInt(p.Value, out var n): _settings.MoveKeyW = Math.Clamp(n, 1, 255); applied.Add(p.Name); break;
-                case "moveKeyA" when TryInt(p.Value, out var n): _settings.MoveKeyA = Math.Clamp(n, 1, 255); applied.Add(p.Name); break;
-                case "moveKeyS" when TryInt(p.Value, out var n): _settings.MoveKeyS = Math.Clamp(n, 1, 255); applied.Add(p.Name); break;
-                case "moveKeyD" when TryInt(p.Value, out var n): _settings.MoveKeyD = Math.Clamp(n, 1, 255); applied.Add(p.Name); break;
-                case "moveClickKey" when TryInt(p.Value, out var n): _settings.MoveClickKey = Math.Clamp(n, 1, 255); applied.Add(p.Name); break;
+                // Arm bits (AutoFlaskEnabled, BuffKeeper.Enabled) are hotkey/INSERT-menu only — never settings POST keys.
                 // Atlas declutter + content-icon + route-chevron options (#3/#4/#5).
                 case "atlasHideCompleted" when TryBool(p.Value, out var b): _settings.AtlasHideCompleted = b; applied.Add(p.Name); break;
                 case "atlasHideAccessible" when TryBool(p.Value, out var b): _settings.AtlasHideAccessible = b; applied.Add(p.Name); break;
@@ -258,6 +133,18 @@ public sealed partial class ApiServer
                     break;
                 case "currencyExchange" when p.Value.ValueKind == JsonValueKind.Object:
                     if (TryParseCurrencyExchange(p.Value, out var ce)) { _settings.CurrencyExchange = ce; applied.Add(p.Name); }
+                    break;
+                case "mapCheck" when p.Value.ValueKind == JsonValueKind.Object:
+                    if (TryParseMapCheck(p.Value, out var mc)) { _settings.MapCheck = mc; applied.Add(p.Name); }
+                    break;
+                case "buffKeeper" when p.Value.ValueKind == JsonValueKind.Object:
+                    if (TryParseBuffKeeper(p.Value, _settings.BuffKeeper.Enabled, out var bk)) { _settings.BuffKeeper = bk; applied.Add(p.Name); }
+                    break;
+                case "commands" when p.Value.ValueKind == JsonValueKind.Object:
+                    if (TryParseCommands(p.Value, _settings.BuffKeeper.ToggleHotkey, out var cmd, _settings.HoverPrice.PriceCheckHotkey)) { _settings.Commands = cmd; applied.Add(p.Name); }
+                    break;
+                case "trade" when p.Value.ValueKind == JsonValueKind.Object:
+                    if (TryParseTrade(p.Value, out var tr)) { _settings.Trade = tr; applied.Add(p.Name); }
                     break;
                 // Atlas colour groups (#7): the dashboard re-POSTs the full array on edit.
                 case "atlasGroups" when p.Value.ValueKind == JsonValueKind.Array:
@@ -434,9 +321,124 @@ public sealed partial class ApiServer
         catch (JsonException) { return false; }
     }
 
+    private static string Clip(string? s, int max) => (s ?? "").Trim() is var t && t.Length > max ? t[..max] : t;
+
+    /// <summary>A hotkey string normalized to its canonical form, or "" when it doesn't parse or collides with
+    /// one of the overlay's own keys / <paramref name="alsoReserved"/>.</summary>
+    internal static string CleanHotkey(string? text, params string?[] alsoReserved)
+    {
+        if (!Input.Hotkey.TryParse(text, out var hk) || !hk.IsBound || CommandSettings.IsReserved(hk)) return "";
+        foreach (var r in alsoReserved)
+            if (r is not null && Input.Hotkey.TryParse(r, out var other) && other == hk) return "";
+        return hk.ToString();
+    }
+
+    internal static bool TryParseMapCheck(JsonElement el, out MapCheckSettings m)
+    {
+        m = new MapCheckSettings();
+        try
+        {
+            var parsed = JsonSerializer.Deserialize<MapCheckSettings>(el.GetRawText(), Json);
+            if (parsed == null) return false;
+            parsed.Dangerous = (parsed.Dangerous ?? new()).Select(d => Clip(d, 200)).Where(d => d.Length > 0)
+                .Distinct(StringComparer.OrdinalIgnoreCase).Take(100).ToList();
+            m = parsed;
+            return true;
+        }
+        catch (JsonException) { return false; }
+    }
+
+    /// <summary>Buff-keeper rules + toggle hotkey. <paramref name="armed"/> is carried over from the live
+    /// settings: the arm bit is never taken from HTTP.</summary>
+    internal static bool TryParseBuffKeeper(JsonElement el, bool armed, out BuffKeeperSettings b)
+    {
+        b = new BuffKeeperSettings();
+        try
+        {
+            var parsed = JsonSerializer.Deserialize<BuffKeeperSettings>(el.GetRawText(), Json);
+            if (parsed == null) return false;
+            parsed.Enabled = armed;
+            parsed.ToggleHotkey = CleanHotkey(parsed.ToggleHotkey) is { Length: > 0 } hk ? hk : "F4";
+            parsed.GlobalGapMs = Math.Clamp(parsed.GlobalGapMs, Input.BuffKeeper.MinGlobalGapMs, 5000);
+            parsed.Rules = (parsed.Rules ?? new()).Take(16).ToList();
+            foreach (var r in parsed.Rules)
+            {
+                r.Name = Clip(r.Name, 60);
+                r.BuffName = Clip(r.BuffName, 200);
+                r.Key = r.Key is >= 1 and <= 255 ? r.Key : 0;
+                r.Trigger = r.Trigger is Input.BuffKeeper.TriggerMissing or Input.BuffKeeper.TriggerExpiring or Input.BuffKeeper.TriggerInterval
+                    ? r.Trigger : Input.BuffKeeper.TriggerMissing;
+                r.RefreshBelowSec = Math.Clamp(r.RefreshBelowSec, 0f, 600f);
+                r.IntervalMs = Math.Clamp(r.IntervalMs, Input.BuffKeeper.MinIntervalMs, 3_600_000);
+                r.MinGapMs = Math.Clamp(r.MinGapMs, Input.BuffKeeper.MinRuleGapMs, 60_000);
+                r.HostileRange = Math.Clamp(r.HostileRange, 1f, 300f);
+                r.MinCharges = Math.Clamp(r.MinCharges, 0, 100);
+            }
+            b = parsed;
+            return true;
+        }
+        catch (JsonException) { return false; }
+    }
+
+    /// <summary>Chat commands / bookmarks / inspect hotkeys. Hotkeys that don't parse, or that collide with the
+    /// overlay's own keys or the buff-keeper toggle, are cleared (the entry stays, unbound). Bookmark URLs must
+    /// be absolute http(s) — anything else is dropped.</summary>
+    internal static bool TryParseCommands(JsonElement el, string buffToggle, out CommandSettings c, string? priceCheck = null)
+    {
+        c = new CommandSettings();
+        try
+        {
+            var parsed = JsonSerializer.Deserialize<CommandSettings>(el.GetRawText(), Json);
+            if (parsed == null) return false;
+            parsed.Commands = (parsed.Commands ?? new()).Take(40).ToList();
+            foreach (var cmd in parsed.Commands)
+            {
+                cmd.Name = Clip(cmd.Name, 60);
+                cmd.Text = (cmd.Text ?? "").Length > 1000 ? cmd.Text![..1000] : cmd.Text ?? "";
+                cmd.Hotkey = CleanHotkey(cmd.Hotkey, buffToggle, priceCheck);
+            }
+            parsed.Bookmarks = (parsed.Bookmarks ?? new()).Take(60)
+                // Validate with placeholders filled so "{league}"-style templates are judged as real URLs.
+                .Where(bm => Input.Bookmarks.TryExpand(bm.Url, new Input.UrlContext("x", "x", "x"), out _, out _)).ToList();
+            foreach (var bm in parsed.Bookmarks)
+            {
+                bm.Name = Clip(bm.Name, 60);
+                bm.Folder = Clip(bm.Folder, 60);
+                bm.Hotkey = CleanHotkey(bm.Hotkey, buffToggle, priceCheck);
+            }
+            parsed.InspectWikiHotkey = CleanHotkey(parsed.InspectWikiHotkey, buffToggle, priceCheck);
+            parsed.InspectDbHotkey = CleanHotkey(parsed.InspectDbHotkey, buffToggle, priceCheck);
+            c = parsed;
+            return true;
+        }
+        catch (JsonException) { return false; }
+    }
+
+    internal static bool TryParseTrade(JsonElement el, out TradeSettings t)
+    {
+        t = new TradeSettings();
+        try
+        {
+            var parsed = JsonSerializer.Deserialize<TradeSettings>(el.GetRawText(), Json);
+            if (parsed == null) return false;
+            parsed.ClientLogPath = Clip(parsed.ClientLogPath, 1024);
+            parsed.ThanksMessage = Clip(parsed.ThanksMessage, 200);
+            parsed.BusyMessage = Clip(parsed.BusyMessage, 200);
+            parsed.SoldMessage = Clip(parsed.SoldMessage, 200);
+            parsed.StillInterestedMessage = Clip(parsed.StillInterestedMessage, 200);
+            parsed.ExpireMinutes = Math.Clamp(parsed.ExpireMinutes, 1, 24 * 60);
+            parsed.MaxSessions = Math.Clamp(parsed.MaxSessions, 1, 50);
+            parsed.PanelX = Math.Clamp(parsed.PanelX, 0f, 0.95f);
+            parsed.PanelY = Math.Clamp(parsed.PanelY, 0f, 0.95f);
+            t = parsed;
+            return true;
+        }
+        catch (JsonException) { return false; }
+    }
+
     /// <summary>Deserialize + sanitize a full <see cref="HoverPriceSettings"/> from posted JSON.
     /// Mirrors <see cref="TryParseGroundItems"/>. Returns false (settings untouched) on a parse failure.</summary>
-    private static bool TryParseHoverPrice(JsonElement el, out HoverPriceSettings h)
+    internal static bool TryParseHoverPrice(JsonElement el, out HoverPriceSettings h)
     {
         h = new HoverPriceSettings();
         try
@@ -444,6 +446,11 @@ public sealed partial class ApiServer
             var parsed = JsonSerializer.Deserialize<HoverPriceSettings>(el.GetRawText(), Json);
             if (parsed == null) return false;
             parsed.HighlightMinEx = Math.Max(0, parsed.HighlightMinEx);
+            // The price-check key may be any combo that isn't one of the overlay's fixed keys (Ctrl+D itself is
+            // its default, so it is allowed here).
+            parsed.PriceCheckHotkey = Input.Hotkey.TryParse(parsed.PriceCheckHotkey, out var pck) && pck.IsBound
+                && (!CommandSettings.IsReserved(pck) || pck == new Input.Hotkey('D', true, false, false))
+                ? pck.ToString() : "Ctrl+D";
             h = parsed;
             return true;
         }
@@ -507,55 +514,5 @@ public sealed partial class ApiServer
         if (string.IsNullOrWhiteSpace(v)) return null;
         foreach (var a in allowed) if (string.Equals(v, a, StringComparison.OrdinalIgnoreCase)) return a;
         return null;
-    }
-
-    /// <summary>Parse the combat-assist rotation the dashboard re-POSTs on edit: each entry is
-    /// <c>{ key|vk, cooldownMs, range? }</c>. Sanitized + capped at 13; a malformed entry is skipped.
-    /// An empty array is accepted (Decide no-ops until the user adds a skill).</summary>
-private static bool TryParseCombatSkills(JsonElement el, out List<CombatSkill> skills)
-    {
-        skills = new List<CombatSkill>();
-        if (el.ValueKind != JsonValueKind.Array) return false;
-        foreach (var s in el.EnumerateArray())
-        {
-            if (s.ValueKind != JsonValueKind.Object) continue;
-            int Number(string name, int fallback, int min, int max) =>
-                s.TryGetProperty(name, out var v) && TryInt(v, out var value) ? Math.Clamp(value, min, max) : fallback;
-            float Scalar(string name, float max) =>
-                s.TryGetProperty(name, out var v) && TryFloat(v, out var value) && float.IsFinite(value) ? Math.Clamp(value, 0f, max) : 0f;
-            bool Flag(string name, bool fallback = false) =>
-                s.TryGetProperty(name, out var v) && TryBool(v, out var value) ? value : fallback;
-            string Text(string field, int max)
-            {
-                var text = s.TryGetProperty(field, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() ?? "" : "";
-                return text.Length > max ? text[..max] : text;
-            }
-            var key = 0;
-            if (s.TryGetProperty("key", out var kv) && TryInt(kv, out var k)) key = k;
-            else if (s.TryGetProperty("vk", out var vv) && TryInt(vv, out var vk)) key = vk;
-            if (key is < 1 or > 255) continue;
-            var name = s.TryGetProperty("name", out var nv) && nv.ValueKind == JsonValueKind.String ? nv.GetString()?.Trim() ?? "" : "";
-            var aim = s.TryGetProperty("aimMode", out var av) && av.ValueKind == JsonValueKind.String
-                ? OneOf(av.GetString(), "Target", "Cursor", "Away") ?? "Target" : "Target";
-            skills.Add(new CombatSkill
-            {
-                Key = key, Name = name.Length > 60 ? name[..60] : name,
-                Modifiers = Number("modifiers", 0, 0, 7), SourceSlot = Number("sourceSlot", 0, 0, 13),
-                SourceLiveBinding = Flag("sourceLiveBinding"),
-                SourceMetadata = Text("sourceMetadata", 256), SourceCharacter = Text("sourceCharacter", 160),
-                CooldownMs = Number("cooldownMs", 400, 0, 60000), Range = Scalar("range", 200f),
-                MinTargets = Number("minTargets", 1, 0, 20), RareOnly = Flag("rareOnly"),
-                HpBelowPct = Scalar("hpBelowPct", 100f), ManaBelowPct = Scalar("manaBelowPct", 100f),
-                MinManaPct = Scalar("minManaPct", 100f), EsBelowPct = Scalar("esBelowPct", 100f),
-                TargetHpBelowPct = Scalar("targetHpBelowPct", 100f),
-                RequireTarget = Flag("requireTarget", true), Priority = Flag("priority"), AimMode = aim,
-                                AnyLowResource = Flag("anyLowResource"),
-                Enabled = Flag("enabled", true), Repeat = Number("repeat", 1, 1, 10),
-                RepeatGapMs = Number("repeatGapMs", 150, 30, 2000), HoldMs = Number("holdMs", 0, 0, 10000),
-                DodgeAfter = Flag("dodgeAfter"), NextDelayMs = Number("nextDelayMs", 0, 0, 10000)
-            });
-            if (skills.Count == 13) break;
-        }
-        return true;
     }
 }

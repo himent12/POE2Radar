@@ -17,6 +17,21 @@ public sealed partial class OverlayRenderer
     /// contrast over the busy atlas), with a node dot at each hop, a green START disc and a gold GOAL ring.
     /// Off-screen segments are simply clipped by Direct2D, so the route still reads when the destination has
     /// been panned off-screen. Drawn UNDER the highlight rings.</summary>
+    // Per-frame scratch reused across atlas frames (the route draw ran at render rate allocating a dictionary,
+    // a list per shared edge and a point array per route every frame).
+    private readonly Dictionary<(long, long, long, long), List<int>> _edgeRoutes = new();
+    private readonly List<List<int>> _edgeListPool = new();
+    private NumVec2[] _atlasPts = new NumVec2[64];
+    private static readonly string[] SmallInts = Enumerable.Range(0, 100).Select(i => i.ToString()).ToArray();
+
+    private static string IntText(int v) => (uint)v < (uint)SmallInts.Length ? SmallInts[v] : v.ToString();
+
+    private NumVec2[] AtlasPts(int n)
+    {
+        if (_atlasPts.Length < n) _atlasPts = new NumVec2[Math.Max(n, _atlasPts.Length * 2)];
+        return _atlasPts;
+    }
+
     private void DrawAtlasRoute(DrawTarget rt, RenderContext ctx)
     {
         var start = ctx.AtlasStart; var end = ctx.AtlasEnd; var route = ctx.AtlasRoute;
@@ -46,14 +61,21 @@ public sealed partial class OverlayRenderer
             // #4 per-edge interleaving: routes from the accessible frontier share their first segments
             // constantly, so a shared edge gets each route's chevrons at a distinct phase slot — overlapping
             // colours stay visible instead of the last-drawn one overpainting. Keyed by canvas-space coords.
-            var edgeRoutes = new Dictionary<(long, long, long, long), List<int>>();
+            var edgeRoutes = _edgeRoutes;
+            foreach (var l in edgeRoutes.Values) { l.Clear(); _edgeListPool.Add(l); }
+            edgeRoutes.Clear();
             for (var ri = 0; ri < autos!.Count; ri++)
             {
                 if (autos[ri].Points is not { Count: >= 2 } rp) continue;
                 for (var i = 1; i < rp.Count; i++)
                 {
                     var k = AtlasEdgeKey(rp[i - 1], rp[i]);
-                    if (!edgeRoutes.TryGetValue(k, out var l)) edgeRoutes[k] = l = new List<int>();
+                    if (!edgeRoutes.TryGetValue(k, out var l))
+                    {
+                        if (_edgeListPool.Count > 0) { l = _edgeListPool[^1]; _edgeListPool.RemoveAt(_edgeListPool.Count - 1); }
+                        else l = new List<int>();
+                        edgeRoutes[k] = l;
+                    }
                     l.Add(ri);
                 }
             }
@@ -67,9 +89,10 @@ public sealed partial class OverlayRenderer
                 // Softer + thinner than the manual F10 route: auto-routes are ambient guides to every tracked
                 // tile, so they shouldn't dominate the screen as a thick web. Lower alpha + lighter underlay.
                 var col = string.IsNullOrEmpty(ar.Color) ? new Color4(0.235f, 0.86f, 1f, 0.65f) : ParseColor(ar.Color, 0.65f);
-                var pts = new NumVec2[rp.Count];
-                for (var i = 0; i < rp.Count; i++) pts[i] = Proj(rp[i]);
-                for (var i = 1; i < pts.Length; i++)
+                var pts = AtlasPts(rp.Count);
+                var np = rp.Count;
+                for (var i = 0; i < np; i++) pts[i] = Proj(rp[i]);
+                for (var i = 1; i < np; i++)
                 {
                     var a = pts[i - 1]; var b = pts[i];
                     if (!On(a, 64f) && !On(b, 64f)) continue;   // fully off-screen segment → skip (relPos is noise)
@@ -87,10 +110,10 @@ public sealed partial class OverlayRenderer
                     DrawAtlasChevrons(rt, a, b, col, chevron, spacing, ref carry);
                 }
                 // Hop-count chip at the target end (only when the target is on-screen).
-                var tgt = pts[^1];
+                var tgt = pts[np - 1];
                 if (On(tgt, 0f))
                 {
-                    string ht = ar.Hops.ToString();
+                    string ht = IntText(ar.Hops);
                     rt.FillRectangle(new RawRectF(tgt.X - 11f, tgt.Y - 26f, tgt.X + 11f, tgt.Y - 10f), _bPanel!);
                     rt.DrawText(ht, _tf!, new Rect(tgt.X - 9f, tgt.Y - 26f, tgt.X + 11f, tgt.Y - 10f), _bText!, DrawTextOptions.Clip);
                 }
@@ -100,17 +123,18 @@ public sealed partial class OverlayRenderer
         if (route is { Count: >= 2 })
         {
             // Graph polyline: dark underlay then bright line (cheap outline for contrast over the atlas), hop dots.
-            var pts = new NumVec2[route.Count];
-            for (var i = 0; i < route.Count; i++) pts[i] = Proj(route[i]);
+            var pts = AtlasPts(route.Count);
+            var np = route.Count;
+            for (var i = 0; i < np; i++) pts[i] = Proj(route[i]);
             float mspacing = 9f * MathF.Max(1.5f, ctx.AtlasRouteArrowSpacing);
-            for (var i = 1; i < pts.Length; i++)
+            for (var i = 1; i < np; i++)
             {
                 var a = pts[i - 1]; var b = pts[i];
                 if (!On(a, 64f) && !On(b, 64f)) continue;   // fully off-screen segment → skip (relPos is noise)
                 _bStyle!.Color = dark; rt.DrawLine(a, b, _bStyle, 7f);
                 _bStyle.Color = bright; rt.DrawLine(a, b, _bStyle, 3.5f);
                 if (!On(a, 0f) || !On(b, 0f)) continue;     // chevrons + hop dots only when fully on-screen
-                if (i < pts.Length - 1) rt.DrawEllipse(new Ellipse(b, 4f, 4f), _bStyle, 2f);
+                if (i < np - 1) rt.DrawEllipse(new Ellipse(b, 4f, 4f), _bStyle, 2f);
                 var carry = mspacing * 0.5f; DrawAtlasChevrons(rt, a, b, dark, 9f, mspacing, ref carry);
             }
         }
@@ -152,8 +176,9 @@ public sealed partial class OverlayRenderer
               h3 = ctx.AtlasShearY, h4 = ctx.AtlasScaleY, h5 = ctx.AtlasOffY,
               h6 = ctx.AtlasPersX, h7 = ctx.AtlasPersY;
         float ccx = W * 0.5f, ccy = H * 0.5f;
-        foreach (var n in marks)
+        for (var i = 0; i < marks.Count; i++)
         {
+            var n = marks[i];
             var w = h6 * n.X + h7 * n.Y + 1f;
             if (MathF.Abs(w) < 1e-6f) continue;
             var sx = (h0 * n.X + h1 * n.Y + h2) / w;
@@ -230,15 +255,16 @@ public sealed partial class OverlayRenderer
     {
         if (iconH < 6f) iconH = 6f;
         var cnt = 0;
-        foreach (var bn in basenames) if (_atlasIcons!.Get(rt, bn) != null) cnt++;
+        for (var i = 0; i < basenames.Count; i++) if (_atlasIcons!.Get(rt, basenames[i]) != null) cnt++;
         if (cnt == 0) return;
         const float gap = 3f;
         float totalW = cnt * iconH + (cnt - 1) * gap;
         float ix = cx - totalW * 0.5f;
         float iy = topY - iconH - 5f;
         rt.FillRectangle(new RawRectF(ix - 3f, iy - 2f, ix + totalW + 3f, iy + iconH + 2f), _bPanel!);
-        foreach (var bn in basenames)
+        for (var i = 0; i < basenames.Count; i++)
         {
+            var bn = basenames[i];
             var bmp = _atlasIcons!.Get(rt, bn);
             if (bmp == null) continue;
             // Vortice's Rect ctor is (x, y, WIDTH, HEIGHT) — NOT (left, top, right, bottom) — and this

@@ -79,6 +79,16 @@ public sealed partial class ApiServer : IDisposable
     // Version/update info provider ({current, latest, updateAvailable, url}) for the dashboard banner.
     private readonly Func<object>? _version;
 
+    /// <summary>Live buffs + per-rule buff-keeper notes (GET /api/buffs). Read-only.</summary>
+    public Func<object>? BuffsProvider { get; init; }
+
+    /// <summary>Trade sessions + tracker summary + history (GET /api/trade).</summary>
+    public Func<object>? TradeProvider { get; init; }
+
+    /// <summary>Trade bookkeeping ops (POST /api/trade: dismiss a session, delete/clear history). Never sends
+    /// chat — whispers/invites only go out from the in-game panel while PoE2 is focused.</summary>
+    public Func<JsonElement, object>? TradeCommand { get; init; }
+
     private volatile bool _running;
 
     private static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };

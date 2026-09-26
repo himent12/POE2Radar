@@ -102,25 +102,31 @@ public sealed partial class Poe2Live
         var gameState = Ptr(_gameStateSlot);
         if (gameState == 0) return false;
 
-        // InGameState = first element of the CurrentStatePtr StdVector; fall back to States[].
-        var candidates = new List<nint>(13);
+        // InGameState = first element of the CurrentStatePtr StdVector; fall back to States[]. Candidates are
+        // tried in that order and read LAZILY — the active-state vector almost always resolves, so the 12
+        // state-slot reads (and a candidate list allocation, this runs every render frame) are skipped.
         var vecFirst = Ptr(gameState + Poe2.GameState.CurrentStatePtr);
-        if (vecFirst != 0) candidates.Add(Ptr(vecFirst));
-        for (var i = 0; i < Poe2.GameState.StateSlotCount; i++)
-            candidates.Add(Ptr(gameState + Poe2.GameState.States + (nint)(i * Poe2.GameState.StateSlotStride)));
-
-        foreach (var igs in candidates)
-        {
-            if (igs == 0) continue;
-            var ai = Ptr(igs + Poe2.InGameState.AreaInstanceData);
-            if (ai == 0) continue;
-            var lp = Ptr(ai + Poe2.AreaInstance.LocalPlayer);
-            if (lp == 0) continue;
-            if (!ReadMetadata(lp).StartsWith("Metadata/", StringComparison.Ordinal)) continue;
-            inGameState = igs; areaInstance = ai; localPlayer = lp;
+        if (vecFirst != 0 && TryInGameCandidate(Ptr(vecFirst), out inGameState, out areaInstance, out localPlayer))
             return true;
-        }
+        for (var i = 0; i < Poe2.GameState.StateSlotCount; i++)
+            if (TryInGameCandidate(Ptr(gameState + Poe2.GameState.States + (nint)(i * Poe2.GameState.StateSlotStride)),
+                    out inGameState, out areaInstance, out localPlayer))
+                return true;
+        inGameState = areaInstance = localPlayer = 0;
         return false;
+    }
+
+    private bool TryInGameCandidate(nint igs, out nint inGameState, out nint areaInstance, out nint localPlayer)
+    {
+        inGameState = areaInstance = localPlayer = 0;
+        if (igs == 0) return false;
+        var ai = Ptr(igs + Poe2.InGameState.AreaInstanceData);
+        if (ai == 0) return false;
+        var lp = Ptr(ai + Poe2.AreaInstance.LocalPlayer);
+        if (lp == 0) return false;
+        if (!ReadMetadata(lp).StartsWith("Metadata/", StringComparison.Ordinal)) return false;
+        inGameState = igs; areaInstance = ai; localPlayer = lp;
+        return true;
     }
 
     /// <summary>Per-area instance hash. (Caches key on the AreaInstance address; this is for display/ID.)</summary>
@@ -380,50 +386,6 @@ private nint _leagueFor = -1;
     /// other UI element and is dependable.)</summary>
     public readonly record struct HoveredItem(nint Item, Rarity Rarity, string? Art, bool Identified,
         string? Name, int Stack, float BoxX, float BoxY, float BoxW, float BoxH);
-
-    /// <summary>Resolve a component address by name via EntityDetails → ComponentLookUp (StdBucket) → ComponentList.</summary>
-    private nint ResolveComponent(nint entity, string name)
-    {
-        var details = Ptr(entity + Poe2.Entity.EntityDetailsPtr);
-        if (details == 0) return 0;
-        var lookup = Ptr(details + Poe2.EntityDetails.ComponentLookUpPtr);
-        if (lookup == 0) return 0;
-        if (!_reader.TryReadStruct<StdVector>(entity + Poe2.Entity.ComponentList, out var compList)) return 0;
-        var compCount = ((long)compList.Last - (long)compList.First) / 8;
-        if (compCount is <= 0 or > 256) return 0;
-
-        var bFirst = Ptr(lookup + Poe2.ComponentLookUp.NameAndIndexBucket);
-        if (!_reader.TryReadStruct<nint>(lookup + Poe2.ComponentLookUp.NameAndIndexBucket + 8, out var bLast)) return 0;
-        var entries = ((long)bLast - (long)bFirst) / Poe2.ComponentLookUp.EntryStride;
-        if (bFirst == 0 || entries is <= 0 or > 256) return 0;
-
-        for (long i = 0; i < entries; i++)
-        {
-            var e = bFirst + (nint)(i * Poe2.ComponentLookUp.EntryStride);
-            var namePtr = Ptr(e);
-            if (!_reader.TryReadStruct<int>(e + 8, out var index)) continue;
-            if (index < 0 || index >= compCount) continue;
-            if (_reader.ReadStringUtf8(namePtr, 32) != name) continue;
-            return Ptr(compList.First + (nint)(index * 8));
-        }
-        return 0;
-    }
-
-    /// <summary>Read an entity's metadata path: EntityDetails(+0x08) → name StdWString(+0x08).</summary>
-    private string ReadMetadata(nint entity)
-    {
-        var details = Ptr(entity + Poe2.Entity.EntityDetailsPtr);
-        if (details == 0) return string.Empty;
-        return ReadStdWString(details + Poe2.EntityDetails.Name);
-    }
-
-    private string ReadStdWString(nint addr)
-    {
-        if (!_reader.TryReadStruct<int>(addr + 0x10, out var len) || len <= 0 || len > 1024) return string.Empty;
-        if (len < 8) return _reader.ReadStringUtf16(addr, len);
-        var ptr = Ptr(addr);
-        return ptr == 0 ? string.Empty : _reader.ReadStringUtf16(ptr, len);
-    }
 
     /// <summary>Safe pointer read: 0 on failure or implausible (non-user-mode) value.</summary>
     private nint Ptr(nint addr)

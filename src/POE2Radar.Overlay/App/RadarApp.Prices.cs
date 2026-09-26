@@ -35,6 +35,17 @@ public sealed partial class RadarApp
 
     private HoverPriceLabel? _hoverFrame;
 
+    private readonly Pricing.TradeComparison _tradeComparison = new();
+    private nint _tradeHoverItem;
+    private DateTime _tradeHoverSince, _tradeProfileAt;
+    private ItemTradeProfile? _tradeProfile;
+    private volatile object? _hoverDiagnostic;
+
+    // Waystone check cache: one mod read per hovered waystone (the item address changes when another is hovered).
+    private nint _mapCheckItem;
+    private (string Text, string Detail, bool Danger) _mapCheckView;
+    private int _mapCheckGen = -1;
+
     // ── Runeshape monoliths (priced offered rewards, read off the in-world device — works area-wide,
     //    before the panel is opened). World-space markers; published per area-hash for the zone-load guard. ──
     private readonly RuneMonolithCatalog _monoCatalog = RuneMonolithCatalog.Instance;
@@ -53,10 +64,20 @@ public sealed partial class RadarApp
         loaded = _priceBook.IsLoaded,
         league = _priceBook.League,
         count = _priceBook.ItemCount,
+        marketRows = _priceBook.MarketRowCount,
+        categories = _priceBook.CategoryCount,
+        fetchMilliseconds = _priceBook.FetchMilliseconds,
+        hoverScanNodes = _live.HoverScanNodes,
+        hoverScanReads = _live.HoverScanReads,
+        hoverScanMilliseconds = _live.HoverScanMilliseconds,
+        hoverCacheHits = _live.HoverCacheHits,
+        hoveredItem = _hoverDiagnostic,
         exPerDivine = _priceBook.ExPerDivine,
         exPerChaos = _priceBook.ExPerChaos,
         lastFetchUtc = _priceBook.LastFetchUtc,
         status = _priceBook.Status,
+        stale = _priceBook.IsStale,
+        refreshIntervalMinutes = _priceBook.RefreshIntervalMinutes,
     };
 
     /// <summary>Read the open "Runeshape Combinations" panel (cheap when closed) and publish a priced label
@@ -312,7 +333,7 @@ public sealed partial class RadarApp
             // Low-listing confidence: a price backed by fewer than MinQuantity live listings is flagged
             // with a "?" rather than hidden (0 volume = no data, not low confidence — see LowConfidence).
             var value = _priceBook.Format(p.Exalted);
-            if (LowConfidence(p.Quantity)) value += " ?";
+            if (p.LowConfidence(cfg.MinQuantity)) value += " ?";
             specs.Add(new LootTagSpec(el, text, value, p.Exalted >= cfg.HighlightMinEx));
         }
         _lootTags = specs.Count > 0 ? new LootTagRender(specs) : LootTagRender.Empty;
@@ -322,46 +343,99 @@ public sealed partial class RadarApp
     /// price it (uniques by art — works on unidentified ones — everything else by base name), and publish a
     /// <see cref="HoverPriceSpec"/> the render thread anchors beside the game tooltip. Ignores the ground
     /// value floors/toggles (hovering is explicit intent). Stacks carry per-unit + total. Throttled + gated
-    /// to PoE2 foreground; publishes null when nothing priceable is hovered. World thread.</summary>
-    private void UpdateHoverPrice(nint inGameState)
+    /// to PoE2 foreground; publishes null when no item is hovered. World thread.</summary>
+    private void UpdateHoverPrice(nint inGameState, uint areaHash)
     {
         var cfg = _settings.HoverPrice;
-        if (!cfg.Enabled || !_priceBook.IsLoaded)
+        if (!cfg.Enabled)
         {
             if (_hoverPrice != null) _hoverPrice = null;
             return;
         }
+        if (!GameFocused()) { _hoverPrice = null; return; }
         var now = DateTime.UtcNow;
         if (now < _nextHoverScanUtc) return;
         _nextHoverScanUtc = now.AddMilliseconds(HoverScanThrottleMs);
 
         // Cursor in overlay-client pixels (same space as TryUiElementRect); only while PoE2 is foreground.
-        if (GameHost.GetForegroundWindow() != _gameHwnd || !GameHost.GetCursorPos(out var pt)) { _hoverPrice = null; return; }
+        if (!GameFocused() || !GameHost.GetCursorPos(out var pt)) { _hoverPrice = null; return; }
         var (cx, cy) = ScreenToClientPoint(pt);
         var hov = _live.ReadHoveredItem(inGameState, _window.Width, _window.Height, cx, cy);
-        if (hov is not { } h) { _hoverPrice = null; return; }
+        if (hov is not { } h) { _hoverPrice = null; _hoverDiagnostic = null; _tradeHoverItem = 0; return; }
 
-        // Uniques key off art (each has its own icon, and an unID unique's name is hidden); the rest off name.
-        var isUnique = h.Rarity == Poe2Live.Rarity.Unique;
-        var pr = isUnique ? _priceBook.TryByArt(h.Art)
-                          : (h.Name is { Length: > 0 } nm ? _priceBook.TryByName(nm) : null);
-        if (pr is not { } p) { _hoverPrice = null; return; }
-
-        // Anchored to the item icon (small slot), so keep it to two short lines: the headline stack TOTAL,
-        // and a per-unit breakdown beneath it for stacks (empty for singles). Both stay narrow so they line up.
-        var stack = h.Stack > 1 ? h.Stack : 1;
-        var text = _priceBook.Format(p.Exalted * stack);
-        var sub = stack > 1 ? $"{stack} × {_priceBook.Format(p.Exalted)}" : "";
-        // Same low-listing "?" confidence flag as the ground overlay (shared MinQuantity threshold).
-        if (LowConfidence(p.Quantity)) text += " ?";
-        var highlight = p.Exalted * stack >= cfg.HighlightMinEx;
-
+        if (!string.IsNullOrEmpty(h.Name)) _lastHover = new HoverRef(h.Name, now);
+        var valuation = Pricing.HoverValuation.Build(h, _priceBook,
+            _settings.GroundItems.MinQuantity, cfg.HighlightMinEx);
+        if (h.Item != _tradeHoverItem)
+        {
+            _tradeHoverItem = h.Item; _tradeHoverSince = now; _tradeProfile = null;
+        }
+        var danger = false;
+        if (_settings.MapCheck.Enabled && MapCheckFor(h) is { } mc)
+        {
+            danger = mc.Danger;
+            valuation = valuation with
+            {
+                Text = mc.Text,
+                Detail = mc.Detail + (valuation.Text.Length > 0 ? "\n" + valuation.Text : ""),
+                Highlight = false,
+            };
+        }
+        else if (h.Rarity is Poe2Live.Rarity.Rare or Poe2Live.Rarity.Magic)
+        {
+            // Same closest-match search as the price-check hotkey, so the two always agree (cached per item).
+            string text = "Hold to compare with similar listings", detail = "Reading the item's mods…";
+            string? url = null;
+            if ((now - _tradeHoverSince).TotalMilliseconds >= 500)
+            {
+                if (_tradeProfile == null || (now - _tradeProfileAt).TotalMilliseconds >= 750)
+                {
+                    _tradeProfile = _live.ReadItemTradeProfile(h); _tradeProfileAt = now;
+                }
+                var (key, needsStats, plan) = Pricing.PriceCheck.For(_tradeProfile, null, _live.ItemMetadata(h.Item));
+                var search = _tradeComparison.GetOrQueueSearch(key, plan, needsStats, _priceBook);
+                url = search.Url;
+                if (search.Pending) { text = "Checking similar listings…"; detail = search.Status; }
+                else if (search.Error is { } err) { text = "Trade lookup unavailable"; detail = err; }
+                else
+                {
+                    var sum = Pricing.PriceCheck.Summarize(search.Listings, null, _priceBook.Format, similar: true);
+                    text = sum.Median is { } median ? $"Similar items: ~{_priceBook.Format(median)}" : search.Status;
+                    detail = search.Note + (sum.Min is { } lo && sum.Max is { } hi
+                        ? $"\n{_priceBook.Format(lo)}–{_priceBook.Format(hi)} across {search.Listings.Count} sellers · {search.Total:N0} listed"
+                        : "");
+                }
+            }
+            valuation = valuation with
+            {
+                Text = text,
+                Detail = $"{h.Name}\n{detail}\nOfficial trade · {_priceBook.ComparisonLeague}\n{_settings.HoverPrice.PriceCheckHotkey}: full price check",
+                TradeUrl = url ?? valuation.TradeUrl,
+                Highlight = false,
+            };
+        }
+        _hoverDiagnostic = new { name = h.Name, rarity = h.Rarity.ToString(), art = h.Art,
+            identified = h.Identified, status = valuation.Text, detail = valuation.Detail };
         _hoverPrice = new HoverPriceRender(new HoverPriceSpec(
-            h.BoxX, h.BoxY, h.BoxW, h.BoxH, text, sub, highlight));
+            h.BoxX, h.BoxY, h.BoxW, h.BoxH, valuation.Text, valuation.Detail, valuation.Highlight, danger), areaHash, now);
     }
 
     /// <summary>Strip a leading "&lt;count&gt;x " from a stack tag ("5x Chaos Orb" → "Chaos Orb") so the name
     /// matches the PriceBook key; returns the input trimmed when there's no count prefix.</summary>
+    /// <summary>World thread: waystone mod check for the hovered item, or null when it isn't a waystone. Mods
+    /// are read once per hovered waystone (and again only if the dangerous-mod list is edited).</summary>
+    private (string Text, string Detail, bool Danger)? MapCheckFor(Poe2Live.HoveredItem h)
+    {
+        var gen = _settings.MapCheck.Dangerous.Count ^ string.Join("|", _settings.MapCheck.Dangerous).GetHashCode();
+        if (h.Item == _mapCheckItem && gen == _mapCheckGen) return _mapCheckView.Text.Length > 0 ? _mapCheckView : null;
+        _mapCheckItem = h.Item; _mapCheckGen = gen;
+        _mapCheckView = default;
+        if (!Pricing.MapCheck.IsWaystone(_live.ItemMetadata(h.Item), h.Name)) return null;
+        var result = Pricing.MapCheck.Check(_live.ReadItemTradeProfile(h), _settings.MapCheck.Dangerous);
+        _mapCheckView = Pricing.MapCheck.Describe(h.Name ?? "Waystone", result);
+        return _mapCheckView;
+    }
+
     private static string StripCount(string raw)
     {
         var name = raw?.Trim() ?? "";
@@ -510,7 +584,7 @@ public sealed partial class RadarApp
             // Low-listing confidence: flag a price backed by a positive-but-sub-threshold listing count
             // with a "?" rather than hiding it (see LowConfidence — 0 volume = no data, still trusted).
             var value = _priceBook.Format(pr.Exalted);
-            if (LowConfidence(pr.Quantity)) value += " ?";
+            if (pr.LowConfidence(cfg.MinQuantity)) value += " ?";
             labels.Add(new ItemLabelSpec(render, pr.Name, value, pr.Exalted >= cfg.HighlightMinEx, ShowName: showName));
         }
         return labels;
@@ -551,17 +625,6 @@ public sealed partial class RadarApp
         "Currency" => _settings.GroundItems.CurrencyMinEx,
         _          => _settings.GroundItems.OtherMinEx,
     };
-
-    /// <summary>True when a PriceBook listing is backed by a positive-but-sub-threshold live-listing count
-    /// (<see cref="GroundItemSettings.MinQuantity"/>) — the low-confidence signal the overlay flags with a
-    /// "?" suffix on the value. poe.ninja reports volume=0 for many legitimately-priced fungibles (most
-    /// runes), so 0 means "no volume data", NOT low confidence — it's trusted. Only qty in [1,Min) flags.
-    /// The threshold lives on GroundItems as the shared pricing-confidence setting (ground + hover).</summary>
-    private bool LowConfidence(int quantity)
-    {
-        var min = _settings.GroundItems.MinQuantity;
-        return min > 0 && quantity > 0 && quantity < min;
-    }
 
     /// <summary>Parse a "#RRGGBB" hex colour to packed 0xFFRRGGBB once (opacity = 1, matching the old
     /// per-frame ParseColor(hex, 1f) for HP bars). Falls back to opaque white on a malformed string.</summary>

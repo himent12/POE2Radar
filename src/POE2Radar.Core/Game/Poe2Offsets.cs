@@ -488,17 +488,20 @@ public static class Poe2
         public const int ChildrenEnd    = 0x18;  // ✓ StdVector end
         public const int PositionModifier = 0xF0; // StdTuple2D<float>; added to parent pos when Flags bit 0x0A set (GH2 UiElementBase)
         public const int Parent         = 0xB8;  // (community) parent UiElement; true UI root = *(UiRoot+0xB8)
-        public const int RelativePos    = 0x118; // ✓ StdTuple2D<float> position relative to parent (varies per atlas node)
-        public const int LocalScaleMul  = 0x130; // float local scale multiplier (also the atlas zoom on node elements)
+        // ✓ live 2026-09-24 (Research --invui --floats): the position/scale/size block moved −0x18 in the current patch
+        // (UI root size 2560×1600 now at +0x270; flask-bar slots RelativePos (0,0),(64,0),(128,0)… at +0x100).
+        // Flags (+0x168), ScaleIndex (+0x172), Parent (+0xB8) and PositionModifier (+0xF0) did NOT move.
+        public const int RelativePos    = 0x100; // ✓ StdTuple2D<float> position relative to parent (was 0x118)
+        public const int LocalScaleMul  = 0x118; // ✓ float local scale multiplier, 1.0 on HUD slots (was 0x130; also the atlas zoom)
         public const int Flags          = 0x168; // ✓ Tab toggle: 0x5026F1 → 0x502EF1.
         public const int FlagVisibleBit = 0x0B;  // ✓ visible bit (set when shown)
         public const int FlagModifyPosBit = 0x0A; // when set, PositionModifier (+0xF0) is added to the parent pos
         public const int ScaleIndex     = 0x172; // byte; selects which axis scale(s) apply (1=v1,2=v2,3=v1×v2). root=3
-        public const int Text           = 0x390; // std::wstring of the element's displayed text (font name @ +0xC8).
+        public const int Text           = 0x360; // ✓ live 2026-09-24: std::wstring displayed text (was 0x390, which now holds the font name).
                                                   // Validated live 2026-06-14: every text element (loot tags, skill
                                                   // rows, runeforge rows) holds its UTF-16 string here.
-        public const int SizeW          = 0x288; // ✓ float unscaled width  (atlas node = 40)
-        public const int SizeH          = 0x28C; // ✓ float unscaled height (atlas node = 40)
+        public const int SizeW          = 0x270; // ✓ live 2026-09-24 float unscaled width (was 0x288; UI root = 2560)
+        public const int SizeH          = 0x274; // ✓ live 2026-09-24 float unscaled height (was 0x28C; UI root = 1600)
         // Full visibility is hierarchical: an element is shown iff its own bit 0x0B AND every
         // ancestor's bit are set. Walk Parent (+0xB8) up to the root.
         // Screen geometry (GH2 UiElementBaseFuncs): v1 = winW/2560, v2 = winH/1600 (BaseResolution
@@ -585,7 +588,7 @@ public static class Poe2
     /// <c>--tooltip-capture</c>): all 5 offered rewards read as full item entities with no hover needed.</summary>
     public static class Ritual
     {
-        public const int TileSlotItem = 0x4F8; // ✓ item-slot UiElement → reward item Entity (also the flask-bar slot field)
+        public const int TileSlotItem = 0x4E0; // ✓ live 2026-09-24 (was 0x4F8, moved −0x18 with the UiElement block): item-slot UiElement → item Entity — flask bar, inventory, stash, ritual tiles (Research --invui)
     }
 
     /// <summary>Atlas map-node UiElement (a subclass with its own vtable; ~1200+ instances live in the
@@ -682,5 +685,33 @@ public static class Poe2
         public const int FromUiRoot   = 0x7D8; // *(UiRoot + 0x7D8) → tracker container
         public const int WorldTracker = 0x630; // + 0x630 → world hover tracker
         public const int HoveredEntity = 0x18; // + 0x18 → hovered entity/element
+    }
+
+    // ── Buffs (status effects) — GameHelper2-sourced, NOT yet validated live (no ✓) ──────────────
+    // Validate / re-discover with `POE2Radar.Research --buffs`. Poe2Live.PlayerBuffs self-heals a
+    // drifted StatusEffectPtr offset (scans the component for a vector whose entries resolve to
+    // plausible BuffDefinitions ids) and logs loudly when it does; the per-effect fields are not healed.
+
+    /// <summary>Buffs component (GH2): a StdVector of pointers to <see cref="StatusEffect"/>. (GH2, unvalidated)</summary>
+    public static class Buffs
+    {
+        public const int StatusEffectPtr = 0x160; // (GH2) StdVector<StatusEffect*> — 8-byte stride
+    }
+
+    /// <summary>One active status effect (buff/debuff/charge) on an entity. (GH2, unvalidated)</summary>
+    public static class StatusEffect
+    {
+        public const int BuffDefinitionPtr = 0x08; // (GH2) → BuffDefinitions.dat row
+        public const int TotalTime         = 0x18; // (GH2) float seconds; infinite-duration buffs read inf/huge
+        public const int TimeLeft          = 0x1C; // (GH2) float seconds remaining
+        public const int SourceEntityId    = 0x28; // (GH2) uint id of the entity that applied it
+        public const int Charges           = 0x42; // (GH2, UNCERTAIN) ushort stack/charge count
+        public const int ReadSize          = 0x48; // bytes read per effect (covers every field above)
+    }
+
+    /// <summary>BuffDefinitions.dat row. (GH2, unvalidated)</summary>
+    public static class BuffDefinition
+    {
+        public const int IdPtr = 0x00; // (GH2) → UTF-16 internal id, e.g. "flask_effect_life", "arcane_surge"
     }
 }

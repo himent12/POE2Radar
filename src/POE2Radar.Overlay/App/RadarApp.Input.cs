@@ -17,15 +17,7 @@ public sealed partial class RadarApp
 
     private DateTime _nextBrowserAt = DateTime.MinValue;
 
-    private DateTime _nextCombatToggleAt = DateTime.MinValue;
-
-    private DateTime _nextQuestToggleAt = DateTime.MinValue;
-
-    private DateTime _nextMapClearToggleAt = DateTime.MinValue;
-
-    private DateTime _nextMoveToggleAt = DateTime.MinValue;
-
-    // ── Phase 1: exploration fog + draw-only path guidance (all gated by RadarSettings flags). ──
+    // ── Draw-only path guidance. ──
     // Unified navigation targets: a single list built each world tick from BOTH terrain-tile
     // landmarks AND entity POIs (bosses, expedition, waypoints…), each addressed by a STABLE STRING
     // id ("t:<path>" / "e:<entityId>"). Multi-select: each selected target draws its OWN full A*
@@ -34,19 +26,9 @@ public sealed partial class RadarApp
     // at the palette size so colors stay distinct (and per-tick planning stays bounded). On a zone
     // change the selection is cleared, then the persistent auto-nav patterns re-select matching
     // targets in the new zone.
-    private const int MapClearVk = 0x71;
-
-    private const int QuestFollowVk = 0x72;
-
-    private const int PathMoveVk = 0x74;
-
     private const int AddNearestVk = 0x75;
 
     private const int ClearPathsVk = 0x76;
-
-    private const int FarmLoopVk = 0x7A; // F11
-
-    private DateTime _nextFarmToggleAt = DateTime.MinValue;
 
     // INSERT in-game menu (render thread owns it; clicks arrive on the window thread → volatile).
     private volatile bool _insMenuOpen;
@@ -152,6 +134,18 @@ public sealed partial class RadarApp
             return;
         }
 
+        if (action.StartsWith("pc:", StringComparison.Ordinal))
+        {
+            OnPriceCheckClick(action);
+            return;
+        }
+
+        if (action.StartsWith("trade:", StringComparison.Ordinal))
+        {
+            OnTradeClick(action);
+            return;
+        }
+
         if (action == "menu-toggle")
         {
             _navMenuExpanded = !_navMenuExpanded;
@@ -179,20 +173,17 @@ public sealed partial class RadarApp
         }
     }
 
-    /// <summary>INSERT-menu click dispatch (see OverlayRenderer.InsMenu for the action grammar).</summary>
+    /// <summary>INSERT-menu click dispatch (see OverlayRenderer.InsMenu for the action grammar). Every write
+    /// persists immediately. Arm bits (flask / macros) are only toggled here or by their hotkeys — never HTTP.</summary>
     private void OnInsMenuClick(string action, RawRectF rect, int clientX)
     {
         switch (action)
         {
             case "ins:panel": return;
             case "ins:close": _insMenuOpen = false; return;
-            case "ins:toggle:bot": ToggleBot(); return;
-            case "ins:toggle:clear": ToggleMapClear(); return;
-            case "ins:toggle:combat": ToggleCombatAssist(); return;
-            case "ins:toggle:move": TogglePathMove(); return;
             case "ins:toggle:flask": ToggleAutoFlask(); return;
-            case "ins:toggle:farm": ToggleFarmLoop(); return;
-            case "ins:skill:add": AddCombatSkill(); return;
+            case "ins:toggle:buffs": ToggleBuffKeeper(); return;
+            case "ins:open:dashboard": OpenDashboard(); return;
         }
         var parts = action.Split(':');
         if (parts.Length < 3) return;
@@ -200,174 +191,153 @@ public sealed partial class RadarApp
         switch (parts[1])
         {
             case "tab" when int.TryParse(parts[2], out var tab):
-                _insMenuTab = Math.Clamp(tab, 0, 4);
+                _insMenuTab = Math.Clamp(tab, 0, OverlayRenderer.InsTabCount - 1);
                 return;
             case "adj" when parts.Length == 4 && float.TryParse(parts[3], System.Globalization.NumberStyles.Float, ci, out var delta):
-                if (InsSliderSpec.All.TryGetValue(parts[2], out var spec)) SetSetting(spec, spec.Clamp(GetSetting(parts[2]) + delta));
+                if (InsSliderSpec.All.TryGetValue(parts[2], out var spec)) SetSlider(spec, spec.Get(_settings) + delta);
                 return;
             case "slider" when InsSliderSpec.All.TryGetValue(parts[2], out var sspec):
             {
                 var t = rect.Width > 0f ? Math.Clamp((clientX - rect.Left) / rect.Width, 0f, 1f) : 0f;
-                SetSetting(sspec, sspec.Clamp(sspec.Min + t * (sspec.Max - sspec.Min)));
+                SetSlider(sspec, sspec.Min + t * (sspec.Max - sspec.Min));
                 return;
             }
             case "set" when parts.Length == 4:
                 SetChoice(parts[2], parts[3]);
                 return;
+            case "key" when parts.Length == 4 && int.TryParse(parts[3], out var dir):
+                CycleKey(parts[2], dir);
+                return;
             case "flag":
-                if (parts[2] == "moveRunEnabled") _settings.MoveRunEnabled = !_settings.MoveRunEnabled;
-                else if (parts[2] == "moveDiagonals") _settings.MoveDiagonals = !_settings.MoveDiagonals;
-                else if (parts[2] == "playInBackground") _settings.PlayInBackground = !_settings.PlayInBackground;
-                else if (parts[2] == "autoRespawn") _settings.AutoRespawn = !_settings.AutoRespawn;
-                else if (parts[2] == "eventEssence") _settings.EventEssence = !_settings.EventEssence;
-                else if (parts[2] == "eventStrongbox") _settings.EventStrongbox = !_settings.EventStrongbox;
-                else if (parts[2] == "eventShrine") _settings.EventShrine = !_settings.EventShrine;
-                else if (parts[2] == "eventBreach") _settings.EventBreach = !_settings.EventBreach;
-                else if (parts[2] == "eventRitual") _settings.EventRitual = !_settings.EventRitual;
-                else if (parts[2] == "eventChests") _settings.EventChests = !_settings.EventChests;
-                else if (parts[2] == "eventClickStalled") _settings.EventClickStalled = !_settings.EventClickStalled;
-                else return;
+                if (!FlipFlag(parts[2])) return;
                 _settings.Save();
                 return;
-            case "skill":
-                OnSkillAction(parts);
+            case "buff":
+                OnBuffRuleAction(parts, action);
+                return;
+            case "cmd" when parts.Length == 4 && parts[2] == "flip" && int.TryParse(parts[3], out var ci2)
+                            && (uint)ci2 < (uint)_settings.Commands.Commands.Count:
+                _settings.Commands.Commands[ci2].Enabled = !_settings.Commands.Commands[ci2].Enabled;
+                _settings.Save();
                 return;
         }
     }
 
-    private float GetSetting(string key) => key switch
+    /// <summary>INSERT-menu edits to buff-keeper rules: <c>ins:buff:flip|trig:i</c>, <c>ins:buff:key:i:±1</c>, and
+    /// <c>ins:buff:add:&lt;name&gt;</c> (click a live buff → a "keep it up" rule for it). Names/timers are
+    /// dashboard-only (no text entry in the overlay).</summary>
+    private void OnBuffRuleAction(string[] parts, string action)
     {
-        "combatRange" => _settings.CombatRange,
-        "combatEngageRange" => _settings.CombatEngageRange,
-        "combatKeepDistance" => _settings.CombatKeepDistance,
-        "combatFleeHpPct" => _settings.CombatFleeHpPct,
-        "combatFleeRecoverPct" => _settings.CombatFleeRecoverPct,
-        "combatFleeDistance" => _settings.CombatFleeDistance,
-        "combatStallMs" => _settings.CombatStallMs,
-        "mapClearStampRadius" => _settings.MapClearStampRadius,
-        "mapClearAggroRange" => _settings.MapClearAggroRange,
-        "mapClearStuckMs" => _settings.MapClearStuckMs,
-        "eventRange" => _settings.EventRange,
-        "eventUseRadius" => _settings.EventUseRadius,
-        "moveArriveRadius" => _settings.MoveArriveRadius,
-        "moveCooldownMs" => _settings.MoveCooldownMs,
-        "moveLookAhead" => _settings.MoveLookAhead,
-        "moveAxisRotationDeg" => _settings.MoveAxisRotationDeg,
-        "lifeThresholdPct" => _settings.LifeThresholdPct,
-        "manaThresholdPct" => _settings.ManaThresholdPct,
-        _ => 0f,
-    };
-
-    /// <summary>Write a slider tunable (already clamped to its spec) and persist.</summary>
-    private void SetSetting(InsSliderSpec spec, float v)
-    {
-        var s = _settings;
-        switch (spec.Key)
+        var rules = _settings.BuffKeeper.Rules;
+        if (parts[2] == "add")
         {
-            case "combatRange": s.CombatRange = v; break;
-            case "combatEngageRange": s.CombatEngageRange = v; break;
-            case "combatKeepDistance": s.CombatKeepDistance = v; break;
-            case "combatFleeHpPct": s.CombatFleeHpPct = v; break;
-            case "combatFleeRecoverPct": s.CombatFleeRecoverPct = v; break;
-            case "combatFleeDistance": s.CombatFleeDistance = v; break;
-            case "combatStallMs": s.CombatStallMs = (int)v; break;
-            case "mapClearStampRadius": s.MapClearStampRadius = (int)v; break;
-            case "mapClearAggroRange": s.MapClearAggroRange = v; break;
-            case "mapClearStuckMs": s.MapClearStuckMs = (int)v; break;
-            case "eventRange": s.EventRange = v; break;
-            case "eventUseRadius": s.EventUseRadius = v; break;
-            case "moveArriveRadius": s.MoveArriveRadius = v; break;
-            case "moveCooldownMs": s.MoveCooldownMs = (int)v; break;
-            case "moveLookAhead": s.MoveLookAhead = v; break;
-            case "moveAxisRotationDeg": s.MoveAxisRotationDeg = v; break;
-            case "lifeThresholdPct": s.LifeThresholdPct = v; break;
-            case "manaThresholdPct": s.ManaThresholdPct = v; break;
+            var name = action["ins:buff:add:".Length..];
+            if (name.Length == 0 || rules.Count >= 16) return;
+            if (rules.Any(r => string.Equals(r.BuffName, name, StringComparison.OrdinalIgnoreCase))) return;
+            // Replace the untouched shipped example instead of stacking beside it.
+            rules.RemoveAll(r => !r.Enabled && r.BuffName.Length == 0 && r.Name == "Example buff");
+            rules.Add(new BuffRule { Enabled = false, Name = name, BuffName = name, Key = 0x54, Trigger = BuffKeeper.TriggerMissing });
+            _settings.Save();
+            return;
+        }
+        if (parts.Length < 4 || !int.TryParse(parts[3], out var i) || (uint)i >= (uint)rules.Count) return;
+        var rule = rules[i];
+        switch (parts[2])
+        {
+            case "flip":
+                rule.Enabled = !rule.Enabled;
+                // Ticking a rule in the menu is a clear "I want this running": arm the keeper if it was off.
+                if (rule.Enabled && !_buffKeeperArmed) ToggleBuffKeeper();
+                break;
+            case "trig":
+                rule.Trigger = rule.Trigger switch
+                {
+                    BuffKeeper.TriggerMissing => BuffKeeper.TriggerExpiring,
+                    BuffKeeper.TriggerExpiring => BuffKeeper.TriggerInterval,
+                    _ => BuffKeeper.TriggerMissing,
+                };
+                break;
+            case "key" when parts.Length == 5 && int.TryParse(parts[4], out var dir):
+                var k = Array.IndexOf(SkillKeyCycle, rule.Key);
+                var n = SkillKeyCycle.Length;
+                rule.Key = SkillKeyCycle[((k < 0 ? 0 : k) + (dir >= 0 ? 1 : -1) + n) % n];
+                break;
             default: return;
         }
-        s.Save();
+        _settings.Save();
+    }
+
+    // Keys a buff rule's in-game picker cycles through: skill keys QWERT, 1-5, then mouse buttons.
+    private static readonly int[] SkillKeyCycle = { 0x51, 0x57, 0x45, 0x52, 0x54, 0x31, 0x32, 0x33, 0x34, 0x35, 0x02, 0x04, 0x05, 0x06 };
+
+    private void SetSlider(InsSliderSpec spec, float value)
+    {
+        spec.Set(_settings, spec.Clamp(value));
+        _settings.Save();
+    }
+
+    private bool FlipFlag(string key)
+    {
+        var s = _settings;
+        switch (key)
+        {
+            case "showMonsters": s.ShowMonsters = !s.ShowMonsters; return true;
+            case "showTerrain": s.ShowTerrain = !s.ShowTerrain; return true;
+            case "showPlayerBlip": s.ShowPlayerBlip = !s.ShowPlayerBlip; return true;
+            case "showPath": s.ShowPath = !s.ShowPath; return true;
+            case "hpBarMagic": s.HpBarMagic = !s.HpBarMagic; return true;
+            case "hpBarRare": s.HpBarRare = !s.HpBarRare; return true;
+            case "hpBarUnique": s.HpBarUnique = !s.HpBarUnique; return true;
+            case "hpBarNormal": s.HpBarNormal = !s.HpBarNormal; return true;
+            case "groundItems": s.GroundItems.Enabled = !s.GroundItems.Enabled; return true;
+            case "hoverPrice": s.HoverPrice.Enabled = !s.HoverPrice.Enabled; return true;
+            case "alwaysShowOverlay": s.AlwaysShowOverlay = !s.AlwaysShowOverlay; return true;
+            case "reduceMotion": s.ReduceMotion = !s.ReduceMotion; return true;
+            case "tradeEnabled": s.Trade.Enabled = !s.Trade.Enabled; return true;
+            case "tradeShowPanel": s.Trade.ShowPanel = !s.Trade.ShowPanel; return true;
+            case "tradeTrackHistory": s.Trade.TrackHistory = !s.Trade.TrackHistory; return true;
+            case "tradeKickAfter": s.Trade.KickAfterTrade = !s.Trade.KickAfterTrade; return true;
+            default: return false;
+        }
     }
 
     private void SetChoice(string key, string value)
     {
         switch (key)
         {
-            case "combatTargetMode" when value is "Nearest" or "Rarity" or "LowestHp" or "HighestHp": _settings.CombatTargetMode = value; break;
-            case "combatRotationMode" when value is "RoundRobin" or "Priority": _settings.CombatRotationMode = value; break;
-            case "moveMethod" when value is "WASD" or "Click": _settings.MoveMethod = value; break;
+            case "lifeFlaskMode" when value is "Health" or "EnergyShield" or "Either": _settings.LifeFlaskMode = value; break;
             default: return;
         }
         _settings.Save();
     }
 
-    // Keys the in-game skill editor cycles through: Q W E R T, 1-5, then mouse buttons.
-    private static readonly int[] SkillKeyCycle = { 0x51, 0x57, 0x45, 0x52, 0x54, 0x31, 0x32, 0x33, 0x34, 0x35, 0x01, 0x02, 0x04, 0x05, 0x06 };
+    // Keys the in-game key pickers cycle through: flask row 1-5, then QWERT, then mouse side buttons.
+    internal static readonly int[] KeyCycle = { 0x31, 0x32, 0x33, 0x34, 0x35, 0x51, 0x57, 0x45, 0x52, 0x54, 0x05, 0x06 };
 
-    private void AddCombatSkill()
+    private void CycleKey(string key, int dir)
     {
-        _settings.CombatSkills ??= new List<CombatSkill>();
-        if (_settings.CombatSkills.Count >= 13) return;
-        var used = new HashSet<int>(_settings.CombatSkills.Select(k => k.Key));
-        var key = SkillKeyCycle.FirstOrDefault(k => !used.Contains(k), 0x51);
-        _settings.CombatSkills.Add(new CombatSkill { Key = key, CooldownMs = Math.Clamp(_settings.CombatCooldownMs, 0, 60000) });
-        _settings.Save();
-    }
-
-    private void OnSkillAction(string[] parts)
-    {
-        var list = _settings.CombatSkills;
-        if (list is null || parts.Length < 4 || !int.TryParse(parts[3], out var i) || (uint)i >= (uint)list.Count) return;
-        var sk = list[i];
-        switch (parts[2])
+        static int Next(int vk, int d)
         {
-            case "del":
-                list.RemoveAt(i);
-                break;
-            case "flip" when parts.Length == 5:
-                if (parts[4] == "enabled") sk.Enabled = !sk.Enabled;
-                else if (parts[4] == "rareOnly") sk.RareOnly = !sk.RareOnly;
-                else if (parts[4] == "priority") sk.Priority = !sk.Priority;
-                else if (parts[4] == "dodgeAfter") sk.DodgeAfter = !sk.DodgeAfter;
-                else return;
-                break;
-            case "adj" when parts.Length == 6 && float.TryParse(parts[5], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var d):
-                switch (parts[4])
-                {
-                    case "key":
-                    {
-                        var idx = Array.IndexOf(SkillKeyCycle, sk.Key);
-                        var n = SkillKeyCycle.Length;
-                        idx = ((idx < 0 ? 0 : idx) + (d > 0 ? 1 : -1) + n) % n;
-                        sk.Key = SkillKeyCycle[idx];
-                        sk.SourceSlot = 0;
-                        break;
-                    }
-                    case "cd": sk.CooldownMs = Math.Clamp(sk.CooldownMs + (int)d, 0, 60000); break;
-                    case "range": sk.Range = Math.Clamp(sk.Range + d, 0f, 200f); break;
-                    case "min": sk.MinTargets = Math.Clamp(sk.MinTargets + (int)d, 0, 20); break;
-                    case "hp": sk.HpBelowPct = Math.Clamp(sk.HpBelowPct + d, 0f, 100f); break;
-                    case "mana": sk.ManaBelowPct = Math.Clamp(sk.ManaBelowPct + d, 0f, 100f); break;
-                    case "minMana": sk.MinManaPct = Math.Clamp(sk.MinManaPct + d, 0f, 100f); break;
-                    case "es": sk.EsBelowPct = Math.Clamp(sk.EsBelowPct + d, 0f, 100f); break;
-                    case "targetHp": sk.TargetHpBelowPct = Math.Clamp(sk.TargetHpBelowPct + d, 0f, 100f); break;
-                    case "repeat": sk.Repeat = Math.Clamp(sk.Repeat + (int)d, 1, 10); break;
-                    case "gap": sk.RepeatGapMs = Math.Clamp(sk.RepeatGapMs + (int)d, 30, 2000); break;
-                    case "hold": sk.HoldMs = Math.Clamp(sk.HoldMs + (int)d, 0, 10000); break;
-                    case "next": sk.NextDelayMs = Math.Clamp(sk.NextDelayMs + (int)d, 0, 10000); break;
-                    default: return;
-                }
-                break;
+            var i = Array.IndexOf(KeyCycle, vk);
+            var n = KeyCycle.Length;
+            return KeyCycle[((i < 0 ? 0 : i) + (d >= 0 ? 1 : -1) + n) % n];
+        }
+        switch (key)
+        {
+            case "lifeKey": _settings.LifeKey = Next(_settings.LifeKey, dir); break;
+            case "manaKey": _settings.ManaKey = Next(_settings.ManaKey, dir); break;
             default: return;
         }
         _settings.Save();
     }
 
-    /// <summary>Poll overlay hotkeys: F8 auto-flask toggle, F4 combat, F3 bot master (quest follow), F2 map clear, F5 path move, F9 quit, F12 dashboard, F6/F7 path targets.
+    /// <summary>Poll overlay hotkeys: Insert menu, F8 auto-flask toggle, F9 quit, F12 dashboard, F6/F7 path targets, F10 atlas.
     /// Map calibration is web-config-only (no in-game keys, to avoid accidental presses).</summary>
     private void HandleHotkeys()
     {
         // INSERT opens/closes the in-game menu (debounced). Only while PoE2 is foreground.
         if (Down(0x2D) && DateTime.UtcNow >= _nextInsToggleAt
-            && _gameHwnd != 0 && GameHost.GetForegroundWindow() == _gameHwnd)
+            && GameFocused())
         {
             _nextInsToggleAt = DateTime.UtcNow.AddMilliseconds(300);
             _insMenuOpen = !_insMenuOpen;
@@ -378,53 +348,21 @@ public sealed partial class RadarApp
             _nextToggleAt = DateTime.UtcNow.AddMilliseconds(300);
             ToggleAutoFlask();
         }
-        // F4 master kill-switch for combat assist (debounced). Not writable via the dashboard.
-        if (Down(0x73) && DateTime.UtcNow >= _nextCombatToggleAt)
-        {
-            _nextCombatToggleAt = DateTime.UtcNow.AddMilliseconds(300);
-            ToggleCombatAssist();
-        }
-        // F3 bot master (debounced). Arms quest follow + path move + combat. Not writable via the dashboard.
-        // F4 combat stays independently toggleable (OR'd with the bot). F2 map-clear pauses quest follow.
-        // F8 flask stays independent.
-        if (Down(QuestFollowVk) && DateTime.UtcNow >= _nextQuestToggleAt)
-        {
-            _nextQuestToggleAt = DateTime.UtcNow.AddMilliseconds(300);
-            ToggleBot();
-        }
-        // F2 map-clear (debounced). Walks unexplored cells; unique bosses + hostiles first.
-        // Arms path move + combat. Pauses F3 quest follow while on. Not writable via the dashboard.
-        if (Down(MapClearVk) && DateTime.UtcNow >= _nextMapClearToggleAt)
-        {
-            _nextMapClearToggleAt = DateTime.UtcNow.AddMilliseconds(300);
-            ToggleMapClear();
-        }
-        // F11 farm loop (debounced): clear the area → portal → town waypoint → fresh instance → repeat.
-        if (Down(FarmLoopVk) && DateTime.UtcNow >= _nextFarmToggleAt)
-        {
-            _nextFarmToggleAt = DateTime.UtcNow.AddMilliseconds(300);
-            ToggleFarmLoop();
-        }
-        // F5 master kill-switch for path move (debounced). Not writable via the dashboard.
-        if (Down(PathMoveVk) && DateTime.UtcNow >= _nextMoveToggleAt)
-        {
-            _nextMoveToggleAt = DateTime.UtcNow.AddMilliseconds(300);
-            TogglePathMove();
-        }
+        // Esc closes the price-check panel (the game closes its inventory on the same key — both go away).
+        if (_pcView is not null && Down(0x1B) && GameFocused()) _pcClose = true;
         // F9 quits the overlay (besides the tray-icon Exit).
         if (Down(0x78)) { Console.WriteLine("\nF9 — exiting."); RequestShutdown(); }
 
         // F12 opens the web dashboard in the default browser — only while PoE2 is the foreground
         // window (debounced). Purely launches a browser; sends nothing to the game.
         if (Down(0x7B) && DateTime.UtcNow >= _nextBrowserAt
-            && _gameHwnd != 0 && GameHost.GetForegroundWindow() == _gameHwnd)
+            && GameFocused())
         {
             _nextBrowserAt = DateTime.UtcNow.AddMilliseconds(800);
             OpenDashboard();
         }
 
-        // F6: while quest follow is on, cycle a SINGLE pinned quest target (last press wins).
-        // Otherwise add the nearest not-yet-selected landmark. F7 clears selection + pin.
+        // F6 adds the nearest not-yet-selected landmark; F7 clears the selection.
         if (DateTime.UtcNow >= _nextPathKeyAt)
         {
             if (Down(AddNearestVk))
@@ -461,67 +399,6 @@ public sealed partial class RadarApp
         catch (Exception ex) { Console.Error.WriteLine($"Open dashboard failed: {ex.Message}"); }
     }
 
-    private static bool Down(int vk) => GameHost.IsKeyDown(vk);
-
-    // ── Arm-bit toggles shared by the F-key hotkeys and the INSERT menu (never the HTTP API). ──
-    private void ToggleAutoFlask()
-    {
-        _autoFlask = !_autoFlask;
-        _settings.AutoFlaskEnabled = _autoFlask;   // persist so the choice survives a restart
-        _settings.Save();
-        Console.WriteLine($"\nAuto-flask: {(_autoFlask ? "ON" : "OFF")}");
-    }
-
-    private void ToggleCombatAssist()
-    {
-        _combatAssist = !_combatAssist;
-        _settings.CombatAssistEnabled = _combatAssist;
-        _settings.Save();
-        Console.WriteLine($"\nCombat assist: {(_combatAssist ? "ON" : "OFF")}");
-    }
-
-    private void ToggleBot()
-    {
-        _botEnabled = !_botEnabled;
-        _questFollow = _botEnabled && !_mapClear;
-        _settings.BotEnabled = _botEnabled;
-        _settings.QuestFollowEnabled = _botEnabled;
-        _settings.Save();
-        _botNote = _botEnabled ? "armed" : "OFF (F3)";
-        _questFollowNote = _questFollow ? "armed" : (_botEnabled ? "paused (clear)" : "OFF (F3)");
-        if (_questFollow) PinLastSelection();
-        else
-        {
-            _questPinId = null;
-            if (!_mapClear) { _questFollowId = null; _questFollowHasGrid = false; }
-        }
-        _moveNote = MoveArmed ? "armed" : "OFF (F5)";
-        Console.WriteLine($"\nBot (quest follow): {(_botEnabled ? "ON" : "OFF")}");
-    }
-
-    private void ToggleMapClear()
-    {
-        _mapClear = !_mapClear;
-        _questFollow = _botEnabled && !_mapClear;
-        _settings.MapClearEnabled = _mapClear;
-        _settings.Save();
-        _mapClearNote = _mapClear ? "armed" : "OFF (F2)";
-        _questFollowNote = _questFollow ? "armed" : (_botEnabled ? "paused (clear)" : "OFF (F3)");
-        _questFollowId = null;
-        _questFollowHasGrid = false;
-        if (_questFollow) PinLastSelection();
-        else _questPinId = null;
-        _moveNote = MoveArmed ? "armed" : "OFF (F5)";
-        Console.WriteLine($"\nMap clear: {(_mapClear ? "ON" : "OFF")}");
-    }
-
-    private void TogglePathMove()
-    {
-        _moveEnabled = !_moveEnabled;
-        if (!MoveArmed) ReleaseHeldKeys();
-        _settings.MoveEnabled = _moveEnabled;
-        _settings.Save();
-        _moveNote = MoveArmed ? "armed" : "OFF (F5)";
-        Console.WriteLine($"\nPath move: {(_moveEnabled ? "ON" : "OFF")}");
-    }
+    /// <summary>Render-thread key check through the per-frame memo (see <see cref="IsDownMemo"/>).</summary>
+    private bool Down(int vk) => IsDownMemo(vk);
 }

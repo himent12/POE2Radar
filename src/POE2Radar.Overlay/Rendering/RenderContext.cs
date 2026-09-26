@@ -79,7 +79,8 @@ public readonly record struct LootTagLabel(float X, float Y, float W, float H, s
 /// cref="H"/> is the game tooltip's content box; the renderer draws a single-line styled bar aligned to its
 /// width, just below its bottom edge (snapping above the top when near the screen bottom). <see cref="Text"/>
 /// is the value (stacks include the "(N × unit)" breakdown). Border/emphasis when <see cref="Highlight"/>.</summary>
-public readonly record struct HoverPriceLabel(float X, float Y, float W, float H, string Text, string Sub, bool Highlight);
+public readonly record struct HoverPriceLabel(float X, float Y, float W, float H, string Text, string Sub, bool Highlight,
+    bool Danger = false);
 
 /// <summary>One row of the Currency Exchange order-book ladder, aggregated at world rate in RadarApp.
 /// <see cref="Ratio"/> is Get/Give for the row; <see cref="Stock"/> is its listed count; <see cref="CumStock"/>
@@ -233,101 +234,98 @@ public sealed record RenderContext(
     float ExchangePanelX = 0f,         // exchange-window screen rect top-left (pin anchor; 0 = default corner)
     float ExchangePanelY = 0f,
     bool ExchangeCollapsed = false,    // card shrunk to a small "expand" tab
-    // Live bot/flask arm bits + notes for the on-overlay status panel.
+    // Live arm bits + notes for the on-overlay status strip.
     bool AutoFlask = false,
-    bool BotEnabled = false,
-    string BotNote = "",
-    bool CombatAssist = false,
-    string CombatNote = "",
-    bool QuestFollow = false,
-    string QuestFollowNote = "",
-    bool PathMove = false,
-    string PathMoveNote = "",
-    bool MapClear = false,
-    string MapClearNote = "",
-    bool FarmLoop = false,
-    string FarmNote = "",
-    // ── INSERT in-game menu (toggles + live tunables). Null = closed. ──
+    IReadOnlyList<StatusChip>? Status = null,
+    // Short transient message at the top of the screen (hotkey feedback); null = none.
+    string? Toast = null,
+    // Price-check panel (hotkey on a hovered item); null = closed.
+    PriceCheckView? PriceCheck = null,
+    // Trade requests from Client.txt (formatted cards) + where the panel sits (fractions of the window).
+    IReadOnlyList<TradeCard>? Trades = null,
+    float TradePanelX = 0.40f,
+    float TradePanelY = 0.08f,
+    // Cursor in client pixels while a menu is open (hover highlights); negative = unknown.
+    float MouseX = -1f,
+    float MouseY = -1f,
+    // Settings.ReduceMotion: menus drawn without ambient or entrance animation.
+    bool ReduceMotion = false,
+    // ── INSERT in-game menu (control center). Null = closed. ──
     InsMenuData? InsMenu = null);
 
-/// <summary>Everything the INSERT menu draws/edits, snapshotted per frame from RadarSettings + live state.</summary>
+/// <summary>The price-check panel, fully formatted on the world thread. <see cref="RarityRgb"/> is the PoE
+/// rarity colour for the name; <see cref="Points"/> are listing prices (exalted, per unit) for the spread strip;
+/// <see cref="EstimateEx"/> places the poe.ninja marker on it; <see cref="Tier"/> is <see cref="Pricing.PriceCheck.Tier"/>.</summary>
+public sealed record PriceCheckView(
+    float AnchorX, float AnchorY, float AnchorW, float AnchorH,
+    string Name, string BaseLine, uint RarityRgb, IReadOnlyList<string> Mods,
+    string? Estimate, string EstimateSub,
+    string Status, string Note, bool Loading, string? Error,
+    IReadOnlyList<PriceCheckRow> Rows, IReadOnlyList<double> Points, double? EstimateEx,
+    string? MinText, string? MedianText, string Verdict, string? Url, string League, string Tier = "Unknown");
+
+public readonly record struct PriceCheckRow(string Price, string Value, string Seller, string Age);
+
+/// <summary>One trade-panel card, pre-formatted on the render thread only when the session store changes.
+/// <see cref="State"/> is the TradeState name; <see cref="LastWhisper"/> the counterpart's latest extra message.</summary>
+public sealed record TradeCard(int Id, bool Incoming, string Player, string Item, string Price, string Value,
+    string Where, string State, bool InArea, string Age, int Repeats, string LastWhisper);
+
+/// <summary>One row of the on-overlay status strip (module name, armed, short note, hotkey).</summary>
+public readonly record struct StatusChip(string Name, bool On, string Note, string Hotkey);
+
+/// <summary>Everything the INSERT menu draws, snapshotted per frame. <see cref="Settings"/> is the live
+/// settings object — the menu only READS it (writes go through RadarApp's click dispatch), so a racy read
+/// of a field the HTTP thread is changing just shows the old or new value for one frame.</summary>
 public sealed record InsMenuData(
     int Tab,
-    float CombatRange,
-    float CombatEngageRange,
-    float CombatFleeHpPct,
-    float CombatFleeRecoverPct,
-    float CombatFleeDistance,
-    int CombatStallMs,
-    int MapClearStampRadius,
-    float MapClearAggroRange,
-    int MapClearStuckMs,
-    string MoveMethod,
-    float MoveArriveRadius,
-    float LifeThresholdPct,
-    float ManaThresholdPct,
-    int SkillCount,
+    RadarSettings Settings,
     int Fps,
     float WorldMs,
     float RenderMs,
     string CharName,
-    int VisitedCells,
-    IReadOnlyList<CombatSkill>? Skills = null,
-    string TargetMode = "Nearest",
-    string RotationMode = "RoundRobin",
-    float KeepDistance = 0f,
-    int MoveCooldownMs = 80,
-    int HostilesNear = 0,
-    bool MoveRunEnabled = true,
-    int MoveRunKey = 0x20,
-    float MoveLookAhead = 12f,
-    bool MoveDiagonals = true,
-    float MoveAxisRotationDeg = 0f,
-    bool PlayInBackground = false,
-    string? NestedInput = null,
-    bool AutoRespawn = true,
-    string RespawnNote = "",
-    bool EventEssence = true,
-    bool EventStrongbox = true,
-    bool EventShrine = true,
-    bool EventBreach = true,
-    bool EventRitual = false,
-    bool EventChests = false,
-    bool EventClickStalled = true,
-    float EventRange = 120f);
+    string Version,
+    IReadOnlyList<StatusChip> Status,
+    bool BuffKeeperArmed = false,
+    IReadOnlyList<Poe2Live.BuffInfo>? Buffs = null,
+    IReadOnlyList<string>? BuffNotes = null,
+    string ChatNote = "",
+    TradeMenuInfo? Trade = null);
 
-/// <summary>Numeric tunables the INSERT menu exposes as sliders: range + step + display, shared by the
-/// renderer (fill fraction) and RadarApp (click → value). Keys match the HTTP settings names.</summary>
-public readonly record struct InsSliderSpec(string Key, float Min, float Max, float Step, string Unit, string? ZeroLabel = null)
+/// <summary>INSERT-menu trade section: log status, tracker totals (label → "sold · bought · profit"), recent
+/// completed trades (one pre-formatted line each). Built at most once a second while the tab is open.</summary>
+public sealed record TradeMenuInfo(string LogStatus, bool LogFound, IReadOnlyList<(string Label, string Value)> Stats,
+    IReadOnlyList<string> Recent);
+
+/// <summary>Numeric tunables the INSERT menu exposes as sliders: range + step + display + the settings
+/// accessor, shared by the renderer (fill fraction / label) and RadarApp (click → clamped value → persist).
+/// Keys match the HTTP settings names.</summary>
+public readonly record struct InsSliderSpec(string Key, float Min, float Max, float Step, string Unit,
+    Func<RadarSettings, float> Get, Action<RadarSettings, float> Set, string? ZeroLabel = null)
 {
     public float Clamp(float v) => Math.Clamp(MathF.Round(v / Step) * Step, Min, Max);
     public float Fraction(float v) => Max > Min ? Math.Clamp((v - Min) / (Max - Min), 0f, 1f) : 0f;
     public string Format(float v)
     {
         if (ZeroLabel is not null && v <= 0f) return ZeroLabel;
-        var s = Step >= 1f ? $"{v:0}" : $"{v:0.#}";
+        var s = Step >= 1f ? $"{v:0}" : Step >= 0.1f ? $"{v:0.#}" : $"{v:0.00}";
         return Unit == "ms" && v >= 1000f ? $"{v / 1000f:0.#}s" : s + Unit;
     }
 
-    public static readonly IReadOnlyDictionary<string, InsSliderSpec> All = new Dictionary<string, InsSliderSpec>(StringComparer.Ordinal)
+    private static InsSliderSpec S(string key, float min, float max, float step, string unit,
+        Func<RadarSettings, float> get, Action<RadarSettings, float> set, string? zero = null)
+        => new(key, min, max, step, unit, get, set, zero);
+
+    public static readonly IReadOnlyDictionary<string, InsSliderSpec> All = new[]
     {
-        ["combatRange"]          = new("combatRange", 1, 120, 1, ""),
-        ["combatEngageRange"]    = new("combatEngageRange", 1, 120, 1, ""),
-        ["combatKeepDistance"]   = new("combatKeepDistance", 0, 60, 1, "", "melee"),
-        ["combatFleeHpPct"]      = new("combatFleeHpPct", 0, 90, 1, "%", "never"),
-        ["combatFleeRecoverPct"] = new("combatFleeRecoverPct", 10, 100, 1, "%"),
-        ["combatFleeDistance"]   = new("combatFleeDistance", 5, 80, 1, ""),
-        ["combatStallMs"]        = new("combatStallMs", 0, 20000, 500, "ms", "never"),
-        ["mapClearStampRadius"]  = new("mapClearStampRadius", 8, 48, 1, ""),
-        ["mapClearAggroRange"]   = new("mapClearAggroRange", 0, 200, 5, "", "any"),
-        ["mapClearStuckMs"]      = new("mapClearStuckMs", 2000, 30000, 500, "ms"),
-        ["eventRange"]           = new("eventRange", 0, 300, 10, "", "any"),
-        ["eventUseRadius"]       = new("eventUseRadius", 1, 30, 1, ""),
-        ["moveArriveRadius"]     = new("moveArriveRadius", 0.5f, 12, 0.5f, ""),
-        ["moveCooldownMs"]       = new("moveCooldownMs", 20, 500, 10, "ms"),
-        ["moveLookAhead"]        = new("moveLookAhead", 2, 40, 1, ""),
-        ["moveAxisRotationDeg"]  = new("moveAxisRotationDeg", -180, 180, 15, "°"),
-        ["lifeThresholdPct"]     = new("lifeThresholdPct", 10, 95, 1, "%"),
-        ["manaThresholdPct"]     = new("manaThresholdPct", 5, 95, 1, "%"),
-    };
+        S("lifeThresholdPct", 10, 95, 1, "%", s => s.LifeThresholdPct, (s, v) => s.LifeThresholdPct = v),
+        S("esThresholdPct", 10, 95, 1, "%", s => s.EsThresholdPct, (s, v) => s.EsThresholdPct = v),
+        S("manaThresholdPct", 5, 95, 1, "%", s => s.ManaThresholdPct, (s, v) => s.ManaThresholdPct = v),
+        S("lifeCooldownMs", 250, 10000, 250, "ms", s => s.LifeCooldownMs, (s, v) => s.LifeCooldownMs = (int)v),
+        S("manaCooldownMs", 250, 10000, 250, "ms", s => s.ManaCooldownMs, (s, v) => s.ManaCooldownMs = (int)v),
+        S("fpsCap", 0, 360, 15, " Hz", s => s.FpsCap, (s, v) => s.FpsCap = (int)v, "auto"),
+        S("scaleMul", 0.5f, 2f, 0.05f, "×", s => s.ScaleMul, (s, v) => s.ScaleMul = v),
+        S("tradePanelX", 0f, 0.9f, 0.01f, "", s => s.Trade.PanelX, (s, v) => s.Trade.PanelX = v),
+        S("tradePanelY", 0f, 0.9f, 0.01f, "", s => s.Trade.PanelY, (s, v) => s.Trade.PanelY = v),
+    }.ToDictionary(x => x.Key, StringComparer.Ordinal);
 }

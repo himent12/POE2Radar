@@ -12,7 +12,10 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="Game\poe2_skill_catalog.json" />
+    <InternalsVisibleTo Include="POE2Radar.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <EmbeddedResource Include="Game\CustomLandmarks.json" />
     <EmbeddedResource Include="Game\entity_names.json" />
     <EmbeddedResource Include="Game\world_areas.json" />

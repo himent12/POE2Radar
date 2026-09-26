@@ -28,8 +28,9 @@ public sealed partial class OverlayRenderer
         // All the expensive per-entity decisions (rarity gate, rule resolve, colour parse) were done at
         // world rate in RadarApp.BuildHpSpecs; here we only project the LIVE position (refreshed this frame
         // so the bar tracks the moving mob) and fill. fill/border are pre-packed 0xAARRGGBB.
-        foreach (var t in bars)
+        for (var i = 0; i < bars.Count; i++)
         {
+            var t = bars[i];
             var w = t.World;
             var cw = w.X*m[3] + w.Y*m[7] + w.Z*m[11] + m[15];
             if (cw <= 0.0001f) continue;
@@ -64,8 +65,9 @@ public sealed partial class OverlayRenderer
     {
         if (ctx.CameraMatrix is not { } m || ctx.ItemLabels is not { Count: > 0 } labels) return;
         float W = ctx.WindowWidth, H = ctx.WindowHeight;
-        foreach (var it in labels)
+        for (var i = 0; i < labels.Count; i++)
         {
+            var it = labels[i];
             var w = it.World;
             var cw = w.X*m[3] + w.Y*m[7] + w.Z*m[11] + m[15];
             if (cw <= 0.0001f) continue;                       // behind the camera
@@ -79,14 +81,18 @@ public sealed partial class OverlayRenderer
             {
                 // UNIDENTIFIED unique: two stacked lines — resolved NAME over VALUE — on a backing panel
                 // (the game hides the unID name, so we reveal it). Border when high-value.
-                var text = $"{it.Name}\n{it.Value}";
                 var halfW = MathF.Max(48f, 4.5f * MathF.Max(it.Name.Length, it.Value.Length + 3));
                 const float halfH = 19f;
                 var panel = new RawRectF(sx - halfW, sy - halfH, sx + halfW, sy + halfH);
                 rt.FillRectangle(panel, _bPanel!);
                 if (it.Highlight) { _bStyle!.Color = ColItemHi; rt.DrawRectangle(panel, _bStyle, 2.5f); }
                 _bStyle!.Color = it.Highlight ? ColItemHi : ColItemText;
-                rt.DrawText(text, _tf!, new Rect(sx - halfW + 4f, sy - halfH + 2f, sx + halfW - 2f, sy + halfH - 1f),
+                // Two lines drawn separately: Skia doesn't lay out '\n' (the old "Name\nValue" string drew a
+                // missing-glyph box between the two on one line).
+                var lineH = DrawTarget.LineHeight(_tf!);
+                rt.DrawText(it.Name, _tf!, new Rect(sx - halfW + 4f, sy - halfH + 2f, sx + halfW - 2f, sy + halfH - 1f),
+                    _bStyle, DrawTextOptions.Clip);
+                rt.DrawText(it.Value, _tf!, new Rect(sx - halfW + 4f, sy - halfH + 2f + lineH, sx + halfW - 2f, sy + halfH - 1f),
                     _bStyle, DrawTextOptions.Clip);
             }
             else
@@ -112,8 +118,9 @@ public sealed partial class OverlayRenderer
     {
         if (ctx.RuneLabels is not { Count: > 0 } labels) return;
         const float gap = 8f, boxW = 96f, boxH = 22f;
-        foreach (var r in labels)
+        for (var i = 0; i < labels.Count; i++)
         {
+            var r = labels[i];
             var lx = r.X + r.W + gap;             // just past the row's right edge
             var cy = r.Y + r.H * 0.5f;            // vertically centered on the row
             var box = new RawRectF(lx, cy - boxH * 0.5f, lx + boxW, cy + boxH * 0.5f);
@@ -131,8 +138,9 @@ public sealed partial class OverlayRenderer
     {
         if (ctx.RitualRewards is not { Count: > 0 } labels) return;
         const float boxH = 20f;
-        foreach (var r in labels)
+        for (var i = 0; i < labels.Count; i++)
         {
+            var r = labels[i];
             var boxW = MathF.Max(44f, 7.5f * (r.Text.Length + 1));
             var cx = r.X + r.W * 0.5f;
             var top = r.Y + r.H - boxH;            // sit on the tile's bottom edge
@@ -154,8 +162,9 @@ public sealed partial class OverlayRenderer
     {
         if (ctx.LootTags is not { Count: > 0 } labels) return;
         const float gap = 6f, boxH = 18f;
-        foreach (var t in labels)
+        for (var i = 0; i < labels.Count; i++)
         {
+            var t = labels[i];
             var lx = t.X + t.W + gap;             // just past the tag's right edge
             var cy = t.Y + t.H * 0.5f;            // vertically centered on the tag
             var boxW = MathF.Max(40f, 7.5f * (t.Value.Length + 1));
@@ -171,32 +180,39 @@ public sealed partial class OverlayRenderer
     /// <summary>Price bar for the item under the cursor: a single-line styled bar aligned to the game
     /// tooltip's content box (same left + width), drawn just below the tooltip. If the tooltip sits near the
     /// bottom of the screen the bar snaps to just ABOVE its top edge instead. Border/emphasis when highlighted.</summary>
+    internal void RenderHoverPricePreview(RenderContext ctx)
+    {
+        EnsureResources();
+        var rt = _window.RenderTarget;
+        rt.BeginDraw();
+        rt.Clear(new Color4(0.12f, 0.10f, 0.09f, 1f));
+        DrawHoverPrice(rt, ctx);
+        rt.EndDraw();
+    }
+
+    private readonly HoverTextLayout _hoverTextLayout = new();
+
     private void DrawHoverPrice(DrawTarget rt, RenderContext ctx)
     {
         if (ctx.HoverPrice is not { } hp) return;
-        const float rowH = 17f, gap = 3f, pad = 7f, charW = 7.3f;  // charW ≈ Consolas 12px advance
-        var twoRow = !string.IsNullOrEmpty(hp.Sub);
-        var chipH = (twoRow ? 2f * rowH : rowH) + 6f;
-        // Chip width fits the longer line (monospace ⇒ width ≈ char count); wide enough for all the text.
-        var maxLen = Math.Max(hp.Text.Length, hp.Sub.Length);
-        var w = MathF.Max(56f, maxLen * charW + 2f * pad);
-
-        // Anchor to the item icon: centre the chip on the slot, just below it; flip above if no room below,
-        // and clamp inside the screen so it never runs off an edge.
-        var x = hp.X + hp.W * 0.5f - w * 0.5f;
-        x = Math.Clamp(x, 2f, ctx.WindowWidth - w - 2f);
+        if (ctx.WindowWidth < 32 || ctx.WindowHeight < 32) return;
+        const float rowH = 17f, gap = 5f, pad = 8f, charW = 7.3f;
+        var maxChars = Math.Max(1, (int)((Math.Min(560, ctx.WindowWidth - 4) - 2 * pad) / charW));
+        var layout = _hoverTextLayout.Get(hp.Text, hp.Sub, maxChars);
+        var rows = layout.Rows;
+        var chipH = Math.Min(ctx.WindowHeight - 4, rows.Length * rowH + 8f);
+        var w = Math.Min(ctx.WindowWidth - 4, Math.Max(56, layout.MaxLength * charW + 2 * pad));
+        var x = Math.Clamp(hp.X + hp.W * 0.5f - w * 0.5f, 2, Math.Max(2, ctx.WindowWidth - w - 2));
         var y = hp.Y + hp.H + gap;
-        if (y + chipH > ctx.WindowHeight - 2f) y = hp.Y - chipH - gap;
-        if (y < 2f) y = 2f;
-
+        if (y + chipH > ctx.WindowHeight - 2) y = hp.Y - chipH - gap;
+        y = Math.Clamp(y, 2, Math.Max(2, ctx.WindowHeight - chipH - 2));
         var box = new RawRectF(x, y, x + w, y + chipH);
         rt.FillRectangle(box, _bPanel!);
-        _bStyle!.Color = hp.Highlight ? ColItemHi : ColItemText;
-        rt.DrawRectangle(box, _bStyle, hp.Highlight ? 2f : 1f);
-        // Row 1: stack total (emphasis colour). Row 2 (stacks only): per-unit, in dimmer white.
-        rt.DrawText(hp.Text, _tf!, new Rect(x + pad, y + 3f, x + w - pad, y + rowH + 3f), _bStyle, DrawTextOptions.Clip);
-        if (twoRow)
-            rt.DrawText(hp.Sub, _tf!, new Rect(x + pad, y + rowH + 3f, x + w - pad, y + chipH - 2f), _bText!, DrawTextOptions.Clip);
+        _bStyle!.Color = hp.Danger ? ColDanger : hp.Highlight ? ColItemHi : ColItemText;
+        rt.DrawRectangle(box, _bStyle, hp.Highlight || hp.Danger ? 2f : 1f);
+        for (var i = 0; i < rows.Length && (i + 1) * rowH + 4 <= chipH; i++)
+            rt.DrawText(rows[i], _tf!, new Rect(x + pad, y + 4 + i * rowH,
+                x + w - pad, y + 4 + (i + 1) * rowH), i == 0 ? _bStyle : _bText!, DrawTextOptions.Clip);
     }
 
     /// <summary>Unpack a 0xAARRGGBB color (precomputed in RadarApp.BuildHpSpecs) to a Color4 — no string
@@ -207,18 +223,51 @@ public sealed partial class OverlayRenderer
     /// <summary>Runeshape-monolith map markers: a value-coloured ring with the hole count N inside, and a
     /// "{best} ex · {reward}" label to the right. Drawn on the big map (grid → screen via the same
     /// projection as entity dots / landmarks). Augments the generic POI dot with the monolith's value.</summary>
+    // Per-marker display strings, formatted once per (immutable, world-rate-published) MonolithMarker instead
+    // of re-interpolated every render frame. Keyed by reference; entries die with their marker.
+    private sealed class MonoText
+    {
+        public required string Holes, MapLabel, PanelHeader;
+        public required string[] RewardLines;   // the first 3 priced rewards, pre-formatted
+    }
+
+    private readonly System.Runtime.CompilerServices.ConditionalWeakTable<MonolithMarker, MonoText> _monoText = new();
+
+    private MonoText TextFor(MonolithMarker m) => _monoText.GetValue(m, static m =>
+    {
+        var lines = new List<string>(3);
+        foreach (var r in m.Rewards)
+        {
+            if (r.Ex <= 0 || lines.Count >= 3) continue;
+            lines.Add($"  {r.Ex,4:F0}  {r.Name}");
+        }
+        return new MonoText
+        {
+            Holes = m.Holes.ToString(),
+            MapLabel = m.BestEx > 0 ? $"{m.BestEx:F0}ex · {m.BestName}" : $"{m.AnchorName} {m.Holes}h",
+            PanelHeader = m.BestEx > 0 ? $"{m.BestEx:F0}ex · {m.AnchorName} {m.Holes}h" : $"{m.AnchorName} {m.Holes}h",
+            RewardLines = lines.ToArray(),
+        };
+    });
+
+    // The panel's sorted top-6 + title strings, recomputed only when the published marker list changes.
+    private IReadOnlyList<MonolithMarker>? _monoPanelSrc;
+    private List<MonolithMarker> _monoPanelList = new();
+    private string _monoTitleOpen = "", _monoTitleCollapsed = "";
+
     private void DrawMonoliths(DrawTarget rt, RenderContext ctx, NumVec2 player, NumVec2 center, float scale)
     {
         if (ctx.Monoliths is not { Count: > 0 } monos) return;
-        foreach (var m in monos)
+        for (var i = 0; i < monos.Count; i++)
         {
+            var m = monos[i];
             var p = Project(new NumVec2(m.Grid.X, m.Grid.Y), player, center, scale);
             _bStyle!.Color = ColorFromU(m.Color);
             rt.DrawEllipse(new Ellipse(p, 9f, 9f), _bStyle, 2.4f);          // value-coloured ring
-            rt.DrawText(m.Holes.ToString(), _tf!,                           // N badge (white) inside the ring
+            var txt = TextFor(m);
+            rt.DrawText(txt.Holes, _tf!,                                    // N badge (white) inside the ring
                 new Rect(p.X - 4f, p.Y - 8f, p.X + 10f, p.Y + 8f), _bText!, DrawTextOptions.Clip);
-            var label = m.BestEx > 0 ? $"{m.BestEx:F0}ex · {m.BestName}" : $"{m.AnchorName} {m.Holes}h";
-            rt.DrawText(label, _tf!, new Rect(p.X + 13f, p.Y - 8f, p.X + 340f, p.Y + 9f), _bStyle, DrawTextOptions.Clip);
+            rt.DrawText(txt.MapLabel, _tf!, new Rect(p.X + 13f, p.Y - 8f, p.X + 340f, p.Y + 9f), _bStyle, DrawTextOptions.Clip);
         }
     }
 
@@ -235,44 +284,44 @@ public sealed partial class OverlayRenderer
         // the collapsed state (persisted by RadarApp). Registered after DrawNavMenu's rect clear, so it
         // survives and is hit-tested for both clicks and the click-through gate.
         var collapsed = ctx.MonolithPanelCollapsed;
-        var caret = collapsed ? "> " : "v ";
+        if (!ReferenceEquals(monos, _monoPanelSrc))
+        {
+            _monoPanelSrc = monos;
+            _monoPanelList = monos.OrderByDescending(m => m.BestEx).Take(6).ToList();
+            _monoTitleOpen = $"v Monoliths ({monos.Count})";
+            _monoTitleCollapsed = $"> Monoliths ({monos.Count})";
+        }
 
         if (collapsed)
         {
             // Collapsed: just the clickable header bar, keeping the count visible for quick reference.
             float ch = pad * 2f + titleH;
             rt.FillRectangle(new RawRectF(x, y, x + w, y + ch), _bPanel!);
-            rt.DrawText($"{caret}Monoliths ({monos.Count})", _tf!, new Rect(x + pad, y + pad, x + w - pad, y + pad + titleH), _bText!, DrawTextOptions.Clip);
+            rt.DrawText(_monoTitleCollapsed, _tf!, new Rect(x + pad, y + pad, x + w - pad, y + pad + titleH), _bText!, DrawTextOptions.Clip);
             _legendRowRects.Add((new RawRectF(x, y, x + w, y + ch), "mono-collapse"));
             return;
         }
 
-        var list = monos.OrderByDescending(m => m.BestEx).Take(6).ToList();
+        var list = _monoPanelList;
 
         float h = pad * 2f + titleH;
-        foreach (var m in list)
-        {
-            var rows = 0; foreach (var r in m.Rewards) if (r.Ex > 0 && rows < 3) rows++;
-            h += headH + lineH * rows;
-        }
+        foreach (var m in list) h += headH + lineH * TextFor(m).RewardLines.Length;
         rt.FillRectangle(new RawRectF(x, y, x + w, y + h), _bPanel!);
 
         float cy = y + pad;
-        rt.DrawText($"{caret}Monoliths ({monos.Count})", _tf!, new Rect(x + pad, cy, x + w - pad, cy + titleH), _bText!, DrawTextOptions.Clip);
+        rt.DrawText(_monoTitleOpen, _tf!, new Rect(x + pad, cy, x + w - pad, cy + titleH), _bText!, DrawTextOptions.Clip);
         _legendRowRects.Add((new RawRectF(x, cy, x + w, cy + titleH), "mono-collapse"));
         cy += titleH;
         foreach (var m in list)
         {
             _bStyle!.Color = ColorFromU(m.Color);
-            var hdr = m.BestEx > 0 ? $"{m.BestEx:F0}ex · {m.AnchorName} {m.Holes}h" : $"{m.AnchorName} {m.Holes}h";
-            rt.DrawText(hdr, _tf!, new Rect(x + pad, cy, x + w - pad, cy + headH), _bStyle, DrawTextOptions.Clip);
+            var txt = TextFor(m);
+            rt.DrawText(txt.PanelHeader, _tf!, new Rect(x + pad, cy, x + w - pad, cy + headH), _bStyle, DrawTextOptions.Clip);
             cy += headH;
-            var shown = 0;
-            foreach (var r in m.Rewards)
+            foreach (var line in txt.RewardLines)
             {
-                if (r.Ex <= 0 || shown >= 3) continue;
-                rt.DrawText($"  {r.Ex,4:F0}  {r.Name}", _tf!, new Rect(x + pad, cy, x + w - pad, cy + lineH), _bText!, DrawTextOptions.Clip);
-                cy += lineH; shown++;
+                rt.DrawText(line, _tf!, new Rect(x + pad, cy, x + w - pad, cy + lineH), _bText!, DrawTextOptions.Clip);
+                cy += lineH;
             }
         }
     }

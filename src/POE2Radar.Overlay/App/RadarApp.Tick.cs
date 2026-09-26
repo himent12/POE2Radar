@@ -58,7 +58,9 @@ public sealed partial class RadarApp
     private void Tick()
     {
         var t0 = System.Diagnostics.Stopwatch.GetTimestamp();   // no per-frame Stopwatch allocation
+        _keyMemo.Clear();   // one key-state read per vk per frame across all hotkey handlers
         HandleHotkeys();
+        HandleMacroHotkeys();
 
         var inGame = _liveRender.TryResolve(out var inGameState, out var areaInstance, out var localPlayer);
         var player = NumVec2.Zero;
@@ -90,12 +92,10 @@ public sealed partial class RadarApp
             map = _liveRender.ReadMap(inGameState, areaInstance);
             // Player name reads a StdWString (allocates a string) — read it only when the local-player
             // pointer changes (i.e. once per session), not every render frame.
-            if (localPlayer != _charNameFor || areaInstance != _charIdentityArea || _charIdentity.Length == 0)
+            if (localPlayer != _charNameFor || _charName.Length == 0)
             {
-                _charNameFor = localPlayer; _charIdentityArea = areaInstance;
+                _charNameFor = localPlayer;
                 _charName = _liveRender.PlayerName(localPlayer);
-                var league = _liveRender.LeagueName(areaInstance);
-                _charIdentity = _charName.Length > 0 && league.Length > 0 ? league + ":" + _charName : "";
             }
             _cameraMatrix = _liveRender.CameraMatrix(inGameState);
             TickAutoFlask(localPlayer);
@@ -130,10 +130,11 @@ public sealed partial class RadarApp
                 _lootTagFrame.Add(new LootTagLabel(rx, ry, rw, rh, s.Value, s.Highlight));
             }
 
-            // Hover price bar: the world scan resolved the tooltip's content box (aligned + placed by the
-            // renderer). Box positions are static while a tooltip is up, so no per-frame re-read is needed.
-            _hoverFrame = _hoverPrice is { Spec: var hs }
-                ? new HoverPriceLabel(hs.BoxX, hs.BoxY, hs.BoxW, hs.BoxH, hs.Text, hs.Sub, hs.Highlight)
+            // Hover market panel: the throttled world scan publishes the item slot (or ground cursor)
+            // anchor and an immutable estimate; no network requests or UI-tree walk on the render thread.
+            _hoverFrame = _hoverPrice is { Spec: var hs } hover
+                && hover.AreaHash == _areaHash && DateTime.UtcNow - hover.UpdatedUtc < TimeSpan.FromMilliseconds(500)
+                ? new HoverPriceLabel(hs.BoxX, hs.BoxY, hs.BoxW, hs.BoxH, hs.Text, hs.Sub, hs.Highlight, hs.Danger)
                 : null;
 
             // Atlas marks/routes: re-read each node's live RelativePos this frame so the rings + route lines
@@ -190,66 +191,26 @@ public sealed partial class RadarApp
         var monoliths = worldFresh && mr.AreaHash == _areaHash
             ? mr.Markers : (IReadOnlyList<MonolithMarker>)Array.Empty<MonolithMarker>();
 
-        var realFocused = _gameHwnd != 0 && GameHost.GetForegroundWindow() == _gameHwnd;
-        // Background play: the bot logic treats the game as focused; GameHost routes input to the window.
-        GameHost.SetInputTarget(_gameHwnd, _settings.PlayInBackground);
-        GameHost.SetInputDisplay(_settings.PlayInBackground ? _settings.InputDisplay : null);
-        var focused = realFocused || (_settings.PlayInBackground && _gameHwnd != 0);
-        // Dead: no combat / movement / interact; auto-respawn owns the input until we are alive again.
-        if (TickRespawn(inGame, focused, inGameState)) focused = false;
-        // On any real focus flip drop held keys so they are pressed fresh through the (possibly new) route.
-        if (realFocused != _lastRealFocused) ReleaseHeldKeys();
-        _lastRealFocused = realFocused;
-        var combatEntities = worldFresh ? snap.Entities : (IReadOnlyList<Poe2Live.EntityDot>)Array.Empty<Poe2Live.EntityDot>();
-        _combatWatch.StallAfter = _settings.CombatStallMs <= 0 ? TimeSpan.Zero : TimeSpan.FromMilliseconds(Math.Max(500, _settings.CombatStallMs));
-        _combatWatch.IgnoreFor = TimeSpan.FromMilliseconds(Math.Max(1000, _settings.CombatIgnoreMs));
-        _combatWatch.FleeBelowPct = _settings.CombatFleeHpPct;
-        _combatWatch.FleeRecoverPct = _settings.CombatFleeRecoverPct;
-        _combatWatch.KeepDistance = _settings.CombatKeepDistance;
-        if (_bossCombat.TargetId != 0) _combatWatch.Reset();
-        var watch = CombatArmed && inGame
-            ? _combatWatch.Update(combatEntities, player, _settings.CombatEngageRange, DateTime.UtcNow, _hpPct, _settings.CombatRange)
-            : default;
-        UpdateBoss(inGame && focused && !_playerDead, worldFresh, player, localPlayer, combatEntities, terrain);
-        if (_bossDecision.Active) watch = default; // Boss phase loss must never enter the normal stall blacklist.
-        var inCombat = watch.PauseMove;
-        _inCombat = inCombat || watch.Flee || _bossDecision.Active;
-        TickCombatAssist(inGame && worldFresh, focused, player, combatEntities, playerWorld, watch, localPlayer);
-        // Low HP: the mover runs the flee point instead of the route (attacks are held above).
-        IReadOnlyList<SelectedPath> movePaths = selectedPaths;
-        if ((watch.Flee || watch.Kite) && CombatWatch.TryFleePoint(combatEntities, player, _settings.CombatRange,
-                watch.Flee ? _settings.CombatFleeDistance : Math.Max(4f, _settings.CombatKeepDistance * 0.6f),
-                terrain?.Walkable, terrain?.Width ?? 0, terrain?.Height ?? 0, out var fleeTo))
-        {
-            movePaths = new[] { new SelectedPath(0, new List<(int x, int y)> { ((int)MathF.Round(fleeTo.X), (int)MathF.Round(fleeTo.Y)) }) };
-        }
-        // A running combo pauses movement (and kiting) — a roll or run press mid-cast cancels the cast.
-        var bossRoll = TickBossDodge(inGame && focused && !_playerDead && worldFresh && CombatArmed,
-            localPlayer, player, playerWorld);
-        var bossMove = _bossDecision.Active && _combatBindingSafe && !_comboBusy && !bossRoll
-            && _bossDecision.Intent == BossCombat.Intent.Reposition;
-        if (bossMove)
-            movePaths = new[] { new SelectedPath(0, new List<(int x, int y)> {
-                ((int)MathF.Round(_bossDecision.Destination.X), (int)MathF.Round(_bossDecision.Destination.Y)) }) };
-        TickPathMove(inGame && worldFresh, focused, player, movePaths, playerWorld,
-            inCombat || _comboBusy || bossRoll || (_bossDecision.Active && !bossMove),
-            bossMove || (watch.Flee || watch.Kite) && !_comboBusy, bossMove);
-        TickQuestUse(inGame && worldFresh, focused, player, playerWorld, inCombat || _comboBusy || _bossDecision.Active || bossRoll);
-        TickEventUse(inGame && worldFresh, focused, player, playerWorld, inCombat || _comboBusy || _bossDecision.Active || bossRoll);
-        TickFarmInput(inGameState, inGame, focused);
-
         _state = new RadarState(inGame, snap.AreaHash, snap.AreaLevel, map.IsVisible, map.Zoom, player,
             snap.Entities, snap.Landmarks, _hpPct, _manaPct, _esPct, _autoFlask, _flaskNote,
             snap.AreaCode, _charName, snap.CharLevel, _worldMs, _renderMs, mr.Markers, _fps,
             ex.Open, ex.Summary, ex.Offered, ex.Wanted, ex.HaveQty, ex.FillNote,
-            CombatArmed, _combatNote, _questFollow, _questFollowNote,
-            MoveArmed, _moveNote, _botEnabled, _botNote, _mapClear || _farmLoop, _mapClearNote,
-            _farmLoop, _farmNote);
+            _buffKeeperArmed, _buffNote, OpenTradeCount(), _chat.LastResult);
 
-        var realActive = _gameHwnd != 0 && GameHost.GetForegroundWindow() == _gameHwnd;
+        var realActive = GameFocused();
+        _inGameNow = inGame;
+        TickBuffKeeper(inGame, localPlayer, realActive, entities, player, snap.AreaCode);
+        var status = BuildStatusChips();
         // "Always show" draws the overlay even when PoE2 isn't focused (for dashboard calibration).
         var drawActive = realActive || _settings.AlwaysShowOverlay;
         var atlasProj = AtlasProjection(); // resolution-correct (auto from window height) or manual calib
+        // Cursor in client pixels for the menus' hover highlights (only read while one is showing).
+        var mouse = (X: -1f, Y: -1f);
+        if (drawActive && (_insMenuOpen || _pcView is not null) && GameHost.GetCursorPos(out var cursor))
+        {
+            var (mx, my) = ScreenToClientPoint(cursor);
+            mouse = (mx, my);
+        }
         var ctx = new RenderContext(
             InGame: inGame,
             Active: drawActive,
@@ -342,62 +303,29 @@ public sealed partial class RadarApp
             ExchangePanelY: ex.Open ? ex.PanelY : 0f,
             ExchangeCollapsed: ex.Open && ex.Collapsed,
             AutoFlask: _autoFlask,
-            BotEnabled: _botEnabled,
-            BotNote: _botNote,
-            CombatAssist: CombatArmed,
-            CombatNote: _combatNote,
-            QuestFollow: _questFollow,
-            QuestFollowNote: _questFollowNote,
-            PathMove: MoveArmed,
-            PathMoveNote: _moveNote,
-            MapClear: _mapClear,
-            MapClearNote: _mapClearNote,
-            FarmLoop: _farmLoop,
-            FarmNote: _farmNote,
+            Status: status,
+            PriceCheck: inGame ? _pcView : null,
+            Toast: _toast is { } toast && toast.Until > DateTime.UtcNow ? toast.Text : null,
+            Trades: inGame ? TradeCards() : null,
+            TradePanelX: _settings.Trade.PanelX,
+            TradePanelY: _settings.Trade.PanelY,
+            MouseX: mouse.X,
+            MouseY: mouse.Y,
+            ReduceMotion: _settings.ReduceMotion,
             InsMenu: _insMenuOpen ? new InsMenuData(
                 Tab: _insMenuTab,
-                CombatRange: _settings.CombatRange,
-                CombatEngageRange: _settings.CombatEngageRange,
-                CombatFleeHpPct: _settings.CombatFleeHpPct,
-                CombatFleeRecoverPct: _settings.CombatFleeRecoverPct,
-                CombatFleeDistance: _settings.CombatFleeDistance,
-                CombatStallMs: _settings.CombatStallMs,
-                MapClearStampRadius: _settings.MapClearStampRadius,
-                MapClearAggroRange: _settings.MapClearAggroRange,
-                MapClearStuckMs: _settings.MapClearStuckMs,
-                MoveMethod: _settings.MoveMethod ?? "WASD",
-                MoveArriveRadius: _settings.MoveArriveRadius,
-                LifeThresholdPct: _settings.LifeThresholdPct,
-                ManaThresholdPct: _settings.ManaThresholdPct,
-                SkillCount: _settings.CombatSkills?.Count ?? 0,
+                Settings: _settings,
                 Fps: (int)MathF.Round(_fps),
                 WorldMs: _worldMs,
                 RenderMs: _renderMs,
                 CharName: _charName,
-                VisitedCells: _mapClearVisited.Count,
-                Skills: _settings.CombatSkills,
-                TargetMode: _settings.CombatTargetMode ?? "Nearest",
-                RotationMode: _settings.CombatRotationMode ?? "RoundRobin",
-                KeepDistance: _settings.CombatKeepDistance,
-                MoveCooldownMs: _settings.MoveCooldownMs,
-                HostilesNear: _hostilesNear,
-                MoveRunEnabled: _settings.MoveRunEnabled,
-                MoveRunKey: _settings.MoveRunKey,
-                MoveLookAhead: _settings.MoveLookAhead,
-                MoveDiagonals: _settings.MoveDiagonals,
-                MoveAxisRotationDeg: _settings.MoveAxisRotationDeg,
-                PlayInBackground: _settings.PlayInBackground,
-                NestedInput: GameHost.NestedInputDisplay,
-                AutoRespawn: _settings.AutoRespawn,
-                RespawnNote: _respawnNote,
-                EventEssence: _settings.EventEssence,
-                EventStrongbox: _settings.EventStrongbox,
-                EventShrine: _settings.EventShrine,
-                EventBreach: _settings.EventBreach,
-                EventRitual: _settings.EventRitual,
-                EventChests: _settings.EventChests,
-                EventClickStalled: _settings.EventClickStalled,
-                EventRange: _settings.EventRange) : null);
+                Version: UpdateChecker.Current,
+                Status: status,
+                BuffKeeperArmed: _buffKeeperArmed,
+                Buffs: _liveBuffs,
+                BuffNotes: _buffRuleNotes,
+                ChatNote: _chat.LastResult,
+                Trade: _insMenuTab == OverlayRenderer.InsTradeTab ? TradeMenu() : null) : null);
         // The overlay is only visible while PoE2 is foreground (Render draws nothing otherwise). Skip
         // the whole draw + UpdateLayeredWindow blit when unfocused — but render once on the focus-loss
         // transition so the last visible frame is cleared rather than left frozen on screen.
@@ -423,7 +351,6 @@ public sealed partial class RadarApp
     /// </summary>
     private void WorldTick(nint inGameState, nint areaInstance, nint localPlayer)
     {
-        RefreshBuildBindings(localPlayer);
         // AreaInstance is a fresh object per area — use its address to invalidate per-area caches.
         if (areaInstance != _lastAreaInstance) { _terrain = null; _lastAreaInstance = areaInstance; }
         var areaHash = _live.AreaHash(areaInstance);
@@ -521,7 +448,10 @@ public sealed partial class RadarApp
 
         // Hover price — the item under the cursor in an item UI (inventory/stash/vendor), priced + published
         // as a spec the render thread anchors beside the game tooltip (its rect re-read live).
-        UpdateHoverPrice(inGameState);
+        UpdateHoverPrice(inGameState, areaHash);
+
+        // Price-check panel (hotkey): serve open/close/refresh requests + poll the trade search.
+        UpdatePriceCheck(inGameState, areaHash);
 
         // Runeshape monolith rewards — resolve each in-world monolith device + price its offered rewards
         // (area-wide, before the panel is opened). Publishes its own _monoRender bundle.
@@ -539,13 +469,6 @@ public sealed partial class RadarApp
             _navTargetsArea = areaInstance;
             OnAreaChanged(areaHash);
         }
-
-        // Quest follow / map-clear: when armed, auto-select one nav target so MaintainRoutes
-        // can A* it. Map-clear (F2) overrides quest follow. Runs every world tick so a boss
-        // that spawns after zone-in still gets picked.
-        if (_farmLoop) ApplyFarmLoop(areaCode, player);
-        else if (_mapClear) ApplyMapClear(areaCode, player);
-        else ApplyQuestFollow(areaCode, player);
 
         // Auto-deselect entity targets the game has marked complete (e.g. a looted expedition):
         // they're already gone from the map + nav-target list, but the still-present (faded)

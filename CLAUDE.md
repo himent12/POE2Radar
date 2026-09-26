@@ -1,9 +1,10 @@
 # POE2Radar — Contributor Guide
 
-External memory-reading **map/radar overlay for Path of Exile 2**. .NET 10, Windows and Linux x64
-(Proton/Wine on Linux). Overlay renders with SkiaSharp.
-Reads game state out of process (no injection) and draws an overlay; opt-in auto-flask and combat
-assist send keystrokes. Forked from a PoE1 framework, since rewritten around the live PoE2 layout.
+External memory-reading **map/radar overlay + trade/QoL companion for Path of Exile 2**. .NET 10, Windows
+and Linux x64 (Proton/Wine on Linux). Overlay renders with SkiaSharp.
+Reads game state out of process (no injection) and draws an overlay; opt-in auto-flask, the buff keeper
+and chat macros send keystrokes. Forked from a PoE1 framework, since rewritten around the live PoE2 layout.
+There is **no bot**: nothing moves the character, targets monsters or plays for the user.
 
 ## Non-negotiable rules
 
@@ -14,10 +15,13 @@ assist send keystrokes. Forked from a PoE1 framework, since rewritten around the
 `process_vm_readv` (Linux/Proton). **Never** inject into the
 PoE2 process — no DLL injection, no function hooking, no packet manipulation.
 
-**Input/automation (opt-in).** The overlay may send keystrokes via `GameHost.TapKey` for auto-flask
-and combat assist. Rules: foreground-gated (only when PoE2 is focused), in-game-gated, per-action
-cooldowns, local kill-switch hotkeys (F8 flask, F4 combat). Combat assist defaults off and cannot be
-armed over HTTP. Keep automation minimal and clearly gated.
+**Input/automation (opt-in).** The overlay may send keystrokes only for: auto-flask (`GameHost.TapKey`),
+the buff keeper (one key tap to recast an expired self-buff), and chat lines (`ChatSender` →
+`GameHost.TypeText`) — one message per user hotkey press or trade-panel click. Rules: foreground-gated (only
+when PoE2 is focused), in-game-gated, per-action cooldowns, local kill-switch hotkeys (F8 flask, the buff
+keeper's configurable toggle — default F4). Arm bits (`AutoFlaskEnabled`, `BuffKeeper.Enabled`) are never
+writable over HTTP, and the HTTP API never sends chat. Do not add movement, targeting or skill rotations —
+the bot was removed on purpose. Keep automation minimal and clearly gated.
 
 **Offset discovery lives in Research.** The overlay just reads; reverse-engineering/probes live in
 `POE2Radar.Research`. When a patch breaks reads, run the Research probes, re-validate, commit.
@@ -63,6 +67,14 @@ armed over HTTP. Keep automation minimal and clearly gated.
     landmark walk + mod catalog + HP-bar specs + item labels + atlas update + nav/route maintenance.
     Publishes an immutable `WorldSnapshot` (+ a separate `AtlasRender` bundle) the render thread reads
     lock-free (volatile reference swap, same idiom as `_state`).
+  - Opt-in input on the render thread: `RadarApp.Flask.cs` (auto-flask), `RadarApp.Macros.cs` (buff keeper
+    via `Input/BuffKeeper.cs` pure decisions + `Poe2Live.PlayerBuffs`; user hotkeys via `Input/Hotkey.cs`
+    `HotkeyWatcher` for chat commands / bookmarks / wiki+poe2db inspect). Chat is typed by `Input/ChatSender`
+    on its own worker thread, re-checking foreground + in-game right before each line.
+  - Trade assistant (`Trade/`): `ClientLogTailer` tails the game's `logs/Client.txt` (located by
+    `ClientLogLocator`) on its own thread → `ClientLogParser` → thread-safe `TradeSessions` (whisper trade
+    requests, join/leave, "Trade accepted") → `TradeHistory` (earnings tracker, `config/trade_history.json`).
+    The render thread draws `OverlayRenderer.Trade.cs` cards from `TradeSessions.Snapshot()`.
   - Three INDEPENDENT reader stacks over the one `ProcessHandle` (RPM is concurrency-safe; the per-instance
     buffers/caches are NOT): `_live` (world), `_liveRender` (render), `_liveApi` (HTTP/tile scans). `_atlas`
     is internally locked, so it's shared. HP-bar live reads carry the mob's Render/Life component addresses
@@ -81,13 +93,45 @@ armed over HTTP. Keep automation minimal and clearly gated.
   path `d` (M/L/H/V/C/S/Q/T/Z + A→cubic) into figures the renderer normalizes (viewBox→unit) and
   caches as an `ID2D1PathGeometry` per name.
 - `Overlay/TerrainBitmap.cs` — bakes the walkable grid into a bitmap, rebuilt per area.
-- `Web/ApiServer.cs` — read-only HTTP API on `localhost:7777` (`/state`, `/entities`, `/landmarks`,
-  `/api/icons` — the icon library for the dashboard's SVG-preview shape pickers).
-- `Input/SendInputNative.cs` — scancode `SendInput` for auto-flask.
+- `Overlay/OverlayRenderer.InsMenu.cs` — the Insert-key in-game control center (Overview / Flask / Macros /
+  Trade / Radar). Click grammar is documented at the top of the file; `RadarApp.Input.cs` dispatches it.
+  `InsSliderSpec` (RenderContext.cs) is the single table of menu sliders + their settings accessors.
+- `Web/ApiServer.cs` — HTTP API on `localhost:7777` (`/state`, `/entities`, `/landmarks`, `/api/settings`,
+  `/api/buffs`, `/api/trade`, `/api/icons`, …) + the dashboard (`Web/DashboardHtml*.cs`). Writes are
+  loopback-Host-gated and sanitized per key (`ApiServer.Settings.cs`).
+- `Pricing/MapCheck.cs` — waystone dangerous-mod checker (hover a waystone → flagged mod lines).
+- Price check (`HoverPrice.PriceCheckHotkey`, default Ctrl+D): `RadarApp.PriceCheck.cs` (render thread raises the
+  request; world thread reads the hovered item, polls `TradeComparison.GetOrQueueSearch` and publishes a
+  `PriceCheckView`), `Pricing/PriceCheck.cs` (pure: query per item kind, poe.ninja reference, verdict, tier),
+  `OverlayRenderer.PriceCheck.cs` ("the appraisal" panel: rune circle, stamp, spread histogram). One trade request
+  at a time, rate-limit headers honoured.
+- UI kit: `OverlayRenderer.Ui.cs` — the black-and-white "grimoire" look (palette, frame with corner brackets, cards,
+  diamond switches, keycaps, chips, sigils, backdrop motes) shared by the Insert menu, trade panel and price check.
+  Big panels are authored at a fixed design size and scaled to the window (`BeginScaled`/`EndScaled` map their
+  click rects back to screen pixels). Motion: ambient loops run off one clock (`Now`); entrances use `BeginRise`/`EndRise`
+(fade + slide via `DrawTarget.PushLayer`), switch knobs and hover washes use `Anim` (keyed by the control's action,
+cursor from `RenderContext.MouseX/Y`). `Settings.ReduceMotion` freezes the clock and finishes every transition;
+headless previews also draw entrances settled. `UiIcons.cs`
+  (24×24 line icons); `UiFonts.cs` loads the embedded Manrope + Cinzel + Noto Sans Runic (`Assets/Fonts`, SIL OFL —
+  licences copied next to the exe under `Assets/Fonts`). The text cache falls back to a system font per glyph when
+  the embedded faces lack one. `POE2RADAR_PREVIEW_DIR=<dir> dotnet test --filter InsMenuRenderTests` (and the
+  price-check / trade-panel render tests) writes PNG previews.
+- `--demo` (Overlay) serves the dashboard with sample data and no game attach — for web-UI work.
+- Focus gate: every "is PoE2 in front?" check goes through `RadarApp.GameFocused()` →
+  `GameHost.IsGameForeground(hwnd, pid)`. On Hyprland it asks the compositor over IPC (`j/activewindow`, cached
+  ~100 ms): Hyprland does NOT keep XWayland's `_NET_ACTIVE_WINDOW` current (verified 0.56 — it reads None or a
+  dead window id while an X client is focused). Elsewhere it matches by window id or `_NET_WM_PID`. The overlay's
+  X window sets `WM_HINTS input=False` so clicking the Insert menu never takes focus from the game.
 
 **Research** (`src/POE2Radar.Research/Program.cs`) — probes: `--hp` (value-scan), `--vitals`
 (dump the local player's Life component — what the configured Health/Mana/ES offsets read + every
-valid VitalStruct in the component; the per-patch re-validation for the auto-flask pools), `--chain`,
+valid VitalStruct in the component; the per-patch re-validation for the auto-flask pools), `--buffs
+[--seconds N]` (buff keeper: validates `Poe2.Buffs`/`StatusEffect`/`BuffDefinition` PASS/⚠DRIFT, brute-scans
+the Buffs component for the status-effect vector, finds TimeLeft by tick-down, prints each buff per second
++ paste-ready offsets — run with a timed buff up), `--chain`,
+`--invui [--floats]` (finds which UI elements hold your inventory items + at what offset, and the computed slot
+rects / hover result at each slot's centre — the inventory-hover re-validation), `--diag [--seconds N]` (what the overlay sees through its own read path: chain, vitals, buffs, game window vs
+focused window/pid, item under the cursor — first thing to run when a feature "does nothing"),
 `--entity`, `--find`/`--find-entities`/`--find-terrain`/`--find-map`, `--tiles`, `--rarity`,
 `--info`, `--inventory` (player inventory + item structure: lists every inventory with box dims, dumps
 each item's slot/rarity/identified/art/stack/components, `--inv N` for one inventory by id, `--itemmods`
@@ -121,8 +165,11 @@ is rescaled by liveZoom/calibZoom each frame. See `resources/atlas-research-note
   Rarity = ObjectMagicProperties `+0x144`; hostility = Positioned.Reaction `+0x1E0` (friendly = bit
   pattern `(b&0x7F)==1`); grid = Render world `+0x138` / 10.87; Life HP `+0x1A8` / Mana `+0x1F8` / ES
   `+0x230`; Player name `+0x1B0`, level `+0x204`.
-- Map UI: UiRoot `InGameState +0x2F0`; UiElement Self `+0x08`, Children `+0x10`, Flags `+0x180`
-  (visible = bit `0x0B`); MapUiElement Shift `+0x368`, DefaultShift `+0x370` (= (0,-20)), Zoom `+0x3A8`.
+- Map UI: UiRoot `InGameState +0x2F0`; UiElement Self `+0x08`, Children `+0x10`, Parent `+0xB8`, Flags `+0x168`
+  (visible = bit `0x0B`), ScaleIndex `+0x172`, RelativePos `+0x100`, LocalScaleMul `+0x118`, Size `+0x270`, Text `+0x360`
+  (the position/scale/size block moved −0x18 and Text −0x30 in the patch before 2026-09-24 — `Research --invui --floats`
+  re-derives them from the flask bar). Item-slot elements (flask bar, inventory, stash, ritual tiles) hold the item
+  entity at `+0x4E0`. MapUiElement Shift `+0x350`, DefaultShift `+0x358` (= (0,-20)), Zoom `+0x390`.
 - Inventory (✓ live, Research `--inventory`): `AreaInstance +0x598` → ServerData → `+0x48` PlayerServerData
   vec `[0]` → ServerDataStructure → `+0x320` PlayerInventories vec (InventoryArrayStruct stride `0x18`:
   `+0x00` id, `+0x08` → InventoryStruct, `+0x10` = ptr−0x10 fingerprint). ServerData `+0x21E0` =

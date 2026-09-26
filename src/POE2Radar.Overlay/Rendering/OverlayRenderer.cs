@@ -137,10 +137,13 @@ public sealed partial class OverlayRenderer : IDisposable
                 DrawRuneforge(rt, ctx);
                 DrawRitualRewards(rt, ctx);            // value chips on the ritual tribute-shop tiles (screen-space)
                 DrawLootTags(rt, ctx);                 // value chips on the game's own loot tags (screen-space)
-                DrawHoverPrice(rt, ctx);               // price chip beside the hovered item's tooltip (screen-space)
+                if (ctx.PriceCheck is null) DrawHoverPrice(rt, ctx); // price chip under the tooltip (the panel supersedes it)
                 DrawMonolithPanel(rt, ctx);            // nearby-monolith reward list (screen-space)
                 DrawCurrencyExchange(rt, ctx);         // currency-exchange order-book depth panel (top-right, screen-space)
-                if (ctx.InsMenu is null) DrawBotStatus(rt, ctx);
+                DrawTradePanel(rt, ctx);               // whisper-driven trade cards with invite/trade/thanks buttons
+                DrawPriceCheck(rt, ctx);               // hotkey price check: estimate vs live listings
+                DrawToast(rt, ctx);                    // transient hotkey feedback
+                if (ctx.InsMenu is null) DrawStatusStrip(rt, ctx);
                 DrawInsMenu(rt, ctx);                  // INSERT menu — last so it sits on top and its click rects win
             }
         }
@@ -151,6 +154,8 @@ public sealed partial class OverlayRenderer : IDisposable
     private static readonly Color4 ColItemHi   = new(1.00f, 0.80f, 0.20f, 1.0f);
 
     private static readonly Color4 ColItemText = new(0.92f, 0.92f, 0.92f, 1.0f);
+
+    private static readonly Color4 ColDanger   = new(1.00f, 0.38f, 0.32f, 1.0f);
 
     private static readonly Color4 ColExchangeRec = ColorFromU(0xFF66E066u);
 
@@ -173,9 +178,10 @@ public sealed partial class OverlayRenderer : IDisposable
         foreach (var geo in _geoCache.Values.Where(g => g is not null).Distinct()) geo!.Dispose();
         _geoCache.Clear();
         _tf?.Dispose();
-        _tfTitle?.Dispose(); _tfBody?.Dispose(); _tfBold?.Dispose(); _tfSmall?.Dispose(); _tfCaps?.Dispose();
-        _tfMono?.Dispose(); _tfMonoSmall?.Dispose(); _bUi?.Dispose();
+        DisposeUi();
+        _bUi?.Dispose();
         _terrain?.Dispose();
+        _terrainLayer.Dispose();
         _atlasIcons?.Dispose();
     }
 }

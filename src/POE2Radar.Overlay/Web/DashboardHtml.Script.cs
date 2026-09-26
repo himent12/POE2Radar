@@ -8,33 +8,64 @@ internal static partial class DashboardHtml
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 let state=null, zone=null;
-let activeTab='filters';
+let page='overview', radarSub='rules';
 let atlasData=null, atlasView='region', atlasSel=new Set(), atlasHl=null, atlasNav=null, atlasArrow=null, atlasHlSelOnly=false, atlasGroup='all';
 
-/* ── tabs ── */
-$$('.tab').forEach(t=>t.onclick=()=>{
-  activeTab=t.dataset.tab;
-  $$('.tab').forEach(x=>x.classList.toggle('on',x===t));
-  $$('.view').forEach(v=>v.hidden = v.dataset.view!==activeTab);
-  if(activeTab==='settings') loadSettings();
-  if(activeTab==='value'){ loadSettings(); pollPrices(); }
-  if(activeTab==='filters') loadFilters();
-  if(activeTab==='landmarks') loadLandmarks();
-  if(activeTab==='atlas'){ if(!atlasData) loadAtlas(); else renderAtlas(); }
-});
+/* ── hash router: #overview | #trade | #macros | #radar[/rules|landmarks|hidden] | #atlas | #value | #settings ── */
+const PAGES=['overview','trade','macros','radar','atlas','value','settings'];
+const RADAR_SUBS=['rules','landmarks','hidden'];
+function parseRoute(){
+  let [p,sub]=(location.hash||'').replace(/^#\/?/,'').toLowerCase().split('/');
+  if(p==='item-value'||p==='items'||p==='pricing') p='value';
+  if(p==='rules'||p==='filters'||p==='landmarks'||p==='hidden'){ sub=(p==='filters')?'rules':p; p='radar'; }
+  if(!PAGES.includes(p)) p='overview';
+  return [p, RADAR_SUBS.includes(sub)?sub:null];
+}
+function route(){
+  const [p,sub]=parseRoute(), changed=p!==page;
+  page=p;
+  $$('.nav[data-page]').forEach(a=>{ const on=a.dataset.page===p; a.classList.toggle('on',on); if(on) a.setAttribute('aria-current','page'); else a.removeAttribute('aria-current'); });
+  $$('.page').forEach(s=>s.hidden = s.dataset.page!==p);
+  if(p==='radar') setRadarSub(sub||radarSub, false);
+  if(changed) window.scrollTo(0,0);
+  enterPage(p);
+}
+function setRadarSub(sub, push){
+  radarSub=sub;
+  $$('.seg [data-sub]').forEach(b=>{ b.classList.toggle('on',b.dataset.sub===sub); b.setAttribute('aria-selected',b.dataset.sub===sub); });
+  $$('[data-subview]').forEach(v=>v.hidden = v.dataset.subview!==sub);
+  if(push) history.replaceState(null,'','#radar/'+sub);
+  if(sub==='landmarks') loadLandmarks();
+}
+$$('.seg [data-sub]').forEach(b=>b.onclick=()=>setRadarSub(b.dataset.sub,true));
+function enterPage(p){
+  if(p==='settings') loadSettings();
+  if(p==='value'){ loadSettings(); pollPrices(); }
+  if(p==='radar'){ loadFilters(); if(radarSub==='landmarks') loadLandmarks(); }
+  if(p==='atlas'){ if(!atlasData) loadAtlas(); else renderAtlas(); }
+  if(p==='overview'){ loadOverviewCfg(); pollTrade(); pollBuffs(); pollZone(); }
+  if(p==='trade'){ loadSettings(); pollTrade(); }
+  if(p==='macros'){ loadMacros(); pollBuffs(); }
+}
+window.addEventListener('hashchange',route);
 
-/* ── polling (left rail vitals/zone/census) ── */
+/* ── polling: /state every 1 s (rail + overview); page-specific endpoints only while that page is visible ── */
 async function getJSON(u){ const r=await fetch(u,{cache:'no-store'}); if(!r.ok) throw 0; return r.json(); }
-function setConn(live){ $('#conn').classList.toggle('live',live); $('#connTxt').textContent = live?'live':'offline'; }
+function setConn(live){ $('#conn').classList.toggle('live',live); $('#connTxt').textContent = live?'Live':'Offline'; }
+async function pollZone(){ try{ zone = await getJSON('/api/zone'); }catch(e){ zone=null; } renderZone(); }
 
+let _tickN=0;
 async function tick(){
+  _tickN++;
   try{
     state = await getJSON('/state');
     setConn(true);
-    try{ zone = await getJSON('/api/zone'); }catch(e){ zone=null; }
     renderState();
-    if(activeTab==='value') pollPrices();   // keep the league/status live (prices load a few s after launch)
   }catch(e){ setConn(false); }
+  if(page==='overview' && _tickN%5===0) pollZone();
+  if(page==='value') pollPrices();   // keep the league/status live (prices load a few s after launch)
+  if(page==='overview'||page==='macros') pollBuffs();
+  if((page==='overview'||page==='trade') && _tickN%2===0) pollTrade();
 }
 
 /* ── settings tab (writes radar/visual + flask via the loopback-gated /api/settings) ── */
@@ -53,10 +84,10 @@ async function loadSettings(){
     hover = s.hoverPrice || {};
     mono = s.monoliths || {};
     ce = s.currencyExchange || {};
-    combatSkillsData = Array.isArray(s.combatSkills)
-      ? s.combatSkills.map(sk=>({...sk, key:sk.key||sk.vk||0x51, cooldownMs:sk.cooldownMs??400, range:sk.range||0}))
-      : [];
-    renderHpBars(); renderTerrain(); renderGround(); renderHover(); renderMono(); renderExchange(); renderCombatSkills();
+    tradeCfg = s.trade || null;
+    mapCheck = s.mapCheck || null;
+    renderHpBars(); renderTerrain(); renderGround(); renderHover(); renderMono(); renderExchange();
+    renderTradeCfg(); renderMapCheck();
   }catch(e){}
 }
 
@@ -64,7 +95,7 @@ async function loadSettings(){
 let gi = null;
 function renderGround(){
   if(!gi) return;
-  $$('[data-gi]').forEach(el=>{
+  $$('[data-gi]:not([data-gf])').forEach(el=>{
     const k=el.dataset.gi;
     if(el.type==='checkbox') el.checked=!!gi[k];
     else if(gi[k]!==undefined && gi[k]!==null) el.value=gi[k];
@@ -74,7 +105,7 @@ function renderGround(){
 }
 function saveGround(){ if(gi) saveSetting('groundItems', gi); }
 function wireGround(){
-  $$('[data-gi]').forEach(el=>{
+  $$('[data-gi]:not([data-gf])').forEach(el=>{
     const k=el.dataset.gi;
     if(el.type==='checkbox') el.onchange=()=>{ gi=gi||{}; gi[k]=el.checked; saveGround(); };
     else if(el.type==='text') el.onchange=()=>{ gi=gi||{}; gi[k]=el.value.trim(); saveGround(); };
@@ -96,6 +127,8 @@ function renderHover(){
     if(el.type==='checkbox') el.checked=!!hover[k];
     else if(hover[k]!==undefined && hover[k]!==null) el.value=hover[k];
   });
+  const pc=$('#pcHotkey');
+  if(pc && typeof showCap==='function') showCap(pc, hover.priceCheckHotkey||'Ctrl+D');
 }
 function saveHover(){ if(hover) saveSetting('hoverPrice', hover); }
 function wireHover(){
@@ -114,7 +147,7 @@ async function pollPrices(){
     if(lg && p.league) lg.placeholder = p.league + ' (auto)';
     if(st){
       st.textContent = p.loaded
-        ? `${p.league||'?'} — ${p.count||0} items loaded`
+        ? `${p.league||'?'} — ${p.count||0} items · ${p.marketRows||p.count||0} market entries · ${p.categories||0} categories${p.stale?' · stale cache':''}`
         : (p.status||'loading…');
       st.style.color = p.loaded ? 'var(--good, #3ddc97)' : 'var(--ink-dim)';
     }
@@ -156,12 +189,22 @@ function wireExchange(){
     else el.onchange=()=>{ const v=parseFloat(el.value); if(!isNaN(v)){ ce=ce||{}; ce[k]=v; saveExchange(); } };
   });
 }
+/* One toast for every write: "Saved" (or an error) bottom-right. */
+function flashSaved(ok=true, msg){
+  const m=$('#savedMsg'); if(!m) return;
+  m.textContent = ok ? '\u2713 '+(msg||'Saved') : (msg||'Save failed');
+  m.classList.toggle('err',!ok); m.classList.add('show');
+  clearTimeout(m._t); m._t=setTimeout(()=>m.classList.remove('show'), ok?1200:3200);
+}
+/* POST {key:val} to /api/settings; resolves to the server response ({ok, applied, settings}) or null. */
 async function saveSetting(key,val){
   try{
-    await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({[key]:val})});
-    // Flash every on-page "saved" indicator (one per tab) — only the visible tab's is seen.
-    $$('.saved').forEach(m=>{ m.classList.add('show'); clearTimeout(m._t); m._t=setTimeout(()=>m.classList.remove('show'),1100); });
-  }catch(e){}
+    const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({[key]:val})});
+    const j=await r.json().catch(()=>null);
+    const ok=r.ok && j && (j.applied||[]).includes(key);
+    flashSaved(ok, ok?null:'Not saved (rejected by the overlay)');
+    return j;
+  }catch(e){ flashSaved(false,'Not saved (overlay unreachable)'); return null; }
 }
 function wireSettings(){
   $$('[data-set]').forEach(el=>{
@@ -176,76 +219,6 @@ function wireSettings(){
 // Flask key inputs accept a single character ('1'-'9', letters) → Win32 VK (== ASCII of uppercase).
 const charToVk = s => { const c=(s||'').trim().toUpperCase().charCodeAt(0); return isNaN(c)?0:c; };
 const vkToChar = v => v ? String.fromCharCode(v) : '';
-
-/* ── combat-assist rotation (ordered {key, cooldownMs, range}; cannot arm from this page) ── */
-let combatSkillsData=[];
-const QWER=[0x51,0x57,0x45,0x52];
-function saveCombatSkills(){ saveSetting('combatSkills', combatSkillsData); }
-function nextQwer(){
-  const used=new Set(combatSkillsData.map(s=>s.key));
-  return QWER.find(k=>!used.has(k)) || 0x51;
-}
-const skillPresets={
-  attack:{name:'Main attack',cooldownMs:400},
-  escape:{name:'Low-life escape',hpBelowPct:35,priority:true,aimMode:'Away',cooldownMs:5000},
-  guard:{name:'Emergency guard',hpBelowPct:45,requireTarget:false,minTargets:0,priority:true,aimMode:'Cursor',cooldownMs:5000},
-    danger:{name:'Low life OR shield guard',hpBelowPct:35,esBelowPct:25,anyLowResource:true,requireTarget:false,minTargets:0,priority:true,aimMode:'Cursor',cooldownMs:5000},
-    surrounded:{name:'Escape when surrounded',minTargets:4,range:12,priority:true,aimMode:'Away',cooldownMs:5000},
-  mana:{name:'Mana recovery',manaBelowPct:30,requireTarget:false,minTargets:0,priority:true,aimMode:'Cursor',cooldownMs:8000},
-  shield:{name:'Shield recovery',esBelowPct:30,requireTarget:false,minTargets:0,priority:true,aimMode:'Cursor',cooldownMs:8000},
-  pack:{name:'Pack clear',minTargets:3,cooldownMs:1500},
-  boss:{name:'Rare / boss skill',rareOnly:true,minManaPct:25,cooldownMs:3000},
-  execute:{name:'Finisher',targetHpBelowPct:20,cooldownMs:1000}
-};
-function skillSummary(sk){
-  const rules=[],low=[];
-  if(sk.hpBelowPct>0) low.push('life < '+sk.hpBelowPct+'%');
-  if(sk.manaBelowPct>0) low.push('mana < '+sk.manaBelowPct+'%');
-  if(sk.esBelowPct>0) low.push('ES < '+sk.esBelowPct+'% (requires ES pool)');
-  if(low.length) rules.push('('+low.join(sk.anyLowResource?' OR ':' AND ')+')');
-  if(sk.minManaPct>0) rules.push('mana ≥ '+sk.minManaPct+'%');
-  if(sk.targetHpBelowPct>0) rules.push('enemy life < '+sk.targetHpBelowPct+'%');
-  if(sk.rareOnly) rules.push('rare / unique enemy');
-  if((sk.minTargets??1)>0) rules.push((sk.minTargets??1)+'+ enemies in range');
-  if(sk.requireTarget!==false) rules.push('target required');
-  return (sk.priority?'Priority · ':'Rotation · ')+(rules.join(' AND ')||'whenever ready');
-}
-function renderCombatSkills(){
-  const box=$('#combatSkills'); if(!box) return;
-  if(!combatSkillsData.length){box.innerHTML='<p class="hint-row">No skills. Add a skill, choose its key, then pick a starting preset.</p>';return;}
-  const numeric=(sk,key,label,max=100,step=5,fallback=0)=>'<label>'+label+'<input class="numin" data-num="'+key+'" type="number" min="0" max="'+max+'" step="'+step+'" value="'+(sk[key]??fallback)+'"></label>';
-  const flag=(sk,key,label,fallback=false)=>'<label class="skill-check"><input type="checkbox" data-flag="'+key+'" '+((sk[key]??fallback)?'checked':'')+'>'+label+'</label>';
-  const keyOptions=[[1,'Left mouse'],[2,'Right mouse'],[4,'Middle mouse'],[5,'Mouse 4'],[6,'Mouse 5'],[32,'Space'],...Array.from('1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ',k=>[k.charCodeAt(0),k])];
-  box.innerHTML=combatSkillsData.map((sk,i)=>{
-    const keys=keyOptions.some(k=>k[0]===sk.key)?keyOptions:[...keyOptions,[sk.key,'VK '+sk.key]];
-    const warning=sk.minManaPct>0&&sk.manaBelowPct>0&&sk.minManaPct>=sk.manaBelowPct&&(!sk.anyLowResource||(!(sk.hpBelowPct>0)&&!(sk.esBelowPct>0)))?'Mana conditions conflict: minimum mana must be below the low-mana threshold.':sk.requireTarget===false&&((sk.minTargets??1)>0||sk.rareOnly||sk.targetHpBelowPct>0||sk.aimMode!=='Cursor')?'Enemy-dependent rules still require enemies. For recovery outside combat, choose no re-aim, Min enemies 0, and disable target rules.':'';
-    return '<article class="skill-card" data-i="'+i+'"><header><span class="skill-order">'+(i+1)+'</span><label class="skill-name-label">Skill name<input class="skill-name" maxlength="60" value="'+esc(sk.name||'')+'" placeholder="Name this skill"></label>'+flag(sk,'enabled','Enabled',true)+'<button type="button" data-move="-1" aria-label="Move skill up" '+(i===0?'disabled':'')+'>↑</button><button type="button" data-move="1" aria-label="Move skill down" '+(i===combatSkillsData.length-1?'disabled':'')+'>↓</button><button type="button" class="sk-del">Remove</button></header>'
-      +'<p class="skill-summary">'+esc(skillSummary(sk))+'</p><p class="skill-warning" '+(warning?'':'hidden')+'>'+esc(warning)+'</p>'
-      +'<div class="skill-fields"><label>Key<select class="sk-key">'+keys.map(([key,label])=>'<option value="'+key+'" '+(sk.key===key?'selected':'')+'>'+label+'</option>').join('')+'</select></label>'
-      +'<label>Modifier<select class="sk-mod">'+[[0,'None'],[2,'Ctrl'],[1,'Shift'],[4,'Alt'],[3,'Ctrl + Shift'],[6,'Ctrl + Alt'],[5,'Shift + Alt'],[7,'Ctrl + Shift + Alt']].map(([m,l])=>'<option value="'+m+'" '+((sk.modifiers||0)===m?'selected':'')+'>'+l+'</option>').join('')+'</select></label>'
-      +'<label>Starting preset<select class="sk-preset"><option value="">Custom rules</option>'+Object.entries(skillPresets).map(([key,p])=>'<option value="'+key+'">'+p.name+'</option>').join('')+'</select></label>'
-      +numeric(sk,'cooldownMs','Cooldown · ms',60000,50,400)+numeric(sk,'range','Range · 0 = global',200,1)
-      +'<label>Aim<select class="sk-aim">'+[['Target','At enemy'],['Cursor','Self / no re-aim'],['Away','Away from enemy']].map(([key,label])=>'<option value="'+key+'" '+((sk.aimMode||'Target')===key?'selected':'')+'>'+label+'</option>').join('')+'</select></label></div>'
-      +'<fieldset><legend>When to cast</legend><div class="skill-fields">'
-      +numeric(sk,'hpBelowPct','Life below · %')+numeric(sk,'manaBelowPct','Mana below · %')+numeric(sk,'minManaPct','Minimum mana · %')+numeric(sk,'esBelowPct','ES below · %')+numeric(sk,'targetHpBelowPct','Enemy life below · %')+numeric(sk,'minTargets','Min enemies · 0 = none',20,1,1)
-      +'</div><div class="skill-flags">'+flag(sk,'anyLowResource','Any low resource (OR)')+flag(sk,'requireTarget','Require enemy target',true)+flag(sk,'rareOnly','Rare / unique only')+flag(sk,'priority','Priority before rotation')+'</div><small>0% disables a rule. Low life, mana and ES normally all must match; OR lets any one trigger the cast. Minimum mana and enemy rules always apply. Priority waits for the current combo; cooldown still applies. No re-aim leaves your cursor where it is.</small></fieldset>'
-      +'<details><summary>Combo & timing</summary><div class="skill-fields">'+numeric(sk,'repeat','Taps',10,1,1)+numeric(sk,'repeatGapMs','Cast interval · ms',2000,10,150)+numeric(sk,'holdMs','Hold · ms',10000,50)+numeric(sk,'nextDelayMs','Wait after · ms',10000,50)+'</div>'+flag(sk,'dodgeAfter','Dodge after (needs an enemy)')+'</details></article>';
-  }).join('');
-  box.querySelectorAll('.skill-card').forEach(row=>{
-    const i=+row.dataset.i,sk=combatSkillsData[i];
-    const save=()=>{saveCombatSkills();renderCombatSkills();};
-    row.querySelector('.skill-name').onchange=e=>{sk.name=e.target.value.trim().slice(0,60);save();};
-    row.querySelector('.sk-key').onchange=e=>{sk.key=+e.target.value;sk.sourceSlot=0;save();};
-    row.querySelector('.sk-mod').onchange=e=>{sk.modifiers=+e.target.value;sk.sourceSlot=0;save();};
-    row.querySelector('.sk-aim').onchange=e=>{sk.aimMode=e.target.value;save();};
-    row.querySelectorAll('[data-num]').forEach(input=>{input.onchange=()=>{let v=Number(input.value);if(!Number.isFinite(v))return;const k=input.dataset.num;const lo=k==='repeat'?1:k==='repeatGapMs'?30:0;v=Math.max(lo,Math.min(+input.max,v));if(['cooldownMs','minTargets','repeat','repeatGapMs','holdMs','nextDelayMs'].includes(k))v=Math.round(v);sk[k]=v;save();};});
-    row.querySelectorAll('[data-flag]').forEach(input=>{input.onchange=()=>{sk[input.dataset.flag]=input.checked;save();};});
-    row.querySelector('.sk-preset').onchange=e=>{const preset=skillPresets[e.target.value];if(!preset)return;Object.assign(sk,{anyLowResource:false,hpBelowPct:0,manaBelowPct:0,minManaPct:0,esBelowPct:0,targetHpBelowPct:0,requireTarget:true,minTargets:1,rareOnly:false,priority:false,aimMode:'Target',repeat:1,repeatGapMs:150,holdMs:0,dodgeAfter:false,nextDelayMs:0},preset);save();};
-    row.querySelectorAll('[data-move]').forEach(button=>{button.onclick=()=>{const j=i+Number(button.dataset.move);if(j<0||j>=combatSkillsData.length)return;[combatSkillsData[i],combatSkillsData[j]]=[combatSkillsData[j],combatSkillsData[i]];save();};});
-    row.querySelector('.sk-del').onclick=()=>{combatSkillsData.splice(i,1);save();};
-  });
-}
-
 
 /* ── icon / HP-bar / mechanics editors (nested objects: POST the whole {styles}/{hpBars}) ── */
 let styles=null, hpBars=null, terrain=null;
@@ -412,7 +385,7 @@ function renderMechanics(){
 }
 /* ── Rules tab: unified Display Rules + Hidden cull patterns ── */
 let hidden=[], drules=[];
-function flashF(){ const m=$('#savedMsgF'); if(!m) return; m.classList.add('show'); clearTimeout(m._t); m._t=setTimeout(()=>m.classList.remove('show'),1100); }
+function flashF(){ flashSaved(); }
 async function postHidden(body){ try{ await fetch('/api/hidden',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); flashF(); }catch(e){} }
 async function loadFilters(){
   await loadModVocab();   // populate the mods autocomplete BEFORE rendering rule rows reference it
@@ -510,7 +483,8 @@ function renderDrules(){
     row.querySelector('.dr-nav').onchange=e=>{ r.navigable=e.target.checked; save(); };
   });
 }
-$('#drAdd')?.addEventListener('click',()=>{ drules.push({enabled:true,name:'New rule',categories:[],match:[],shape:'Circle',color:'#ffd926',opacity:1,size:4,_open:true}); renderDrules(); saveDrules(); });
+$('#drAdd')?.addEventListener('click',()=>{ drules.push({enabled:true,name:'New rule',categories:[],match:[],shape:'Circle',color:'#ffd926',opacity:1,size:4,_open:true}); renderDrules(); saveDrules();
+  const last=$$('#drList .drrow').pop(); if(last){ last.scrollIntoView({block:'center'}); last.querySelector('.dr-name')?.focus(); } });
 
 """;
 }

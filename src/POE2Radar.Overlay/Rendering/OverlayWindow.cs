@@ -17,13 +17,14 @@ public sealed partial class OverlayWindow : IDisposable
     private DrawTarget _target = new();
     private bool _clickThrough = true;
     private bool _disposed;
+    private bool _headless;
 
     public int Width { get; private set; }
     public int Height { get; private set; }
     public int OriginX { get; private set; }
     public int OriginY { get; private set; }
     public bool IsValid => !_disposed && _surface is not null
-        && (OperatingSystem.IsLinux() ? _xwin != 0 : _hwnd != 0);
+        && (_headless || (OperatingSystem.IsLinux() ? _xwin != 0 : _hwnd != 0));
     public nint Handle => OperatingSystem.IsLinux() ? (nint)_xwin : _hwnd;
     public DrawTarget RenderTarget => _target;
 
@@ -35,7 +36,7 @@ public sealed partial class OverlayWindow : IDisposable
     /// <summary>Surface-only window (no platform window) for headless rendering — previews/tests.</summary>
     internal static OverlayWindow CreateHeadless(int width, int height)
     {
-        var ow = new OverlayWindow();
+        var ow = new OverlayWindow { _headless = true };
         ow.AllocateSurface(width, height);
         return ow;
     }
@@ -59,9 +60,33 @@ public sealed partial class OverlayWindow : IDisposable
         return ow;
     }
 
-    /// <summary>Proportional UI font (bold optional) with cross-platform sans fallbacks — for panels/menus.</summary>
-    public DrawTextFormat CreateUiTextFormat(float size, bool bold = false, bool serif = false)
+    /// <summary>Embedded Manrope at a given weight — the UI face for every panel and menu.</summary>
+    internal DrawTextFormat CreateSansTextFormat(float size, UiFonts.Weight weight = UiFonts.Weight.Regular)
+        => UiFonts.Sans(weight) is { } tf
+            ? new DrawTextFormat(new SKFont(tf, size) { Subpixel = true, Edging = SKFontEdging.SubpixelAntialias })
+            : CreateUiTextFormat(size, bold: weight >= UiFonts.Weight.SemiBold, serif: false, embedded: false);
+
+    /// <summary>Embedded Cinzel display serif (titles, big numbers).</summary>
+    internal DrawTextFormat CreateDisplayTextFormat(float size, UiFonts.Weight weight = UiFonts.Weight.SemiBold)
+        => UiFonts.Display(weight) is { } tf
+            ? new DrawTextFormat(new SKFont(tf, size) { Subpixel = true, Edging = SKFontEdging.SubpixelAntialias })
+            : CreateUiTextFormat(size, weight >= UiFonts.Weight.Bold, serif: true, embedded: false);
+
+    /// <summary>Embedded Noto Sans Runic (Elder Futhark ornaments); falls back to the sans face without it.</summary>
+    internal DrawTextFormat CreateRunicTextFormat(float size)
+        => UiFonts.Runic is { } tf
+            ? new DrawTextFormat(new SKFont(tf, size) { Subpixel = true, Edging = SKFontEdging.SubpixelAntialias })
+            : CreateSansTextFormat(size);
+
+    /// <summary>Proportional UI font (bold optional). Uses the embedded Manrope / Cinzel faces when available, else
+    /// cross-platform system fallbacks.</summary>
+    public DrawTextFormat CreateUiTextFormat(float size, bool bold = false, bool serif = false, bool embedded = true)
     {
+        if (embedded)
+        {
+            var face = serif ? UiFonts.Display(bold ? UiFonts.Weight.Bold : UiFonts.Weight.SemiBold) : UiFonts.Sans(bold ? UiFonts.Weight.SemiBold : UiFonts.Weight.Regular);
+            if (face is not null) return new DrawTextFormat(new SKFont(face, size) { Subpixel = true, Edging = SKFontEdging.SubpixelAntialias });
+        }
         var style = bold ? SKFontStyle.Bold : SKFontStyle.Normal;
         SKTypeface? tf = null;
         var families = serif
@@ -133,31 +158,52 @@ public sealed partial class OverlayWindow : IDisposable
 
     private unsafe void AllocateSurface(int width, int height)
     {
-        if (OperatingSystem.IsLinux()) DestroyXImage();
-        FreeSurface();
+        if (OperatingSystem.IsLinux()) { DestroyXImage(); DestroyShmLinux(); }
+        FreeSurface();   // before ResizeWindows: the old surface may point into the DIB it frees
         width = Math.Max(width, 1);
         height = Math.Max(height, 1);
         _rowBytes = width * 4;
-        var bytes = (nuint)(_rowBytes * height);
-        _pixels = (nint)System.Runtime.InteropServices.NativeMemory.AllocZeroed(bytes);
+        Width = width;
+        Height = height;
+
+        // Windows: create the layered-window DIB first and let Skia render STRAIGHT into it (a top-down
+        // 32bpp DIB is exactly a premultiplied-BGRA buffer with stride width*4), so Present no longer copies
+        // the whole frame (8 MB at 1080p, 33 MB at 4K) into it every frame. Falls back to an owned buffer +
+        // per-frame copy if the DIB can't be created (and for headless surfaces).
+        if (!OperatingSystem.IsLinux()) ResizeWindows(width, height);
+        if (!OperatingSystem.IsLinux() && !_headless && _dibBits != 0)
+        {
+            _pixels = _dibBits;
+            _ownsPixels = false;
+        }
+        else if (OperatingSystem.IsLinux() && !_headless && TryCreateShmLinux(width, height))
+        {
+            // Linux: likewise render straight into an MIT-SHM segment the X server reads (no socket copy).
+            _pixels = _shm.Pixels;
+            _rowBytes = _shm.RowBytes;
+            _ownsPixels = false;
+        }
+        else
+        {
+            _pixels = (nint)System.Runtime.InteropServices.NativeMemory.AllocZeroed((nuint)(_rowBytes * height));
+            _ownsPixels = true;
+        }
         var info = new SKImageInfo(width, height, SKColorType.Bgra8888, SKAlphaType.Premul);
         _surface = SKSurface.Create(info, _pixels, _rowBytes);
         _target.Bind(_surface.Canvas);
-        Width = width;
-        Height = height;
         if (OperatingSystem.IsLinux()) ResizeLinux(width, height);
-        else ResizeWindows(width, height);
     }
+
+    private bool _ownsPixels;
 
     private unsafe void FreeSurface()
     {
         _surface?.Dispose();
         _surface = null;
-        if (_pixels != 0)
-        {
+        if (_pixels != 0 && _ownsPixels)
             System.Runtime.InteropServices.NativeMemory.Free((void*)_pixels);
-            _pixels = 0;
-        }
+        _pixels = 0;
+        _ownsPixels = false;
     }
 
     internal nint PixelBuffer => _pixels;
@@ -167,8 +213,8 @@ public sealed partial class OverlayWindow : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        FreeSurface();   // first: the surface may be backed by the DIB / shm segment the platform dispose frees
         if (OperatingSystem.IsLinux()) DisposeLinux();
         else DisposeWindows();
-        FreeSurface();
     }
 }

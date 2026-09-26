@@ -129,12 +129,12 @@ public sealed partial class RadarApp : IDisposable
 
     // ── Hover price: the item under the cursor in an item UI (inventory/stash/vendor). Scanned at world
     //    rate (cursor-in-rect walk → +0x4F8 item → price + the item SLOT rect), published as a spec the
-    //    render thread draws as a value chip anchored to the item icon. Stacks get two lines: the stack
-    //    TOTAL (Text) and the per-unit breakdown (Sub); Sub is empty for singles. ──
+    //    render thread draws beside the item. Text is the estimate/state; Sub contains newline-separated
+    //    identity, stack breakdown, confidence, source/freshness and comparison shortcut. ──
     private readonly record struct HoverPriceSpec(float BoxX, float BoxY, float BoxW, float BoxH,
-        string Text, string Sub, bool Highlight);
+        string Text, string Sub, bool Highlight, bool Danger = false);
 
-    private sealed record HoverPriceRender(HoverPriceSpec Spec);
+    private sealed record HoverPriceRender(HoverPriceSpec Spec, uint AreaHash, DateTime UpdatedUtc);
 
     private DateTime _nextHoverScanUtc = DateTime.MinValue;
 
@@ -217,9 +217,7 @@ public sealed partial class RadarApp : IDisposable
 
     private volatile bool _shutdown;
 
-    private string _charName = "";
-    private string _charIdentity = "";
-    private nint _charIdentityArea;
+    private volatile string _charName = "";
 
     private nint _charNameFor;
 
@@ -233,22 +231,23 @@ public sealed partial class RadarApp : IDisposable
 
     public void RequestShutdown() => _shutdown = true;
 
+    /// <summary>Is PoE2 the focused window? Every draw/input gate goes through this (thread-safe; on Hyprland it
+    /// asks the compositor — see <see cref="GameHost.IsGameForeground"/>).</summary>
+    private bool GameFocused() => _gameHwnd != 0 && GameHost.IsGameForeground(_gameHwnd, _process.ProcessId);
+
+    private DateTime _nextWindowRefreshUtc;
+
     public RadarApp(ProcessHandle process, MemoryReader reader, nint gameStateSlot)
     {
         _process = process;
         _reader = reader;
         _settings = RadarSettings.Load();
         _autoFlask = _settings.AutoFlaskEnabled;   // restore the persisted F8 state (default ON)
-        _combatAssist = _settings.CombatAssistEnabled; // restore F4 state (default OFF)
-        _botEnabled = _settings.BotEnabled || _settings.QuestFollowEnabled; // F3 master (default OFF)
-        _mapClear = _settings.MapClearEnabled;         // F2 map-clear (default OFF)
-        _questFollow = _botEnabled && !_mapClear;      // quest follow rides the bot master; F2 pauses it
-        if (_botEnabled) { _botNote = "armed"; _questFollowNote = _questFollow ? "armed" : "paused (clear)"; }
-        if (_mapClear) _mapClearNote = "armed";
-        _moveEnabled = _settings.MoveEnabled;          // restore F5 state (default OFF)
-        _farmAreaCode = _settings.FarmAreaCode ?? "";
-        _farmLoop = _settings.FarmLoopEnabled && !string.IsNullOrEmpty(_farmAreaCode); // F11 farm loop (default OFF)
-        if (_farmLoop) _farmNote = "armed · " + FarmAreaName;
+        _buffKeeperArmed = _settings.BuffKeeper.Enabled;   // restore the persisted buff-keeper arm (default OFF)
+        _isDownMemo = IsDownMemo;
+        _chat = new ChatSender(new GameChatInput(), CanSendChat);
+        (_trade, _tradeHistory, _tradeLog) = CreateTrade();
+        _tradeLog.Start();
         Console.WriteLine($"Settings: {RadarSettings.FilePath}");
         Console.WriteLine($"Entity names: {EntityNameResolver.Shared.Count} mappings; zones: {ZoneGuide.Shared.Count}");
         _live = new Poe2Live(reader, gameStateSlot);
@@ -521,11 +520,15 @@ public sealed partial class RadarApp : IDisposable
         Console.WriteLine($"Hidden entities: {_hidden.Count} pattern(s); display rules: {_displayRules.Count}; known mods: {_modCatalog.Count}");
         _api = new ApiServer(() => _state, _settings, GetNavSelection, ToggleNavTarget, ClearNavSelection,
                              _hidden, _displayRules, _landmarkStore, CurrentTilePaths, () => _modCatalog.All, PricesJson, AtlasJson, SetAtlasSelection,
-                             SetAtlasHighlight, VersionJson, _settings.ApiPort) { LoadoutProvider = () => _liveApi.ReadLoadout() };
+                             SetAtlasHighlight, VersionJson, _settings.ApiPort)
+        {
+            BuffsProvider = BuffsJson,
+            TradeProvider = TradeJson,
+            TradeCommand = TradeCommandJson,
+        };
         try { _api.Start(); Console.WriteLine($"API on http://localhost:{_settings.ApiPort} (dashboard at /)"); }
         catch (Exception ex) { Console.Error.WriteLine($"API server disabled: {ex.Message}"); }
-        Console.WriteLine("Hotkeys: F6=next quest target (bot on) / add nearest  F7=clear path targets  "
-                          + "F8=auto-flask  F4=combat assist  F3=bot (quest+move+combat)  F2=map clear  F5=path move  F9=quit  F12=open dashboard");
+        Console.WriteLine("Hotkeys: F6=route to nearest  F7=clear routes  F8=auto-flask  F9=quit  F12=open dashboard  Insert=menu");
         Console.WriteLine("         F10 (Atlas open) = inspect hovered tile (dumps map name + code + content"
                           + " to console for web-UI filters) and set route START->END (3rd press resets)");
         // Best-effort version check against GitHub (non-blocking; never fails startup).
@@ -568,7 +571,14 @@ public sealed partial class RadarApp : IDisposable
             while (!_shutdown)
             {
                 frameSw.Restart();
-                if (_gameHwnd == 0) _gameHwnd = GameHost.FindWindowForProcess(_process.ProcessId);
+                // Re-find the game window every few seconds, not just once: Wine can recreate its toplevel (e.g. on a
+                // fullscreen/borderless switch), which would otherwise leave the overlay tracking a dead window.
+                if (_gameHwnd == 0 || DateTime.UtcNow >= _nextWindowRefreshUtc)
+                {
+                    _nextWindowRefreshUtc = DateTime.UtcNow.AddSeconds(3);
+                    var found = GameHost.FindWindowForProcess(_process.ProcessId);
+                    if (found != 0) _gameHwnd = found;
+                }
                 if (_gameHwnd != 0) _window.TrackGameWindow(_gameHwnd);
                 if (!_window.PumpMessages()) break;
                 Tick();
@@ -621,9 +631,8 @@ public sealed partial class RadarApp : IDisposable
     public void Dispose()
     {
         _shutdown = true;
-        _bossDodge.Cancel(GameHost.KeyUp);
-        AbortComboMacro();
-        ReleaseHeldKeys();          // never leave W/Space pressed in the game after we exit
+        _tradeLog.Dispose();
+        _chat.Dispose();
         GameHost.RestoreInputState();
         _worldThread?.Join(1000);   // let the background world loop observe _shutdown and exit
         _modCatalog.Flush(); // persist any mods seen since the last debounced write

@@ -1,3 +1,6 @@
+using System.Buffers.Binary;
+using System.Runtime.InteropServices;
+
 namespace POE2Radar.Core.Game;
 
 public sealed partial class Poe2Live
@@ -70,8 +73,7 @@ public sealed partial class Poe2Live
             if (first != 0 && _reader.TryReadStruct<nint>(el + Poe2.UiElement.Children + 8, out var lastC))
             {
                 var n = ((long)lastC - (long)first) / 8;
-                if (n is > 0 and <= 8192)
-                    for (long k = 0; k < n; k++) queue.Enqueue(Ptr(first + (nint)(k * 8)));
+                if (n is > 0 and <= 8192) EnqueueChildren(queue, first, n);
             }
 
             if (_reader.TryReadBytes(el, body) < body.Length) continue;
@@ -83,7 +85,34 @@ public sealed partial class Poe2Live
         }
     }
 
-    private bool TryReadMapElement(nint el, out bool visible, out float shiftX, out float shiftY, out float zoom)
+    // Flags … Zoom span of a map element: read in ONE read per element per frame (was 5 reads: DefaultShift.Y,
+    // Shift.X, Shift.Y, Zoom, Flags). Also keeps Shift X/Y from one copy. Field-by-field is the fallback.
+    private static readonly int MapBlockStart = Math.Min(Math.Min(Poe2.UiElement.Flags, Poe2.MapUiElement.Shift),
+        Math.Min(Poe2.MapUiElement.DefaultShift, Poe2.MapUiElement.Zoom));
+
+    private static readonly int MapBlockLen = Math.Max(Math.Max(Poe2.UiElement.Flags + 4, Poe2.MapUiElement.Shift + 8),
+        Math.Max(Poe2.MapUiElement.DefaultShift + 8, Poe2.MapUiElement.Zoom + 4)) - MapBlockStart;
+
+    private readonly byte[] _mapBlock = new byte[MapBlockLen];
+
+    internal bool TryReadMapElement(nint el, out bool visible, out float shiftX, out float shiftY, out float zoom)
+    {
+        if (MapBlockLen <= MaxUiBlock && _reader.TryReadBytes(el + MapBlockStart, _mapBlock) == MapBlockLen)
+        {
+            ReadOnlySpan<byte> b = _mapBlock;
+            visible = false; shiftX = shiftY = zoom = 0;
+            if (BitConverter.ToSingle(b[(Poe2.MapUiElement.DefaultShift + 4 - MapBlockStart)..]) != -20f) return false;
+            shiftX = BitConverter.ToSingle(b[(Poe2.MapUiElement.Shift - MapBlockStart)..]);
+            shiftY = BitConverter.ToSingle(b[(Poe2.MapUiElement.Shift + 4 - MapBlockStart)..]);
+            zoom = BitConverter.ToSingle(b[(Poe2.MapUiElement.Zoom - MapBlockStart)..]);
+            visible = (BinaryPrimitives.ReadUInt32LittleEndian(b[(Poe2.UiElement.Flags - MapBlockStart)..])
+                       & (1u << Poe2.UiElement.FlagVisibleBit)) != 0;
+            return true;
+        }
+        return TryReadMapElementSlow(el, out visible, out shiftX, out shiftY, out zoom);
+    }
+
+    internal bool TryReadMapElementSlow(nint el, out bool visible, out float shiftX, out float shiftY, out float zoom)
     {
         visible = false; shiftX = shiftY = zoom = 0;
         if (!_reader.TryReadStruct<float>(el + Poe2.MapUiElement.DefaultShift + 4, out var dsy) || dsy != -20f) return false;
@@ -112,22 +141,34 @@ public sealed partial class Poe2Live
     {
         x = y = w = h = 0f;
         if (el == 0) return false;
-        if (!_reader.TryReadStruct<uint>(el + Poe2.UiElement.Flags, out var flags)) return false;
+        // Flags, ScaleIndex, LocalScaleMul and Size in ONE read (they share a ~0x160-byte span); per-field
+        // reads remain the fallback when the block can't be read.
+        Span<byte> rb = stackalloc byte[UiRectBlockLen <= MaxUiBlock ? UiRectBlockLen : 1];
+        var haveBlock = UiRectBlockLen <= MaxUiBlock && _reader.TryReadBytes(el + UiRectBlockStart, rb) == UiRectBlockLen;
+        uint flags;
+        if (haveBlock) flags = BinaryPrimitives.ReadUInt32LittleEndian(rb[(Poe2.UiElement.Flags - UiRectBlockStart)..]);
+        else if (!_reader.TryReadStruct<uint>(el + Poe2.UiElement.Flags, out flags)) return false;
         if ((flags & (1u << Poe2.UiElement.FlagVisibleBit)) == 0) return false;   // not (locally) visible
         // Stale-address guard: a loot-tag element captured at world rate can be freed/recycled before this
         // frame. Require the element to STILL show the matched first-line text; a recycled element holding
         // unrelated UI fails this and drops out (no garbage rect → no jitter). Caller passes the matched text.
-        if (requireFirstLine is { Length: > 0 })
+        if (requireFirstLine is { Length: > 0 } && !WStringFirstLineEquals(el + Poe2.UiElement.Text, requireFirstLine))
+            return false;
+        byte idx; float mul; System.Numerics.Vector2 sz;
+        if (haveBlock)
         {
-            var t = ReadStdWString(el + Poe2.UiElement.Text);
-            var nl = t.IndexOf('\n');
-            if (!string.Equals((nl >= 0 ? t[..nl] : t).Trim(), requireFirstLine, StringComparison.Ordinal)) return false;
+            idx = rb[Poe2.UiElement.ScaleIndex - UiRectBlockStart];
+            mul = MemoryMarshal.Read<float>(rb[(Poe2.UiElement.LocalScaleMul - UiRectBlockStart)..]);
+            sz = MemoryMarshal.Read<System.Numerics.Vector2>(rb[(Poe2.UiElement.SizeW - UiRectBlockStart)..]);
         }
-        if (!_reader.TryReadStruct<byte>(el + Poe2.UiElement.ScaleIndex, out var idx)) return false;
-        _reader.TryReadStruct<float>(el + Poe2.UiElement.LocalScaleMul, out var mul);
-        // Size as ONE atomic 8-byte read (W,H contiguous at 0x288/0x28C) — never split into two reads, or a
-        // mid-update read tears W from one frame and H from another.
-        _reader.TryReadStruct<System.Numerics.Vector2>(el + Poe2.UiElement.SizeW, out var sz);
+        else
+        {
+            if (!_reader.TryReadStruct<byte>(el + Poe2.UiElement.ScaleIndex, out idx)) return false;
+            _reader.TryReadStruct<float>(el + Poe2.UiElement.LocalScaleMul, out mul);
+            // Size as ONE atomic 8-byte read (W,H contiguous at SizeW/SizeH) — never split into two reads, or a
+            // mid-update read tears W from one frame and H from another.
+            _reader.TryReadStruct<System.Numerics.Vector2>(el + Poe2.UiElement.SizeW, out sz);
+        }
         var (sw, sh) = UiScaleValue(idx, mul, winW, winH);
         if (sw <= 0f || sh <= 0f) return false;
         var (px, py) = UiUnscaledPos(el, 0, winW, winH);
@@ -175,7 +216,69 @@ public sealed partial class Poe2Live
     /// form validated for loot tags by Research <c>--lootcursor</c>. (The runeforge panel's
     /// <see cref="Poe2Runeforge"/> keeps a rescale branch, but its rows share their parents' scale so it
     /// never fires; loot tags DO cross scale indices, where the rescale mis-positioned them.)</summary>
-    private (float x, float y) UiUnscaledPos(nint el, int depth, float winW, float winH)
+    internal (float x, float y) UiUnscaledPos(nint el, int depth, float winW, float winH)
+    {
+        // Memo (active only during one hover scan): siblings share every ancestor, so each element's chain
+        // position is computed once per scan instead of once per descendant (O(N·depth) → O(N) reads).
+        if (_uiPosMemo is { } memo && memo.TryGetValue(el, out var known)) return known;
+
+        // RelativePos, Parent, Flags and PositionModifier sit within ~0xB8 bytes of each other: read them in
+        // ONE read (was 3–4 syscalls per ancestor). RelativePos X,Y still come from a single copy (no tearing
+        // — see UiUnscaledPosSlow). Falls back to the per-field reads if the block can't be read.
+        if (UiPosBlockLen > MaxUiBlock) return UiUnscaledPosSlow(el, depth, winW, winH);
+        Span<byte> b = stackalloc byte[UiPosBlockLen];
+        if (_reader.TryReadBytes(el + UiPosBlockStart, b) != UiPosBlockLen)
+            return UiUnscaledPosSlow(el, depth, winW, winH);
+        var rel = MemoryMarshal.Read<System.Numerics.Vector2>(b[(Poe2.UiElement.RelativePos - UiPosBlockStart)..]);
+        var parent = PlausiblePtr(BinaryPrimitives.ReadInt64LittleEndian(b[(Poe2.UiElement.Parent - UiPosBlockStart)..]));
+        (float, float) result;
+        if (parent == 0 || depth >= 64) result = (rel.X, rel.Y);
+        else
+        {
+            var (ppx, ppy) = UiUnscaledPos(parent, depth + 1, winW, winH);
+            var flags = BinaryPrimitives.ReadUInt32LittleEndian(b[(Poe2.UiElement.Flags - UiPosBlockStart)..]);
+            if ((flags & (1u << Poe2.UiElement.FlagModifyPosBit)) != 0)
+            {
+                var mod = MemoryMarshal.Read<System.Numerics.Vector2>(b[(Poe2.UiElement.PositionModifier - UiPosBlockStart)..]);
+                if (PlausibleOffset(mod)) { ppx += mod.X; ppy += mod.Y; }
+            }
+            result = (ppx + rel.X, ppy + rel.Y);
+        }
+        _uiPosMemo?.TryAdd(el, result);
+        return result;
+    }
+
+    /// <summary>
+    /// PositionModifier sanity: in the current patch the modify-position flag is set on nearly every element and
+    /// the +0xF0 slot is (0,0) on most of them but holds pointer-like garbage (~3e19) on a few HUD ancestors
+    /// (verified live 2026-09-24, Research --invui). A real modifier is a small UI-unit offset, so anything else
+    /// is ignored instead of flinging the whole subtree off-screen.
+    /// </summary>
+    private static bool PlausibleOffset(System.Numerics.Vector2 v)
+        => float.IsFinite(v.X) && float.IsFinite(v.Y) && MathF.Abs(v.X) < 10000f && MathF.Abs(v.Y) < 10000f;
+
+    // The contiguous span holding every field UiUnscaledPos needs (derived from the offset table, so a patch
+    // that moves a field just moves the block; a span too large to be worth it disables the block path).
+    private static readonly int UiPosBlockStart = Math.Min(Math.Min(Poe2.UiElement.RelativePos, Poe2.UiElement.Parent),
+        Math.Min(Poe2.UiElement.Flags, Poe2.UiElement.PositionModifier));
+
+    private static readonly int UiPosBlockLen = Math.Max(Math.Max(Poe2.UiElement.RelativePos + 8, Poe2.UiElement.Parent + 8),
+        Math.Max(Poe2.UiElement.Flags + 4, Poe2.UiElement.PositionModifier + 8)) - UiPosBlockStart;
+
+    private const int MaxUiBlock = 0x400;   // beyond this a combined read isn't worth it (offsets drifted apart)
+
+    private static readonly int UiRectBlockStart = Math.Min(Math.Min(Poe2.UiElement.Flags, Poe2.UiElement.ScaleIndex),
+        Math.Min(Poe2.UiElement.LocalScaleMul, Poe2.UiElement.SizeW));
+
+    private static readonly int UiRectBlockLen = Math.Max(Math.Max(Poe2.UiElement.Flags + 4, Poe2.UiElement.ScaleIndex + 1),
+        Math.Max(Poe2.UiElement.LocalScaleMul + 4, Poe2.UiElement.SizeW + 8)) - UiRectBlockStart;
+
+    private Dictionary<nint, (float x, float y)>? _uiPosMemo;
+
+    private readonly Dictionary<nint, (float x, float y)> _uiPosMemoStore = new();
+
+    /// <summary>The original per-field parent-chain walk (reference semantics + fallback).</summary>
+    internal (float x, float y) UiUnscaledPosSlow(nint el, int depth, float winW, float winH)
     {
         // RelativePos as ONE atomic 8-byte read (X,Y contiguous). Splitting it into two float reads tears
         // X from one frame and Y from the next while the game is repositioning a world-anchored loot label
@@ -191,9 +294,32 @@ public sealed partial class Poe2Live
             && (flags & (1u << Poe2.UiElement.FlagModifyPosBit)) != 0)
         {
             _reader.TryReadStruct<System.Numerics.Vector2>(el + Poe2.UiElement.PositionModifier, out var mod);
-            ppx += mod.X; ppy += mod.Y;
+            if (PlausibleOffset(mod)) { ppx += mod.X; ppy += mod.Y; }
         }
         return (ppx + rel.X, ppy + rel.Y);
+    }
+
+    /// <summary>Enqueue an element's child pointers, read in blocks of up to 128 per syscall (was one read per
+    /// child). Implausible pointers are dropped (the per-child path enqueued them as 0, which the BFS skips).
+    /// A block that can't be read falls back to per-pointer reads, so nothing is lost vs the old path.</summary>
+    internal void EnqueueChildren(Queue<nint> queue, nint first, long n)
+    {
+        Span<nint> block = stackalloc nint[128];
+        for (long k = 0; k < n;)
+        {
+            var count = (int)Math.Min(block.Length, n - k);
+            var bytes = MemoryMarshal.AsBytes(block[..count]);
+            if (_reader.TryReadBytes(first + (nint)(k * 8), bytes) == bytes.Length)
+            {
+                for (var i = 0; i < count; i++)
+                    if (PlausiblePtr(block[i]) is var c and not 0) queue.Enqueue(c);
+            }
+            else
+            {
+                for (var i = 0; i < count; i++) queue.Enqueue(Ptr(first + (nint)((k + i) * 8)));
+            }
+            k += count;
+        }
     }
 
     /// <summary>Read the post-ritual tribute shop's offered rewards (full item entities) so the overlay can
@@ -219,8 +345,7 @@ public sealed partial class Poe2Live
             if (el == 0 || !visited.Add(el)) continue;
             var visible = _reader.TryReadStruct<uint>(el + Poe2.UiElement.Flags, out var flags) && (flags & visBit) != 0;
             if (!visible && el != uiRoot) continue;             // prune invisible subtree
-            if (ChildSpan(el, out var f, out var nn))
-                for (long k = 0; k < nn; k++) queue.Enqueue(Ptr(f + (nint)(k * 8)));
+            if (ChildSpan(el, out var f, out var nn)) EnqueueChildren(queue, f, nn);
             if (sigEl == 0)
             {
                 var t = ReadStdWString(el + Poe2.UiElement.Text);
@@ -304,8 +429,7 @@ public sealed partial class Poe2Live
             if (el == 0 || !visited.Add(el)) continue;
             var visible = _reader.TryReadStruct<uint>(el + Poe2.UiElement.Flags, out var flags) && (flags & visBit) != 0;
             if (!visible && el != uiRoot) continue;
-            if (ChildSpan(el, out var first, out var nn))
-                for (long k = 0; k < nn; k++) queue.Enqueue(Ptr(first + (nint)(k * 8)));
+            if (ChildSpan(el, out var first, out var nn)) EnqueueChildren(queue, first, nn);
             var t = ReadStdWString(el + Poe2.UiElement.Text);
             if (t.Length < needle.Length || !t.Contains(needle, StringComparison.OrdinalIgnoreCase)) continue;
             // The text element may be a zero-size label inside the button — use the first ancestor with a real size.
@@ -358,8 +482,7 @@ public sealed partial class Poe2Live
             if (first != 0 && _reader.TryReadStruct<nint>(el + Poe2.UiElement.ChildrenEnd, out var last))
             {
                 var n = ((long)last - (long)first) / 8;
-                if (n is > 0 and <= 8192)
-                    for (long k = 0; k < n; k++) queue.Enqueue(Ptr(first + (nint)(k * 8)));
+                if (n is > 0 and <= 8192) EnqueueChildren(queue, first, n);
             }
 
             var text = ReadStdWString(el + Poe2.UiElement.Text);
@@ -379,7 +502,50 @@ public sealed partial class Poe2Live
     /// tree walk (invisible subtrees skipped; per element just a +0x4F8 read, rects only for item slots) —
     /// meant to run THROTTLED on the world thread. <paramref name="curX"/>/<paramref name="curY"/> are
     /// overlay-client pixels (TryUiElementRect space).</summary>
+    private readonly Queue<nint> _hoverQueue = new();
+    private readonly HashSet<nint> _hoverVisited = new();
+    private nint _hoverSlot, _hoverRoot;
+    private long _hoverSlotScanAt;
+    public long HoverCacheHits { get; private set; }
+    public int HoverScanNodes { get; private set; }
+    public long HoverScanReads { get; private set; }
+    public double HoverScanMilliseconds { get; private set; }
+
     public HoveredItem? ReadHoveredItem(nint inGameState, float winW, float winH, float curX, float curY, int maxNodes = 40000)
+    {
+        var start = System.Diagnostics.Stopwatch.GetTimestamp();
+        var reads = _reader.ReadCount;
+        HoverScanNodes = 0;
+        _uiPosMemoStore.Clear();
+        _uiPosMemo = _uiPosMemoStore;   // one scan = one consistent snapshot of the UI positions
+        try { return ReadHoveredItemCore(inGameState, winW, winH, curX, curY, maxNodes); }
+        finally
+        {
+            _uiPosMemo = null;
+            _uiPosMemoStore.Clear();
+            HoverScanReads = _reader.ReadCount - reads;
+            HoverScanMilliseconds = System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+        }
+    }
+
+    // A cached slot is only valid while its self pointer and every visible ancestor still lead to this
+    // root. Recheck the item pointer/identity/stack on EVERY hit; inventory slots can be replaced in place.
+    private bool IsUiVisibleForHover(nint slot)
+        => _reader.TryReadStruct<uint>(slot + Poe2.UiElement.Flags, out var flags)
+            && (flags & (1u << Poe2.UiElement.FlagVisibleBit)) != 0;
+
+    private bool IsLiveHoverSlot(nint slot, nint root)
+    {
+        for (var depth = 0; depth < 64 && slot != 0; depth++)
+        {
+            if (slot == root) return true;
+            if (Ptr(slot + Poe2.UiElement.Self) != slot || !IsUiVisibleForHover(slot)) return false;
+            slot = Ptr(slot + Poe2.UiElement.Parent);
+        }
+        return false;
+    }
+
+    private HoveredItem? ReadHoveredItemCore(nint inGameState, float winW, float winH, float curX, float curY, int maxNodes = 40000)
     {
         var uiRoot = Ptr(inGameState + Poe2.InGameState.UiRoot);
         if (uiRoot == 0) return null;
@@ -387,36 +553,79 @@ public sealed partial class Poe2Live
 
         nint bestEl = 0, bestItem = 0; var bestArea = float.MaxValue;
 
-        var queue = new Queue<nint>(); queue.Enqueue(uiRoot);
-        var visited = new HashSet<nint>();
-        while (queue.Count > 0 && visited.Count < maxNodes)
+        if (maxNodes <= 0 || !float.IsFinite(curX) || !float.IsFinite(curY)) return null;
+        if (_hoverSlot != 0 && _hoverRoot == uiRoot
+            && System.Diagnostics.Stopwatch.GetElapsedTime(_hoverSlotScanAt).TotalMilliseconds < 500
+            && IsLiveHoverSlot(_hoverSlot, uiRoot)
+            && TryUiElementRect(_hoverSlot, winW, winH, out var hx, out var hy, out var hw, out var hh)
+            && curX >= hx && curX <= hx + hw && curY >= hy && curY <= hy + hh)
         {
-            var el = queue.Dequeue();
-            if (el == 0 || !visited.Add(el)) continue;
-            var visible = _reader.TryReadStruct<uint>(el + Poe2.UiElement.Flags, out var flags) && (flags & visBit) != 0;
-            if (!visible && el != uiRoot) continue;   // prune invisible subtree
-            if (ChildSpan(el, out var f, out var nn))
-                for (long k = 0; k < nn; k++) queue.Enqueue(Ptr(f + (nint)(k * 8)));
-            if (el == uiRoot) continue;
-
-            // Item slot? (+0x4F8 → item entity, validated by a RenderItem component.) Keep the SMALLEST
-            // cursor-containing slot (the innermost — grids nest the slot inside panel elements).
-            var it = Ptr(el + Poe2.Ritual.TileSlotItem);
-            if (it != 0 && ResolveComponent(it, "RenderItem") != 0
-                && TryUiElementRect(el, winW, winH, out var rx, out var ry, out var rw, out var rh)
-                && curX >= rx && curX <= rx + rw && curY >= ry && curY <= ry + rh)
+            var current = ItemFromHoverSlot(_hoverSlot, scan: true);
+            if (current != 0 && ResolveComponent(current, "RenderItem") != 0)
             {
-                var area = rw * rh;
-                if (area < bestArea) { bestArea = area; bestEl = el; bestItem = it; }
+                bestEl = _hoverSlot; bestItem = current; HoverCacheHits++;
             }
         }
+        if (bestItem == 0)
+        {
+            var queue = _hoverQueue; queue.Clear(); queue.Enqueue(uiRoot);
+            var visited = _hoverVisited; visited.Clear();
+            Span<nint> childPointers = stackalloc nint[128];
+            while (queue.Count > 0 && visited.Count < maxNodes)
+            {
+                var el = queue.Dequeue();
+                if (el == 0 || !visited.Add(el)) continue;
+                var visible = _reader.TryReadStruct<uint>(el + Poe2.UiElement.Flags, out var flags) && (flags & visBit) != 0;
+                if (!visible && el != uiRoot) continue;   // prune invisible subtree
+                if (ChildSpan(el, out var f, out var nn))
+                {
+                    // Read adjacent child pointers in blocks instead of making one OS call per child.
+                    for (long k = 0; k < nn && queue.Count + visited.Count < maxNodes;)
+                    {
+                        var count = (int)Math.Min(childPointers.Length, Math.Min(nn - k, maxNodes - queue.Count - visited.Count));
+                        var bytes = System.Runtime.InteropServices.MemoryMarshal.AsBytes(childPointers[..count]);
+                        if (_reader.TryReadBytes(f + (nint)(k * 8), bytes) != bytes.Length) break;
+                        for (int i = 0; i < count; i++)
+                            if ((ulong)childPointers[i] is >= 0x10000 and <= 0x7FFFFFFFFFFF) queue.Enqueue(childPointers[i]);
+                        k += count;
+                    }
+                }
+                if (el == uiRoot) continue;
 
-        if (bestItem == 0) return null;
+                // Item slot? (+0x4F8 → item entity, validated by a RenderItem component.) Keep the SMALLEST
+                // cursor-containing slot (the innermost — grids nest the slot inside panel elements).
+                if (!TryUiElementRect(el, winW, winH, out var rx, out var ry, out var rw, out var rh)
+                    || curX < rx || curX > rx + rw || curY < ry || curY > ry + rh || rw * rh >= bestArea) continue;
+                var it = ItemFromHoverSlot(el, scan: rw < winW * 0.4f && rh < winH * 0.4f);
+                if (it != 0)
+                {
+                    bestArea = rw * rh; bestEl = el; bestItem = it;
+                }
+            }
+
+            HoverScanNodes = visited.Count;
+            _hoverSlot = bestEl; _hoverRoot = uiRoot;
+            _hoverSlotScanAt = System.Diagnostics.Stopwatch.GetTimestamp();
+            queue.Clear(); visited.Clear();
+        }
+
+        // Some inventory UI variants expose the hovered entity directly through the game tracker.
+        if (bestItem == 0) bestItem = ItemFromLiveHoverTracker(uiRoot);
+
+        // Ground drops use a WorldItem wrapper instead of an inventory slot.
+        if (bestItem == 0)
+        {
+            var world = MouseOverEntity(inGameState);
+            var wrapper = world == 0 ? 0 : ResolveComponent(world, "WorldItem");
+            bestItem = wrapper == 0 ? 0 : Ptr(wrapper + Poe2.WorldItemComponent.ItemEntity);
+            if (bestItem == 0 || ResolveComponent(bestItem, "RenderItem") == 0) return null;
+        }
         var (rarity, art, identified, name) = ReadIdentityFromItem(bestItem);
         var stackComp = ResolveComponent(bestItem, "Stack");
         var stack = 0; if (stackComp != 0) _reader.TryReadStruct<int>(stackComp + Poe2.StackComponent.Count, out stack);
 
-        TryUiElementRect(bestEl, winW, winH, out var bx, out var by, out var bw, out var bh);
+        float bx = curX + 16, by = curY + 16, bw = 1, bh = 1;
+        if (bestEl != 0 && !TryUiElementRect(bestEl, winW, winH, out bx, out by, out bw, out bh)) return null;
         return new HoveredItem(bestItem, rarity, art, identified, name, stack, bx, by, bw, bh);
     }
 

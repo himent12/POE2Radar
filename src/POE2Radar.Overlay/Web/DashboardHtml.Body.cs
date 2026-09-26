@@ -1,573 +1,584 @@
 namespace POE2Radar.Overlay.Web;
 
-/// <summary>Dashboard page — HTML body (tabs, cards, forms).</summary>
+/// <summary>Dashboard page — HTML body: left nav rail + hash-routed pages (Overview, Trade, Macros, Radar,
+/// Atlas, Item Value, Settings). Element ids / data-attributes are the contract with the scripts.</summary>
 internal static partial class DashboardHtml
 {
     private const string Body = """
 <body>
-<a id="updateBanner" href="#" target="_blank" rel="noopener" hidden
-   style="display:none;align-items:center;gap:10px;padding:9px 16px;margin:0;background:#e0b341;color:#1a1400;font-weight:600;text-decoration:none">
-  <span>&#x2B06; Update available</span><span id="updateMsg" style="font-weight:400"></span><span style="margin-left:auto;text-decoration:underline">Download &rarr;</span>
-</a>
-<div class="shell">
-  <header>
-    <div class="mark">
-      <h1>POE2RADAR</h1>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-overview" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></symbol>
+    <symbol id="i-trade" viewBox="0 0 24 24"><path d="M4 8h15"/><path d="M15 4l4 4-4 4"/><path d="M20 16H5"/><path d="M9 12l-4 4 4 4"/></symbol>
+    <symbol id="i-macros" viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6.5 10h1M10.5 10h1M14.5 10h1M18 10h-.5M7 14h10"/></symbol>
+    <symbol id="i-radar" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M12 12l6-6"/><circle cx="16.5" cy="14.5" r=".6"/></symbol>
+    <symbol id="i-atlas" viewBox="0 0 24 24"><path d="M9 4L3 6.5v13.5l6-2.5 6 2.5 6-2.5V4l-6 2.5L9 4z"/><path d="M9 4v13.5M15 6.5V20"/></symbol>
+    <symbol id="i-value" viewBox="0 0 24 24"><path d="M20.4 13.4l-7 7a2 2 0 01-2.8 0L3 12.8V3h9.8l7.6 7.6a2 2 0 010 2.8z"/><circle cx="7.8" cy="7.8" r="1.4"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></symbol>
+    <symbol id="i-flask" viewBox="0 0 24 24"><path d="M9 3h6M10 3v5.5L5 18a2 2 0 001.8 3h10.4A2 2 0 0019 18l-5-9.5V3"/><path d="M7.5 15h9"/></symbol>
+    <symbol id="i-buff" viewBox="0 0 24 24"><path d="M12 3l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.4l-5.2 2.7 1-5.8L3.5 9.2l5.9-.9L12 3z"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M20 15a2 2 0 01-2 2H8l-4 4V5a2 2 0 012-2h12a2 2 0 012 2v10z"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 01-1 1H5a1 1 0 01-1-1V7a1 1 0 011-1h5"/></symbol>
+  </defs>
+</svg>
+<div class="app">
+  <nav class="rail" aria-label="Sections">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="16" cy="16" r="12.5"/><circle cx="16" cy="16" r="6.5" opacity=".55"/><path d="M16 16l8.5-8.5" stroke-linecap="round"/><circle cx="21" cy="19.5" r="1.6" fill="currentColor" stroke="none"/></svg>
+      <div><b>POE2 Radar</b><small id="verTxt">&nbsp;</small></div>
     </div>
-    <div class="hgap"></div>
-    <div class="area-chip" id="areaChip">— <b>·</b></div>
-    <div class="conn" id="conn"><span class="dot"></span><span id="connTxt">offline</span></div>
-  </header>
+    <a class="nav" href="#overview" data-page="overview"><svg><use href="#i-overview"/></svg>Overview</a>
+    <a class="nav" href="#trade" data-page="trade"><svg><use href="#i-trade"/></svg>Trade<span class="nbadge" id="navTradeBadge" hidden>0</span></a>
+    <a class="nav" href="#macros" data-page="macros"><svg><use href="#i-macros"/></svg>Macros</a>
+    <div class="navlbl">Overlay</div>
+    <a class="nav" href="#radar" data-page="radar"><svg><use href="#i-radar"/></svg>Radar</a>
+    <a class="nav" href="#atlas" data-page="atlas"><svg><use href="#i-atlas"/></svg>Atlas</a>
+    <a class="nav" href="#value" data-page="value"><svg><use href="#i-value"/></svg>Item Value</a>
+    <a class="nav" href="#settings" data-page="settings"><svg><use href="#i-settings"/></svg>Settings</a>
+    <div class="rail-foot">
+      <div class="conn" id="conn"><span class="dot"></span><span id="connTxt">Offline</span></div>
+      <div class="rail-area" id="areaChip">&mdash;</div>
+      <div class="rail-sub" id="railSub">&nbsp;</div>
+    </div>
+  </nav>
 
-  <div class="body">
-    <aside>
-      <div class="vital">
-        <div class="vlabel"><span>Life</span><span class="num" id="hpNum">—</span></div>
-        <div class="bar hp"><i id="hpBar" style="width:0"></i></div>
-      </div>
-      <div class="vital">
-        <div class="vlabel"><span>Energy Shield</span><span class="num" id="esNum">—</span></div>
-        <div class="bar es"><i id="esBar" style="width:0"></i></div>
-      </div>
-      <div class="vital">
-        <div class="vlabel"><span>Mana</span><span class="num" id="mpNum">—</span></div>
-        <div class="bar mana"><i id="mpBar" style="width:0"></i></div>
-      </div>
+  <main class="content">
+    <a id="updateBanner" href="#" target="_blank" rel="noopener" hidden>
+      <span>&#x2B06; Update available</span><span id="updateMsg"></span><span style="margin-left:auto">Download &rarr;</span>
+    </a>
 
-      <div class="sect">Zone</div>
-      <div class="kv"><span>Area</span><span id="kAreaName">—</span></div>
-      <div class="kv"><span>Area code</span><span id="kArea">—</span></div>
-      <div class="kv"><span>Act / Level</span><span id="kAlvl">—</span></div>
-      <div class="kv"><span>Map open</span><span id="kMap">—</span></div>
-      <div class="kv"><span>Auto-flask</span><span id="kFlask">—</span></div>
-      <div class="kv"><span>Bot</span><span id="kBot">—</span></div>
-      <div class="kv"><span>Map clear</span><span id="kClear">—</span></div>
-      <div class="kv"><span>Combat assist</span><span id="kCombat">—</span></div>
-      <div class="kv"><span>Quest follow</span><span id="kQuest">—</span></div>
-      <div class="kv"><span>Path move</span><span id="kMove">—</span></div>
-      <div id="zoneNotes" class="znotes" hidden></div>
+    <!-- ═════════════ OVERVIEW ═════════════ -->
+    <section class="page" data-page="overview">
+      <header class="phead">
+        <div><h1>Overview</h1><p>Live character, zone and module status at a glance.</p></div>
+        <div class="aside"><span class="pill" id="ovGame">&mdash;</span></div>
+      </header>
 
-      <div class="sect">Census</div>
-      <div class="tally">
-        <div class="t"><div class="n" id="cEnt">0</div><div class="l">Entities</div></div>
-        <div class="t"><div class="n" id="cPoi">0</div><div class="l">Points of Int.</div></div>
-        <div class="t"><div class="n" id="cMon">0</div><div class="l">Monsters</div></div>
-        <div class="t"><div class="n" id="cLm">0</div><div class="l">Landmarks</div></div>
-      </div>
-
-      <div id="monoCard" hidden>
-        <div class="sect">Monolith Rewards</div>
-        <div id="monoList" class="znotes" style="display:block"></div>
-      </div>
-
-      <div style="height:24px"></div>
-    </aside>
-
-    <main>
-      <div class="tabs">
-        <button class="tab on" data-tab="filters">Rules</button>
-        <button class="tab" data-tab="landmarks">Landmarks</button>
-        <button class="tab" data-tab="atlas">Atlas</button>
-        <button class="tab" data-tab="value">Item Value</button>
-        <button class="tab" data-tab="settings">Settings</button>
+      <div class="grid">
+        <div class="tile span-3">
+          <div class="tlbl"><span class="sdot hp"></span>Life</div>
+          <div class="tval" id="hpNum">&mdash;</div>
+          <div class="bar hp"><i id="hpBar"></i></div>
+        </div>
+        <div class="tile span-3">
+          <div class="tlbl"><span class="sdot es"></span>Energy Shield</div>
+          <div class="tval" id="esNum">&mdash;</div>
+          <div class="bar es"><i id="esBar"></i></div>
+        </div>
+        <div class="tile span-3">
+          <div class="tlbl"><span class="sdot mana"></span>Mana</div>
+          <div class="tval" id="mpNum">&mdash;</div>
+          <div class="bar mana"><i id="mpBar"></i></div>
+        </div>
+        <div class="tile span-3">
+          <div class="tlbl">Area</div>
+          <div class="tval sm" id="kAreaName">&mdash;</div>
+          <div class="tsub"><span id="kAlvl">&mdash;</span> &middot; <span class="mono" id="kArea">&mdash;</span></div>
+        </div>
       </div>
 
-      <section class="view" data-view="filters">
-        <div class="panel-grid">
-          <div class="card" style="grid-column:1/-1">
-            <h3>Display Rules <span class="tag">&middot; one ordered ruleset &mdash; first match wins</span></h3>
-            <div class="row"><div class="rl hint-row">The single source of truth for how every entity draws. Each entity is matched <b>top&ndash;to&ndash;bottom</b>; the <b>first enabled rule that matches</b> decides everything &mdash; its icon &amp; color, whether it&rsquo;s hidden, whether it shows an HP bar, and whether it&rsquo;s auto-pathed. Reorder with &#9650;/&#9660; to change precedence. A rule matches on any mix of <i>type, metadata terms, monster mods (auras/buffs), rarity, reaction, life, chest/POI/encounter state</i>; a blank condition means &ldquo;any&rdquo;. No more conflicting filters &mdash; if two rules could match, the higher one wins.</div></div>
-            <div id="drList"></div>
-            <div class="controls" style="margin:8px 0 0">
-              <button class="addbtn" id="drPick" style="width:auto;margin:0;padding:9px 16px">+ Add from game data…</button>
-              <button class="addbtn" id="drAdd" style="width:auto;margin:0;padding:9px 16px">+ Add blank rule</button>
-            </div>
-          </div>
-          <div class="card" style="grid-column:1/-1">
-            <h3>Hidden <span class="tag">&middot; cull entirely from radar, list &amp; nav</span></h3>
-            <div class="row"><div class="rl hint-row">A stronger cut than a Hide rule: entities whose metadata contains a pattern (or matches a <code>*</code>/<code>?</code> glob) are removed <i>everywhere</i> &mdash; overlay, entity list, and navigation &mdash; before the display rules even run.</div></div>
-            <div id="hideList" class="controls" style="margin:8px 0 14px"></div>
-            <div class="controls" style="margin:0">
-              <input type="search" id="hidePattern" placeholder="pattern or glob to hide (e.g. AbyssCrack, *Daemon*)">
-              <button class="addbtn" id="hideAdd" style="width:auto;margin:0;padding:8px 16px">+ Hide</button>
-            </div>
+      <div class="grid stretch">
+        <div class="card module span-3">
+          <div class="mhead"><span class="micon"><svg><use href="#i-flask"/></svg></span><span class="mtitle">Auto-flask</span><span class="pill" id="mFlaskPill">&mdash;</span></div>
+          <div class="mnote" id="kFlask">&mdash;</div>
+          <div class="mfoot"><kbd>F8</kbd> arm / disarm in game</div>
+        </div>
+        <div class="card module span-3">
+          <div class="mhead"><span class="micon"><svg><use href="#i-buff"/></svg></span><span class="mtitle">Buff keeper</span><span class="pill" id="mBuffPill">&mdash;</span></div>
+          <div class="mnote" id="mBuffNote">&mdash;</div>
+          <div class="mfoot"><kbd id="mBuffHk">F4</kbd> arm in game &middot; <a href="#macros">Edit rules &rarr;</a></div>
+        </div>
+        <div class="card module span-3">
+          <div class="mhead"><span class="micon"><svg><use href="#i-trade"/></svg></span><span class="mtitle">Trade</span><span class="pill" id="mTradePill">&mdash;</span></div>
+          <div class="mnote" id="mTradeNote">&mdash;</div>
+          <div class="mfoot"><span id="mTradeOpen">0 open requests</span> &middot; <a href="#trade">Open &rarr;</a></div>
+        </div>
+        <div class="card module span-3">
+          <div class="mhead"><span class="micon"><svg><use href="#i-chat"/></svg></span><span class="mtitle">Chat</span><span class="pill" id="mChatPill">&mdash;</span></div>
+          <div class="mnote" id="mChatNote">&mdash;</div>
+          <div class="mfoot">Last result &middot; <a href="#macros">Edit commands &rarr;</a></div>
+        </div>
+      </div>
+
+      <div class="grid stretch">
+        <div class="tile span-4">
+          <div class="tlbl">Trade profit today</div>
+          <div class="tval" id="ovProfit">&mdash;</div>
+          <div class="tsub" id="ovProfitSub">&mdash;</div>
+          <div class="kv" style="margin-top:12px"><span>Last 7 days</span><span id="ovProfitWeek">&mdash;</span></div>
+          <div class="kv"><span>All time</span><span id="ovProfitAll">&mdash;</span></div>
+        </div>
+        <div class="card span-4">
+          <h3>Census <span class="tag">this area</span></h3>
+          <div class="minis" style="grid-template-columns:repeat(2,minmax(0,1fr))">
+            <div class="mini"><div class="n" id="cEnt">0</div><div class="l">Entities</div></div>
+            <div class="mini"><div class="n" id="cMon">0</div><div class="l">Monsters</div></div>
+            <div class="mini"><div class="n" id="cPoi">0</div><div class="l">Points of interest</div></div>
+            <div class="mini"><div class="n" id="cLm">0</div><div class="l">Landmarks</div></div>
           </div>
         </div>
-        <div style="margin-top:18px; height:14px"><span class="saved" id="savedMsgF">&#10003; saved to config</span></div>
-      </section>
+        <div class="card span-4">
+          <h3>Overlay</h3>
+          <div class="kv"><span>Render</span><span id="kFps">&mdash;</span></div>
+          <div class="kv"><span>World pass</span><span id="kWorld">&mdash;</span></div>
+          <div class="kv"><span>Map open</span><span id="kMap">&mdash;</span></div>
+        </div>
+      </div>
 
-      <section class="view" data-view="landmarks" hidden>
-        <div class="panel-grid">
-          <div class="card" style="grid-column:1/-1">
-            <h3>Landmarks <span class="tag">&middot; curated map labels &mdash; view, fix, share</span></h3>
-            <div class="row"><div class="rl hint-row">The built-in &ldquo;known&rdquo; map features (boss arenas, exits, loot, waypoints&hellip;), labelled per area. Rename a wrong label, add your own, or hide a bad entry. <b>Export</b> a corrected list to share or submit for baking into a release; <b>Import</b> to load one. (For how a tile <i>draws</i> — icon/color/hide — use a Tile rule on the Rules tab; this is just the labels.)</div></div>
-            <div class="controls" style="margin:6px 0 12px">
-              <input type="search" id="lmSearch" placeholder="filter by area / tile / label…">
-              <button class="chip on" id="lmAreaOnly">This area only</button>
-              <span style="flex:1"></span>
-              <button class="addbtn" id="lmImport" style="width:auto;margin:0;padding:8px 14px">Import…</button>
-              <button class="addbtn" id="lmExport" style="width:auto;margin:0;padding:8px 14px">Export</button>
-            </div>
-            <div id="lmList"></div>
-            <div class="mechrow">
-              <div class="top">
-                <input class="mname" id="lmArea" placeholder="area (e.g. P2_3, or *)" style="max-width:150px">
-                <input class="mname" id="lmPat" placeholder="tile path / pattern">
-                <input class="mname" id="lmLabel" placeholder="label">
-                <button class="addbtn" id="lmAdd" style="width:auto;margin:0;padding:8px 16px">+ Add</button>
-              </div>
-            </div>
+      <div class="grid">
+        <div class="card span-7">
+          <h3>Hotkeys <span class="tag">active only while PoE2 is focused</span></h3>
+          <div class="hkgrid" id="hkList"></div>
+        </div>
+        <div class="card span-5">
+          <h3>Bookmarks <span class="grow"></span><a class="btn ghost sm" href="#macros">Edit</a></h3>
+          <div id="bmQuick"><div class="empty">Loading&hellip;</div></div>
+        </div>
+      </div>
+
+      <div class="grid">
+        <div class="card span-6" id="monoCard" hidden>
+          <h3>Monolith rewards <span class="tag">expedition &middot; this area</span></h3>
+          <div id="monoList"></div>
+        </div>
+        <div class="card span-6" id="zoneCard" hidden>
+          <h3>Zone notes</h3>
+          <div id="zoneNotes" class="znotes"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═════════════ TRADE ═════════════ -->
+    <section class="page" data-page="trade" hidden>
+      <header class="phead">
+        <div><h1>Trade</h1><p>Trade whispers read from the game's Client.txt, with a profit tracker.</p></div>
+        <div class="aside"><span class="pill" id="trAfk" hidden>AFK</span><span class="pill" id="trLogPill">&mdash;</span></div>
+      </header>
+      <div class="note-box" id="trLogInfo" style="margin-bottom:16px">&mdash;</div>
+
+      <div class="grid stretch" id="trSummary">
+        <div class="tile sumtile span-4" data-sum="today"><div class="tlbl">Today</div><div class="tval">&mdash;</div></div>
+        <div class="tile sumtile span-4" data-sum="week"><div class="tlbl">Last 7 days</div><div class="tval">&mdash;</div></div>
+        <div class="tile sumtile span-4" data-sum="all"><div class="tlbl">All time</div><div class="tval">&mdash;</div></div>
+      </div>
+
+      <div class="grid">
+        <div class="card span-5">
+          <h3>Daily profit <span class="tag">last 14 days &middot; exalted</span><span class="grow"></span><span class="tag" id="trChartTotal"></span></h3>
+          <div class="chart" id="trChart"></div>
+        </div>
+        <div class="card span-7">
+          <h3>Live requests <span class="tag" id="trReqCount"></span></h3>
+          <div class="hint" style="margin:-4px 0 6px">Chat actions (invite, trade, thanks, busy) are only available in game on the overlay's trade panel. Dismissing here just removes the card.</div>
+          <div id="trReqs"><div class="empty">No open requests.</div></div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:16px">
+        <h3>History <span class="tag" id="trHistCount"></span><span class="grow"></span><button class="btn danger sm" id="trClear">Clear history</button></h3>
+        <div id="trHistErr"></div>
+        <div class="tablewrap" style="max-height:440px" id="trHist"><div class="empty">No completed trades yet.</div></div>
+      </div>
+
+      <div class="grid">
+        <div class="card span-6">
+          <h3>Trade assistant</h3>
+          <div class="row"><div class="rl">Enabled<small>read trade whispers from Client.txt</small></div>
+            <label class="sw"><input type="checkbox" data-tr="enabled"><span class="track"></span><span class="knob"></span></label></div>
+          <div class="row"><div class="rl">Show in-game panel<small>request cards with invite / trade / thanks buttons</small></div>
+            <label class="sw"><input type="checkbox" data-tr="showPanel"><span class="track"></span><span class="knob"></span></label></div>
+          <div class="row"><div class="rl">Panel position<small>fraction of the game window</small></div>
+            <span class="trow-ctl"><span class="flbl">X</span><input type="range" min="0" max="95" data-trpct="panelX" style="width:90px"><span class="opv" data-trpv="panelX">&mdash;</span>
+            <span class="flbl">Y</span><input type="range" min="0" max="95" data-trpct="panelY" style="width:90px"><span class="opv" data-trpv="panelY">&mdash;</span></span></div>
+          <div class="row"><div class="rl">Track history<small>record completed trades for the profit tracker</small></div>
+            <label class="sw"><input type="checkbox" data-tr="trackHistory"><span class="track"></span><span class="knob"></span></label></div>
+          <div class="row"><div class="rl">Kick after trade<small>&ldquo;Thanks&rdquo; on a completed incoming trade also kicks the buyer from the party</small></div>
+            <label class="sw"><input type="checkbox" data-tr="kickAfterTrade"><span class="track"></span><span class="knob"></span></label></div>
+          <div class="row"><div class="rl">Expire after<small>minutes without activity before a request drops off</small></div>
+            <input class="numin" type="number" min="1" max="1440" step="1" data-tr="expireMinutes"></div>
+          <div class="row"><div class="rl">Max requests<small>cards kept on the panel</small></div>
+            <input class="numin" type="number" min="1" max="50" step="1" data-tr="maxSessions"></div>
+          <div class="field" style="margin-top:10px"><span>Client.txt path</span>
+            <input type="text" data-tr="clientLogPath" placeholder="leave empty to auto-detect" spellcheck="false"></div>
+          <div class="hint" style="margin-top:6px">Leave empty to auto-detect from the running game. Point it at <code>logs/Client.txt</code> or the game folder.</div>
+        </div>
+        <div class="card span-6">
+          <h3>Reply messages <span class="tag">sent from the in-game panel buttons</span></h3>
+          <div class="field" style="margin-bottom:12px"><span>Thanks</span><input type="text" data-tr="thanksMessage" maxlength="200"></div>
+          <div class="field" style="margin-bottom:12px"><span>Busy</span><input type="text" data-tr="busyMessage" maxlength="200"></div>
+          <div class="field" style="margin-bottom:12px"><span>Sold</span><input type="text" data-tr="soldMessage" maxlength="200"></div>
+          <div class="field"><span>Still interested?</span><input type="text" data-tr="stillInterestedMessage" maxlength="200"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═════════════ MACROS ═════════════ -->
+    <section class="page" data-page="macros" hidden>
+      <header class="phead">
+        <div><h1>Macros</h1><p>Buff keeper and chat-command hotkeys. Nothing here fires unless PoE2 is focused.</p></div>
+      </header>
+
+      <div class="grid">
+        <div class="card span-8">
+          <h3>Buff keeper <span class="pill" id="bkArmed">&mdash;</span><span class="tag" id="bkNote"></span></h3>
+          <div class="hint" style="margin:-2px 0 12px">Recasts self-buffs when they go missing, run low, or on a timer. A buff name matches part of the internal buff id (pick from the live list); <code>|</code> separates alternatives. Rules run top to bottom (first = highest priority), one key per tick.
+            Arm with <kbd id="bkHkHint">F4</kbd> or the Insert menu; arming isn't possible from the dashboard.</div>
+          <div class="fgrid" style="grid-template-columns:repeat(3,minmax(0,1fr)); margin-bottom:14px">
+            <label class="field"><span>Arm / disarm hotkey</span><input class="kcap" id="bkToggle" readonly placeholder="click, then press a key"></label>
+            <label class="field"><span>Min gap between any two presses (ms)</span><input class="numin" style="width:100%;text-align:left" type="number" min="50" max="5000" step="10" id="bkGap"></label>
+          </div>
+          <div id="bkWarn"></div>
+          <div id="bkOffBanner"></div>
+          <div id="bkUnread"></div>
+          <div id="bkRules"></div>
+          <button class="addbtn" id="bkAdd">+ Add rule</button>
+        </div>
+        <div class="span-4 sticky">
+          <div class="card">
+            <h3>Live buffs <span class="tag" id="lbCount"></span></h3>
+            <div id="lbList"><div class="empty">Loading&hellip;</div></div>
           </div>
         </div>
-        <div style="margin-top:18px; height:14px"><span class="saved" id="savedMsgL">&#10003; saved to config</span></div>
-      </section>
+      </div>
 
-      <section class="view" data-view="atlas" hidden>
-        <div class="panel-grid">
-          <div class="card" style="grid-column:1/-1">
-            <h3 style="display:flex;align-items:center;gap:10px">Atlas
-              <span class="tag" id="atlasStatus">&mdash;</span>
-              <span style="flex:1"></span>
-              <button class="chip" id="atlasRefresh" title="Re-read the open Atlas">&#8635; Refresh</button>
-              <button class="chip" id="atlasHelp" title="How it works" style="width:28px;padding:6px 0;text-align:center">?</button>
-            </h3>
-
-            <!-- help popover (collapsed by default) -->
-            <div id="atlasHelpBox" hidden class="hint-row" style="margin:0 0 10px;padding:9px 11px;border:1px solid var(--line);border-radius:6px;line-height:1.6">
-              Open the Atlas in-game, then <b>Refresh</b>. Each row is a map type or rolled content read from memory.
-              Per row toggle <b>&#9745; Highlight</b> (ring it in-game), <b style="color:#3ddc97">&#8674; Nav</b> (draw a route to it),
-              <b style="color:#e0b341">&#10148; Arrow</b> (edge pointer when off-screen) &mdash; independent. Click any column header to sort.
-              Hover a tile in-game + press <b>F10</b> to inspect it.
-            </div>
-
-            <!-- quick presets -->
-            <div class="controls" id="atlasPresets" style="gap:6px;margin:0 0 8px;flex-wrap:wrap">
-              <span class="hint-row" style="opacity:.7;margin-right:2px">Quick&nbsp;set:</span>
-              <button class="chip" data-preset="citadels">&#9733; Citadels</button>
-              <button class="chip" data-preset="deadly">&#9760; Deadly Boss</button>
-              <button class="chip" data-preset="bosses">Bosses</button>
-              <button class="chip" data-preset="towers">Towers</button>
-              <button class="chip" data-preset="uniques">Uniques</button>
-            </div>
-
-            <!-- display options (#3 declutter / #5 content icons) — persisted via /api/settings -->
-            <div class="controls" id="atlasOpts" style="gap:14px;margin:0 0 8px;flex-wrap:wrap;font-size:12px">
-              <label title="Hide maps you've already completed (declutter)"><input type="checkbox" data-atset="atlasHideCompleted"> Hide completed</label>
-              <label title="Hide maps you can run right now"><input type="checkbox" data-atset="atlasHideAccessible"> Hide accessible</label>
-              <label title="Draw in-game content art above tracked + fogged maps"><input type="checkbox" data-atset="atlasShowContentIcons"> Content icons</label>
-              <label title="Content icon size (px)">Icon size <input type="number" data-atset="atlasContentIconSize" min="12" max="64" step="1" style="width:56px"></label>
-              <label title="Spacing of the directional arrows along routes">Arrow spacing <input type="number" data-atset="atlasRouteArrowSpacing" min="1.5" max="18" step="0.5" style="width:56px"></label>
-            </div>
-
-            <!-- active rules (removable chips) -->
-            <div id="atlasActive" style="margin:0 0 8px"></div>
-
-            <!-- group filter + search -->
-            <div class="controls" style="gap:6px;margin:0 0 8px;flex-wrap:wrap">
-              <button class="chip on" data-group="all">All</button>
-              <button class="chip" data-group="Kind">Kind</button>
-              <button class="chip" data-group="Type">Type</button>
-              <button class="chip" data-group="Content">Content</button>
-              <button class="chip" data-group="Map">Map</button>
-              <span style="flex:1"></span>
-              <button class="chip" id="atlasHlSelOnly">Active only</button>
-              <button class="chip" id="atlasHlClear">Clear all</button>
-              <input type="search" id="atlasHlFilter" placeholder="search&hellip;" style="width:160px">
-            </div>
-
-            <div id="atlasHlTable" style="max-height:460px;overflow:auto;border:1px solid var(--line);border-radius:6px">
-              <span class="hint-row" style="padding:8px;display:block">Open the Atlas in-game + Refresh to list filters.</span>
-            </div>
+      <div class="grid">
+        <div class="card span-8">
+          <h3>Chat commands <span class="grow"></span><label class="inl">Enabled <span class="sw"><input type="checkbox" id="cmdEnabled"><span class="track"></span><span class="knob"></span></span></label></h3>
+          <div class="ph">
+            <span><code>@char</code> / <code>{char}</code> your character</span>
+            <span><code>@last</code> / <code>{last}</code> last whisper partner</span>
+            <span><code>{league}</code> current league</span>
+            <span><code>{area}</code> current area</span>
+            <span>Several lines = several chat messages</span>
           </div>
-
-          <!-- #7 colour groups: a named set of map names that all draw in one ring/label colour. -->
-          <div class="card" style="grid-column:1/-1">
-            <h3 style="display:flex;align-items:center;gap:10px">Map colour groups
-              <span class="hint-row" style="opacity:.7;font-weight:400">recolour a whole category at once (Citadels, Halls, Uniques&hellip;)</span>
-              <span style="flex:1"></span>
-              <button class="chip" id="atlasGroupAdd">+ Add group</button>
-            </h3>
-            <div id="atlasGroups"></div>
-          </div>
+          <div id="cmdWarn"></div>
+          <div class="cmdrow rowhead"><span>On</span><span>Name</span><span>Hotkey</span><span>Chat text</span><span></span></div>
+          <div id="cmdList"></div>
+          <button class="addbtn" id="cmdAdd">+ Add command</button>
         </div>
-      </section>
-
-      <section class="view" data-view="settings" hidden>
-        <div class="panel-grid">
-          <div class="card">
-            <h3>Radar Display</h3>
-            <div class="row"><div class="rl">Show terrain<small>walkable-terrain bitmap</small></div>
-              <label class="sw"><input type="checkbox" data-set="showTerrain"><span class="track"></span><span class="knob"></span></label></div>
-            <div class="row"><div class="rl">Show player blip<small>blue dot marking your own position</small></div>
-              <label class="sw"><input type="checkbox" data-set="showPlayerBlip"><span class="track"></span><span class="knob"></span></label></div>
-            <div class="row"><div class="rl">Always show overlay<small>draw even when PoE2 isn&rsquo;t focused (e.g. while tweaking this dashboard); auto-flask stays focus-gated</small></div>
-              <label class="sw"><input type="checkbox" data-set="alwaysShowOverlay"><span class="track"></span><span class="knob"></span></label></div>
-            <div class="row"><div class="rl">Hide junk entities<small>suppress cosmetic / FX / daemon dots</small></div>
-              <label class="sw"><input type="checkbox" data-set="hideJunk"><span class="track"></span><span class="knob"></span></label></div>
-            <div class="row"><div class="rl">Navigation paths<small>draw A&#42; routes to selected landmarks</small></div>
-              <label class="sw"><input type="checkbox" data-set="showPath"><span class="track"></span><span class="knob"></span></label></div>
-            <div class="row"><div class="rl">Curated landmark names<small>community labels (boss / reward / exits)</small></div>
-              <label class="sw"><input type="checkbox" data-set="useCuratedLandmarks"><span class="track"></span><span class="knob"></span></label></div>
-            <div class="row"><div class="rl">Overlay FPS cap<small>lower = less load on the game; 60 is smooth for a radar (15&ndash;360)</small></div>
-              <input class="numin" type="number" step="1" min="15" max="360" data-set="fpsCap"></div>
-          </div>
-          <div class="card">
-            <h3>Monster HP Bars <span class="tag">&middot; by rarity</span></h3>
-            <div class="row"><div class="rl hint-row">Toggle the bar on/off per rarity with the <b>On</b> checkbox &mdash; uncheck all to disable HP bars entirely, or leave only the rarities you want. The rest sets the bar <i>geometry</i> per rarity.</div></div>
-            <div class="hpgrid">
-              <span class="hph">On</span><span class="hph">Rarity</span><span class="hph">Width</span><span class="hph">Border</span><span class="hph">Thick</span>
-              <input type="checkbox" data-set="hpBarNormal">
-              <span class="hpr">Normal</span>
-              <input class="numin" type="number" step="1" min="4" data-hp="widthNormal">
-              <input type="color" class="i-color" data-hpcolor="borderColorNormal">
-              <input class="numin" type="number" step="0.5" min="0" max="20" data-hp="borderNormal">
-              <input type="checkbox" data-set="hpBarMagic">
-              <span class="hpr" style="color:var(--magic)">Magic</span>
-              <input class="numin" type="number" step="1" min="4" data-hp="widthMagic">
-              <input type="color" class="i-color" data-hpcolor="borderColorMagic">
-              <input class="numin" type="number" step="0.5" min="0" max="20" data-hp="borderMagic">
-              <input type="checkbox" data-set="hpBarRare">
-              <span class="hpr" style="color:var(--rare)">Rare</span>
-              <input class="numin" type="number" step="1" min="4" data-hp="widthRare">
-              <input type="color" class="i-color" data-hpcolor="borderColorRare">
-              <input class="numin" type="number" step="0.5" min="0" max="20" data-hp="borderRare">
-              <input type="checkbox" data-set="hpBarUnique">
-              <span class="hpr" style="color:var(--unique)">Unique</span>
-              <input class="numin" type="number" step="1" min="4" data-hp="widthUnique">
-              <input type="color" class="i-color" data-hpcolor="borderColorUnique">
-              <input class="numin" type="number" step="0.5" min="0" max="20" data-hp="borderUnique">
-            </div>
-            <div class="hpshared">
-              <label>Height<input class="numin" type="number" step="1" min="1" max="30" data-hp="height"></label>
-              <label>Offset X<input class="numin" type="number" step="1" data-hp="offsetX"></label>
-              <label>Offset Y<input class="numin" type="number" step="1" data-hp="offsetY"></label>
-            </div>
-            <div class="row"><div class="rl hint-row">Bar fill follows the monster icon color; set border color &amp; thickness per rarity (thickness 0 = no border). Offset Y negative = above the mob.</div></div>
-          </div>
-          <div class="card">
-            <h3>Terrain <span class="tag">&middot; walkable overlay</span></h3>
-            <div class="row"><div class="rl">Interior fill<small>wash over walkable cells</small></div>
-              <span class="trow-ctl">
-                <input type="color" class="i-color" data-tcolor="interiorColor">
-                <input type="range" class="op" min="0" max="100" data-topacity="interiorOpacity">
-                <span class="opv" data-topv="interiorOpacity">—</span></span></div>
-            <div class="row"><div class="rl" style="color:var(--poi)">Wall edge<small>outlines around rooms</small></div>
-              <span class="trow-ctl">
-                <input type="color" class="i-color" data-tcolor="edgeColor">
-                <input type="range" class="op" min="0" max="100" data-topacity="edgeOpacity">
-                <span class="opv" data-topv="edgeOpacity">—</span></span></div>
-            <div class="row"><div class="rl hint-row">Edits rebuild the terrain bitmap; use &ldquo;Show terrain&rdquo; above to hide it entirely.</div></div>
-          </div>
-          <div class="card">
-            <h3>Map Calibration</h3>
-            <div class="row"><div class="rl">Scale multiplier<small>projection scale of the map overlay</small></div>
-              <input class="numin" type="number" step="0.01" data-set="scaleMul"></div>
-            <div class="row"><div class="rl">Offset X</div><input class="numin" type="number" step="1" data-set="offX"></div>
-            <div class="row"><div class="rl">Offset Y</div><input class="numin" type="number" step="1" data-set="offY"></div>
-            <div class="row"><div class="rl hint-row">Adjust here &mdash; changes apply live (no in-game hotkeys).</div></div>
-          </div>
-          <div class="card">
-            <h3>Auto-Flask</h3>
-            <div class="row"><div class="rl">Life flask triggers on<small>which pool the life flask key watches &mdash; ES is ignored if your build has none</small></div>
-              <select class="numin selin" data-set="lifeFlaskMode">
-                <option value="Health">Health %</option>
-                <option value="EnergyShield">Energy Shield %</option>
-                <option value="Either">Either (HP or ES)</option>
-              </select></div>
-            <div class="row"><div class="rl">Life threshold %<small>tap life flask below this Life %</small></div>
-              <input class="numin" type="number" step="1" min="0" max="100" data-set="lifeThresholdPct"></div>
-            <div class="row"><div class="rl">ES threshold %<small>tap life flask below this Energy Shield % (ES / Either modes)</small></div>
-              <input class="numin" type="number" step="1" min="0" max="100" data-set="esThresholdPct"></div>
-            <div class="row"><div class="rl">Mana threshold %<small>tap mana flask below this Mana %</small></div>
-              <input class="numin" type="number" step="1" min="0" max="100" data-set="manaThresholdPct"></div>
-            <div class="row"><div class="rl">Life flask key</div>
-              <input class="numin keyin" type="text" maxlength="1" data-set="lifeKey"></div>
-            <div class="row"><div class="rl">Mana flask key</div>
-              <input class="numin keyin" type="text" maxlength="1" data-set="manaKey"></div>
-            <div class="row"><div class="rl">Life cooldown<small>min ms between life taps</small></div>
-              <input class="numin" type="number" step="100" min="0" data-set="lifeCooldownMs"></div>
-            <div class="row"><div class="rl">Mana cooldown<small>min ms between mana taps</small></div>
-              <input class="numin" type="number" step="100" min="0" data-set="manaCooldownMs"></div>
-            <div class="row"><div class="rl hint-row">F8 toggles auto-flask in-game. Status: <span id="flaskState">&mdash;</span></div></div>
-          </div>
-          <div class="card">
-            <h3>Combat / Bot</h3>
-            <div class="row"><div class="rl hint-row">F3 toggles the bot master in-game (quest follow + path move + combat). F6 while the bot is on picks one quest (last press wins). F2 toggles map-clear. F4 toggles combat assist independently. F5 toggles path move. Arm bits cannot be armed from this page. Bot: <span id="botState">&mdash;</span></div></div>
-            <div class="row"><div class="rl">Attack range<small>grid units; tap only if a hostile monster is this close</small></div>
-              <input class="numin" type="number" step="1" min="1" max="200" data-set="combatRange"></div>
-              <div class="row"><div class="rl">Engage range<small>grid units; the bot stops walking to fight only while a hostile is this close (skills still fire out to the attack range, and the bot keeps walking toward farther mobs)</small></div>
-              <input class="numin" type="number" step="1" min="1" max="200" data-set="combatEngageRange"></div>
-              <div class="row"><div class="rl">Flee below HP %<small>stop attacking and run away from the pack when life drops under this (0 = never flee, always attack)</small></div>
-              <input class="numin" type="number" step="1" min="0" max="100" data-set="combatFleeHpPct"></div>
-              <div class="row"><div class="rl">Resume at HP %<small>go back to attacking once life is back at this</small></div>
-              <input class="numin" type="number" step="1" min="0" max="100" data-set="combatFleeRecoverPct"></div>
-              <div class="row"><div class="rl">Flee distance<small>grid cells to run from the pack (most open direction)</small></div>
-              <input class="numin" type="number" step="1" min="1" max="200" data-set="combatFleeDistance"></div>
-              <div class="row"><div class="rl">Auto-respawn<small>when the character dies, tap the resurrect key until alive (bot / clear / combat / move must be armed)</small></div>
-                <input type="checkbox" data-set="autoRespawn"></div>
-              <div class="row"><div class="rl">Dodge key<small>used by "dodge after" skill steps (PoE2 default: Space)</small></div>
-                <select class="numin selin" data-set="combatDodgeKey">
-                  <option value="32">Space</option>
-                  <option value="16">Shift</option>
-                  <option value="17">Ctrl</option>
-                  <option value="18">Alt</option>
-                </select></div>
-              <div class="row"><div class="rl">Respawn key<small>fallback only — the bot clicks the "Resurrect at Checkpoint" button it finds on screen; this key is tapped if the button cannot be located</small></div>
-                <select class="numin selin" data-set="respawnKey">
-                  <option value="32">Space</option>
-                  <option value="13">Enter</option>
-                </select></div>
-              <div class="row"><div class="rl">Fight stall<small>ms; 0 = never give up. Default 6000: a monster that takes NO damage for this long is immune (essence-imprisoned, shielded) and gets skipped</small></div>
-              <input class="numin" type="number" step="100" min="0" max="60000" data-set="combatStallMs"></div>
-              <div class="row"><div class="rl">Ignore after stall<small>ms to ignore stalled monsters before trying them again</small></div>
-              <input class="numin" type="number" step="1000" min="1000" max="300000" data-set="combatIgnoreMs"></div>
-            <div class="row"><div class="rl">Target<small>which hostile the rotation aims at</small></div>
-              <select class="numin selin" data-set="combatTargetMode">
-                <option value="Nearest">Nearest</option>
-                <option value="Rarity">Rarity (unique &gt; rare &gt; magic)</option>
-                <option value="LowestHp">Weakest (lowest life)</option>
-                <option value="HighestHp">Tank (highest life)</option>
-              </select></div>
-            <div class="row"><div class="rl">Rotation<small>round-robin cycles the list; priority always fires the first ready slot</small></div>
-              <select class="numin selin" data-set="combatRotationMode">
-                <option value="RoundRobin">Round-robin</option>
-                <option value="Priority">Priority</option>
-              </select></div>
-            <div class="row"><div class="rl">Keep distance<small>grid units; ranged builds back away while a hostile is closer than this (0 = melee, never)</small></div>
-              <input class="numin" type="number" step="1" min="0" max="200" data-set="combatKeepDistance"></div>
-            <details><summary>Boss combat · ranged uniques</summary>
-              <p class="hint-row">Uses keep-distance and combat range above. Reacts to observed damage and terrain; attack animations and projectiles are not yet validated. Rudja oil ground is the only identified hazard; its radius is estimated. A quiet opening is not a guaranteed safe cast. F4/F3/F2 still control arming locally.</p>
-              <div class="row"><div class="rl">Coordinate boss combat<small>reposition before starting another cast; ranged builds only (keep distance &gt; 0)</small></div><input type="checkbox" data-set="bossCombatEnabled"></div>
-              <div class="row"><div class="rl">Damage reaction %<small>life percentage points lost within 500 ms; substantial ES scaled to life. 0 disables reactive dodge.</small></div><input class="numin" type="number" min="0" max="50" step="1" data-set="bossDamagePct"></div>
-              <div class="row"><div class="rl">Minimum dodge gap<small>ms; prevents repeated rolling after one damage burst. Uses the configured dodge key and recovery.</small></div><input class="numin" type="number" min="900" max="10000" step="100" data-set="bossDodgeGapMs"></div>
-              <div class="row"><div class="rl">Quiet opening<small>ms without measured damage, close pressure or player/boss movement before long channels are eligible.</small></div><input class="numin" type="number" min="300" max="5000" step="100" data-set="bossSafeOpeningMs"></div>
-              <div class="row"><div class="rl">Boss target-loss grace<small>ms to wait for a missing boss before returning to mapping. Disappearance is never counted as a kill.</small></div><input class="numin" type="number" min="1000" max="30000" step="500" data-set="bossLostGraceMs"></div>
-              <div class="row"><div class="rl">Dodge travel distance<small>estimated full roll distance to check for walls and oil; 40 grid cells observed on the bow Ranger, tune for your movement speed</small></div><input class="numin" type="number" min="10" max="80" step="1" data-set="bossDodgeDistance"></div>
-              <div class="row"><div class="rl">Escape Shot distance<small>estimated grid distance to check behind the player before allowing the backward leap; tune to actual travel.</small></div><input class="numin" type="number" min="3" max="30" step="1" data-set="bossEscapeDistance"></div>
-              <div class="row"><div class="rl">Rudja oil avoidance<small>grid radius around observed oil ground; estimated margin, not a measured hitbox</small></div><input class="numin" type="number" min="2" max="20" step="1" data-set="bossHazardRadius"></div>
-            </details>
-            <section id="autoBuild" style="border:1px solid var(--line);padding:18px;border-radius:10px;margin:16px 0">
-              <h3>Auto build · character rotation</h3>
-              <p class="hint-row">Scan gear, gems, granted skills, resource pools, live skill assignments and your PoE2 keys. Review the generated rotation and save. Tuned rules are remembered per character.</p>
-              <button type="button" class="addbtn" id="autoBuildScan">Scan &amp; propose build</button>
-              <button type="button" class="addbtn" id="autoBuildUndo" disabled>Undo last generated build</button>
-              <p id="autoBuildStatus" role="status" aria-live="polite"></p>
-              <div id="autoBuildResult" hidden>
-                <p id="autoBuildSummary"></p>
-                <p id="autoBuildInput"></p><p id="autoBuildControls"></p>
-                <details><summary>Key configuration source</summary><p id="autoBuildSource"></p></details>
-                <label><input type="checkbox" id="autoBuildImport"> Import detected movement mode, movement keys, dodge and flask keys</label>
-                <details><summary>Detected equipment</summary><ul id="autoBuildEquipment"></ul></details>
-                <details open><summary>Limits &amp; warnings</summary><ul id="autoBuildWarnings"></ul></details>
-                <div id="autoBuildRows"></div>
-                <p id="autoBuildValidation" role="status"></p>
-                <button type="button" class="addbtn" id="autoBuildApply" disabled>Apply selected build</button>
-                <p class="hint-row">Applying replaces the combat rotation, range and keep-distance, plus controls if checked. Select a main attack or summon and unique key combinations. Preview expires after 2 minutes. Disarm automation before applying; arm combat locally with F4. Undo restores the previous settings during this session.</p>
-              </div>
-            </section>
-            <style>#autoBuild p,#autoBuild li{font-size:12px;line-height:1.6;overflow-wrap:anywhere}#autoBuild .auto-build-row{border-top:1px solid var(--line);padding:14px 0}#autoBuild label{display:block;font-size:12px}#autoBuild select{margin:8px 0;padding:8px;background:var(--panel);color:var(--text);max-width:100%;border:1px solid var(--line)}#autoBuild button:disabled{opacity:.4;cursor:default}</style>
-            <div class="row"><div class="rl">Skill rules<small>Choose a preset, then tailor its conditions. Changes save automatically. Presets do not bind or arm skills for you.</small></div></div>
-            <style>
-              #combatSkills .skill-card{border:1px solid #394351;border-radius:12px;background:rgba(18,24,32,.65);padding:16px;margin:12px 0}
-              #combatSkills header{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-              #combatSkills label{display:flex;flex-direction:column;gap:6px;font-size:12px;color:#bac5d4;min-width:0}
-              #combatSkills .skill-name-label{flex:1;min-width:140px}
-              #combatSkills input:not([type=checkbox]),#combatSkills select{width:100%;box-sizing:border-box;background:#151c26;color:#edf3fc;border:1px solid #465367;border-radius:6px;padding:8px;font:inherit;min-width:0}
-              #combatSkills .skill-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin:12px 0}
-              #combatSkills .skill-check{flex-direction:row;align-items:center;gap:7px}
-              #combatSkills .skill-flags{display:flex;flex-wrap:wrap;gap:16px;margin:12px 0}
-              #combatSkills fieldset{border:1px solid #394351;border-radius:8px;margin:14px 0;padding:12px}
-              #combatSkills legend,#combatSkills summary{color:#d6e3f3;font-size:12px;padding:0 6px}
-              #combatSkills .skill-summary{color:#a6cbef;font-size:12px;line-height:1.6;margin:12px 0}
-              #combatSkills .skill-warning{color:#ffc478;font-size:12px;line-height:1.5}
-              #combatSkills small{display:block;color:#a8b4c6;font-size:11px;line-height:1.6}
-              #combatSkills button{background:#273244;color:#e1e9f4;border:1px solid #465367;border-radius:5px;padding:6px 10px;cursor:pointer}
-              #combatSkills button:disabled{opacity:.3;cursor:default} #combatSkills .sk-del{color:#ffadad}
-              #combatSkills .skill-order{color:#a6cbef;font-weight:bold} #combatSkills details{margin-top:12px} #combatSkills summary{cursor:pointer}
-              #combatSkills :focus-visible{outline:2px solid #9ccfff;outline-offset:2px}
-            </style>
-            <div id="combatSkills"></div>
-
-            <div class="row"><button type="button" class="addbtn" id="combatSkillAdd">Add skill</button></div>
-            <div class="row"><div class="rl hint-row">F4 toggles combat assist in-game. It cannot be armed from this page. Status: <span id="combatState">&mdash;</span></div></div>
-            <div class="row"><div class="rl hint-row">When armed, each zone auto-selects a nav target from the area's zone notes (or a Transition / waypoint / boss landmark) and reuses the existing A* route. F6 cycles a single quest target (last press is the one the bot follows; it will not jump to the other F6 picks). Click a legend row to pin that one. F7 clears the pin and returns to auto-pick. A unique monster (boss) that spawns is targeted immediately. On arrival, taps interact/use. F3 toggles quest follow in-game. It cannot be armed from this page. Status: <span id="questFollowState">&mdash;</span></div></div>
-            <div class="row"><div class="rl">Use / interact<small>key or mouse button tapped on arrival at the quest target</small></div>
-              <select class="numin selin" data-set="questUseKey">
-                <option value="1">Left mouse</option>
-                <option value="2">Right mouse</option>
-                <option value="70">F</option>
-                <option value="84">T</option>
-              </select></div>
-            <div class="row"><div class="rl">Use radius<small>grid cells; tap interact when this close to the quest target</small></div>
-              <input class="numin" type="number" step="0.5" min="0" max="64" data-set="questUseRadius"></div>
-            <div class="row"><div class="rl">Use cooldown<small>min ms between interact taps</small></div>
-              <input class="numin" type="number" step="10" min="0" data-set="questUseCooldownMs"></div>
-            <div class="row"><div class="rl">Move method<small>WASD taps, or click-to-move toward the next waypoint of the first selected path</small></div>
-              <select class="numin selin" data-set="moveMethod">
-                <option value="WASD">WASD</option>
-                <option value="Click">Click-to-move</option>
-              </select></div>
-            <div class="row"><div class="rl">Click button<small>mouse button used when method is Click</small></div>
-              <select class="numin selin" data-set="moveClickKey">
-                <option value="1">Left mouse</option>
-                <option value="2">Right mouse</option>
-                <option value="4">Middle mouse</option>
-              </select></div>
-            <div class="row"><div class="rl">Arrive radius<small>grid cells; stop when this close to the remaining waypoints</small></div>
-              <input class="numin" type="number" step="0.5" min="0" max="64" data-set="moveArriveRadius"></div>
-            <div class="row"><div class="rl">Cooldown<small>min ms between click taps (WASD keys are held, not tapped)</small></div>
-              <input class="numin" type="number" step="10" min="0" data-set="moveCooldownMs"></div>
-              <div class="row"><div class="rl">Play in background<small>keep the bot going while PoE2 is not the active window. Windows: input is posted to the game window. Linux: run the game under gamescope (Steam launch options: <code>gamescope -f -- %command%</code>) so it has its own always-focused display; the bot sends input there</small></div>
-                <input type="checkbox" data-set="playInBackground"></div>
-              <div class="row"><div class="rl">Input display (Linux)<small>nested X display of the gamescope session, e.g. <code>:1</code>. <code>auto</code> scans for one hosting the game. Blank = main display (Wine ignores keys while unfocused)</small></div>
-                <input class="numin textin" type="text" maxlength="16" data-set="inputDisplay"></div>
-              <div class="row"><div class="rl">Run while moving<small>hold the run key whenever the bot is travelling</small></div>
-              <input type="checkbox" data-set="moveRunEnabled"></div>
-              <div class="row"><div class="rl">Run key<small>PoE2 default: Space</small></div>
-              <select class="numin selin" data-set="moveRunKey">
-                <option value="32">Space</option>
-                <option value="16">Shift</option>
-                <option value="17">Ctrl</option>
-                <option value="18">Alt</option>
-              </select></div>
-              <div class="row"><div class="rl">Look-ahead<small>grid cells; steer at the farthest visible waypoint within this — cuts corners instead of stair-stepping</small></div>
-              <input class="numin" type="number" step="1" min="1" max="60" data-set="moveLookAhead"></div>
-              <div class="row"><div class="rl">Diagonals<small>hold two keys at once for 8-way movement</small></div>
-              <input type="checkbox" data-set="moveDiagonals"></div>
-              <div class="row"><div class="rl">Axis rotation<small>degrees; rotate the grid→WASD mapping if the character walks off at an angle</small></div>
-              <input class="numin" type="number" step="15" min="-180" max="180" data-set="moveAxisRotationDeg"></div>
-            <div class="row"><div class="rl">Move key W<small>grid +Y</small></div>
-              <input class="numin keyin" type="text" maxlength="1" data-set="moveKeyW"></div>
-            <div class="row"><div class="rl">Move key A<small>grid −X</small></div>
-              <input class="numin keyin" type="text" maxlength="1" data-set="moveKeyA"></div>
-            <div class="row"><div class="rl">Move key S<small>grid −Y</small></div>
-              <input class="numin keyin" type="text" maxlength="1" data-set="moveKeyS"></div>
-            <div class="row"><div class="rl">Move key D<small>grid +X</small></div>
-              <input class="numin keyin" type="text" maxlength="1" data-set="moveKeyD"></div>
-            <div class="row"><div class="rl hint-row">F2 toggles map-clear in-game (walks unexplored walkable cells; unique bosses and live hostiles first; pauses quest follow while on). It cannot be armed from this page. Status: <span id="mapClearState">&mdash;</span></div></div>
-            <div class="row"><div class="rl">Clear stamp radius<small>grid cells marked visited around the player each tick while map-clear is on</small></div>
-              <input class="numin" type="number" step="1" min="4" max="64" data-set="mapClearStampRadius"></div>
-              <div class="row"><div class="rl">Clear aggro range<small>grid units; only chase non-unique hostiles this close (0 = any distance); farther packs are reached by the frontier walk</small></div>
-              <input class="numin" type="number" step="1" min="0" max="500" data-set="mapClearAggroRange"></div>
-              <div class="row"><div class="rl">Clear stuck timeout<small>ms without getting closer to the current target (while not fighting) before it is skipped</small></div>
-              <input class="numin" type="number" step="500" min="1000" max="120000" data-set="mapClearStuckMs"></div>
-              <div class="row"><div class="rl hint-row">Map events — while clearing, walk to these and click them (after any fight nearby). Monsters standing on an unopened essence are treated as immune until the crystal is clicked.</div></div>
-              <div class="row"><div class="rl">Essence crystals</div><input type="checkbox" data-set="eventEssence"></div>
-              <div class="row"><div class="rl">Strongboxes</div><input type="checkbox" data-set="eventStrongbox"></div>
-              <div class="row"><div class="rl">Shrines</div><input type="checkbox" data-set="eventShrine"></div>
-              <div class="row"><div class="rl">Breach hands</div><input type="checkbox" data-set="eventBreach"></div>
-              <div class="row"><div class="rl">Ritual altars<small>starts a ritual — off by default</small></div><input type="checkbox" data-set="eventRitual"></div>
-              <div class="row"><div class="rl">Plain chests</div><input type="checkbox" data-set="eventChests"></div>
-              <div class="row"><div class="rl">Click stalled monsters<small>a monster nothing lands on for the stall time gets walked to and clicked (essence-encased rares)</small></div><input type="checkbox" data-set="eventClickStalled"></div>
-              <div class="row"><div class="rl">Event range<small>grid units; only detour to events this close (0 = any)</small></div>
-              <input class="numin" type="number" step="5" min="0" max="500" data-set="eventRange"></div>
-              <div class="row"><div class="rl">Event use radius<small>click when this close</small></div>
-              <input class="numin" type="number" step="1" min="1" max="30" data-set="eventUseRadius"></div>
-              <div class="row"><div class="rl">Event max clicks<small>give up on an event (90 s) after this many clicks without effect</small></div>
-              <input class="numin" type="number" step="1" min="1" max="20" data-set="eventMaxClicks"></div>
-            <div class="row"><div class="rl hint-row">F11 toggles the farm loop in-game: stand in the area you farm and press F11 &mdash; it map-clears the whole zone, casts a town portal, takes it, walks to the town waypoint and ctrl-clicks the area for a fresh instance, then clears again until F11. Bind PoE2's built-in <b>Portal</b> skill to a key and set it below. Status: <span id="farmState">&mdash;</span></div></div>
-            <div class="row"><div class="rl">Portal key<small>the key your Portal skill is bound to</small></div>
-              <input class="numin keyin" type="text" maxlength="1" data-set="farmPortalKey"></div>
-            <div class="row"><div class="rl">Farm area<small>area code captured by F11 (editable)</small></div>
-              <input class="numin textin" type="text" style="width:150px" data-set="farmAreaCode"></div>
-            <div class="row"><div class="rl">Clear settle<small>ms the zone must stay &ldquo;cleared&rdquo; with nothing nearby before portalling out</small></div>
-              <input class="numin" type="number" step="500" min="500" max="60000" data-set="farmClearSettleMs"></div>
-            <div class="row"><div class="rl hint-row">F5 toggles path move in-game (F3 quest follow also arms it). It cannot be armed from this page. Status: <span id="pathMoveState">&mdash;</span></div></div>
-          </div>
+        <div class="card span-4">
+          <h3>Item inspect</h3>
+          <div class="hint" style="margin:-2px 0 10px">Hover an item in game and press the hotkey to open it on the web.</div>
+          <label class="field" style="margin-bottom:12px"><span>Open on PoE2 Wiki</span><input class="kcap" data-cmdhk="inspectWikiHotkey" readonly placeholder="unbound"></label>
+          <label class="field"><span>Open on poe2db</span><input class="kcap" data-cmdhk="inspectDbHotkey" readonly placeholder="unbound"></label>
+          <div class="hint" style="margin-top:14px">Hotkey fields: click, then press a combo. <kbd>Backspace</kbd> clears. Reserved: F6&ndash;F10, F12, Insert, Ctrl+D and the buff-keeper toggle.</div>
         </div>
-        <div style="margin-top:18px; height:14px"><span class="saved" id="savedMsg">&#10003; saved to config</span></div>
-      </section>
-
-      <section class="view" data-view="value" hidden>
-        <div class="panel-grid">
-          <!-- Shared pricing config: applies to BOTH the ground overlay and the hover chip. -->
-          <div class="card" style="grid-column:1/-1">
-            <h3>General Pricing <span class="tag">&middot; poe.ninja</span></h3>
-            <div class="row"><div class="rl hint-row">These apply to <b>everything priced</b> below &mdash; ground loot, hover, monolith &amp; ritual rewards. Prices come from poe.ninja for the detected league.</div></div>
-            <div class="row"><div class="rl">Price league<small>leave blank to auto-detect your league (HC/SC/Standard) from the game</small></div>
-              <input class="numin" type="text" id="giLeague" data-gi="league" placeholder="auto-detect" style="width:200px"></div>
-            <div class="row"><div class="rl">Low-listing warning<small>flag a price backed by fewer than N live listings with a &ldquo;?&rdquo; (possible mislisting). 0 = never flag</small></div>
-              <input class="numin" type="number" step="1" min="0" data-gi="minQuantity"></div>
-            <div class="row"><div class="rl hint-row">Pricing status: <span id="priceStatus" style="color:var(--ink-dim)">&mdash;</span></div></div>
-          </div>
-
-          <!-- Ground loot value labels. -->
-          <div class="card">
-            <h3>Ground Loot</h3>
-            <div class="row"><div class="rl">Show ground loot value<small>draw a value label over dropped items on the map</small></div>
-              <label class="sw"><input type="checkbox" data-gi="enabled"><span class="track"></span><span class="knob"></span></label></div>
-            <div class="row"><div class="rl hint-row">Show a label for these categories:</div></div>
-            <div class="chips" id="giCats">
-              <span class="chip" data-gicat="Uniques">Uniques</span>
-              <span class="chip" data-gicat="Currency">Currency</span>
-              <span class="chip" data-gicat="Runes">Runes</span>
-              <span class="chip" data-gicat="SoulCores">Soul Cores</span>
-              <span class="chip" data-gicat="UncutGems">Uncut Gems</span>
-              <span class="chip" data-gicat="Essences">Essences</span>
-              <span class="chip" data-gicat="Fragments">Fragments</span>
-              <span class="chip" data-gicat="Tablets">Tablets</span>
-              <span class="chip" data-gicat="Delirium">Delirium</span>
-              <span class="chip" data-gicat="Idols">Idols</span>
-              <span class="chip" data-gicat="Abyss">Abyss</span>
-              <span class="chip" data-gicat="Ritual">Ritual</span>
-              <span class="chip" data-gicat="Breach">Breach</span>
-              <span class="chip" data-gicat="Expedition">Expedition</span>
-            </div>
-            <div class="row"><div class="rl hint-row">Minimum value to show, per bucket (Ex) &mdash; drops below the floor are hidden:</div></div>
-            <div class="row"><div class="rl">Uniques min<small>hide uniques under this (Ex)</small></div>
-              <input class="numin" type="number" step="0.1" min="0" data-gi="uniqueMinEx"></div>
-            <div class="row"><div class="rl">Currency min<small>hide currency under this (Ex)</small></div>
-              <input class="numin" type="number" step="0.1" min="0" data-gi="currencyMinEx"></div>
-            <div class="row"><div class="rl">Other min<small>runes / essences / fragments / … (Ex)</small></div>
-              <input class="numin" type="number" step="0.1" min="0" data-gi="otherMinEx"></div>
-            <div class="row"><div class="rl">Highlight threshold<small>border/emphasis at or above this value (Ex)</small></div>
-              <input class="numin" type="number" step="1" min="0" data-gi="highlightMinEx"></div>
-            <div class="row"><div class="rl hint-row">Unidentified uniques reveal their NAME + value; everything else (identified uniques, currency, runes, essences, …) shows the value only.</div></div>
-          </div>
-
-          <!-- Hover price chip (any item UI). -->
-          <div class="card">
-            <h3>On Hover</h3>
-            <div class="row"><div class="rl">Show item value on hover<small>a price chip beside the game tooltip in inventory / stash / vendor / reward UIs</small></div>
-              <label class="sw"><input type="checkbox" data-hv="enabled"><span class="track"></span><span class="knob"></span></label></div>
-            <div class="row"><div class="rl">Highlight threshold<small>emphasize the chip at or above this (stack) value (Ex)</small></div>
-              <input class="numin" type="number" step="1" min="0" data-hv="highlightMinEx"></div>
-            <div class="row"><div class="rl hint-row">Hovering is explicit intent, so this ignores the ground category toggles &amp; value floors &mdash; any priced item shows. Stacks show the per-unit price and the stack total.</div></div>
-          </div>
-
-          <!-- Monolith (expedition) reward overlay — a value/pricing feature, grouped here. -->
-          <div class="card">
-            <h3>Monolith Rewards <span class="tag">&middot; expedition</span></h3>
-            <div class="row"><div class="rl">Enabled<small>read + price runeshape-monolith rewards</small></div>
-              <label class="sw"><input type="checkbox" data-mono="enabled"><span class="track"></span><span class="knob"></span></label></div>
-            <div class="row"><div class="rl">Min value to show / auto-path<small>hide the monolith entirely (icon, panel, auto-nav) below this (Ex). 0 = show every monolith</small></div>
-              <input class="numin" type="number" step="1" min="0" data-mono="minValueEx"></div>
-            <div class="row"><div class="rl">Highlight threshold<small>green value tier at or above this (Ex)</small></div>
-              <input class="numin" type="number" step="1" min="0" data-mono="highlightMinEx"></div>
-            <div class="row"><div class="rl">Hide collected<small>drop monoliths whose reward was already claimed</small></div>
-              <label class="sw"><input type="checkbox" data-mono="hideCollected"><span class="track"></span><span class="knob"></span></label></div>
-            <div class="row"><div class="rl">Show reward panel<small>the in-overlay nearby-monolith reward list</small></div>
-              <label class="sw"><input type="checkbox" data-mono="showPanel"><span class="track"></span><span class="knob"></span></label></div>
-            <div class="row"><div class="rl">Show map label<small>draw value + top reward at the icon</small></div>
-              <label class="sw"><input type="checkbox" data-mono="showMapLabel"><span class="track"></span><span class="knob"></span></label></div>
-          </div>
-
-          <!-- Currency Exchange depth panel — value/pricing feature, grouped here. -->
-          <div class="card">
-            <h3>Currency Exchange <span class="tag">&middot; Kalguur market</span></h3>
-            <div class="row"><div class="rl">Enabled<small>show the order-book depth panel when the exchange is open</small></div>
-              <label class="sw"><input type="checkbox" data-ce="enabled"><span class="track"></span><span class="knob"></span></label></div>
-            <div class="row"><div class="rl">Max rows<small>ladder rows to show per side</small></div>
-              <input class="numin" type="number" step="1" min="1" max="64" data-ce="maxRows"></div>
-            <div class="row"><div class="rl hint-row">When the in-game Currency Exchange is open, a top-right panel lists the best offered/wanted ratios + depth (the best row of each side is highlighted).</div></div>
-          </div>
+        <div class="card span-12">
+          <h3>Bookmarks <span class="tag">open a website, optionally on a hotkey</span></h3>
+          <div class="ph"><span><code>{league}</code> price league</span><span><code>{item}</code> hovered item</span><span><code>{char}</code> your character</span><span>Only http(s) links are kept</span></div>
+          <div class="bmrow rowhead"><span>On</span><span>Name</span><span>Folder</span><span>URL</span><span>Hotkey</span><span></span><span></span></div>
+          <div id="bmList"></div>
+          <button class="addbtn" id="bmAdd">+ Add bookmark</button>
         </div>
-        <div style="margin-top:18px; height:14px"><span class="saved" id="savedMsg2">&#10003; saved to config</span></div>
-      </section>
+      </div>
+    </section>
 
-    </main>
-  </div>
+    <!-- ═════════════ RADAR ═════════════ -->
+    <section class="page" data-page="radar" hidden>
+      <header class="phead">
+        <div><h1>Radar</h1><p>How entities and map landmarks draw on the overlay.</p></div>
+      </header>
+      <div class="seg" role="tablist">
+        <button data-sub="rules" class="on">Display rules</button>
+        <button data-sub="landmarks">Landmarks</button>
+        <button data-sub="hidden">Hidden</button>
+      </div>
+
+      <div class="card" data-subview="rules">
+        <h3>Display rules <span class="tag">one ordered ruleset &mdash; first match wins</span><span class="grow"></span>
+          <button class="btn primary sm" id="drPick">+ Add from game data&hellip;</button>
+          <button class="btn sm" id="drAdd">+ Add blank rule</button></h3>
+        <div class="hint" style="margin:-2px 0 12px">Each entity is matched <b>top to bottom</b>; the <b>first enabled rule that matches</b> decides its icon and color, whether it's hidden, whether it gets an HP bar, and whether it's auto-pathed. Reorder with &#9650;/&#9660; to change precedence. A rule matches on any mix of <i>type, metadata terms, monster mods, rarity, reaction, life, chest/POI/encounter state</i>; a blank condition means &ldquo;any&rdquo;.</div>
+        <div id="drList"></div>
+      </div>
+
+      <div class="card" data-subview="landmarks" hidden>
+        <h3>Landmarks <span class="tag">curated map labels &mdash; view, fix, share</span></h3>
+        <div class="hint" style="margin:-2px 0 12px">The built-in &ldquo;known&rdquo; map features (boss arenas, exits, loot, waypoints&hellip;), labelled per area. Rename a wrong label, add your own, or hide a bad entry. <b>Export</b> a corrected list to share; <b>Import</b> to load one. To change how a tile <i>draws</i>, use a Tile rule under Display rules.</div>
+        <div class="controls">
+          <input type="search" id="lmSearch" placeholder="Filter by area, tile or label&hellip;">
+          <button class="chip on" id="lmAreaOnly">This area only</button>
+          <span class="grow"></span>
+          <button class="btn" id="lmImport">Import&hellip;</button>
+          <button class="btn" id="lmExport">Export</button>
+        </div>
+        <div id="lmList"></div>
+        <div class="lmadd">
+          <input id="lmArea" placeholder="area (e.g. P2_3, or *)" style="max-width:170px">
+          <input id="lmPat" placeholder="tile path / pattern">
+          <input id="lmLabel" placeholder="label">
+          <button class="btn primary" id="lmAdd">+ Add</button>
+        </div>
+      </div>
+
+      <div class="card" data-subview="hidden" hidden>
+        <h3>Hidden <span class="tag">cull entirely from radar, list and navigation</span></h3>
+        <div class="hint" style="margin:-2px 0 12px">A stronger cut than a Hide rule: entities whose metadata contains a pattern (or matches a <code>*</code>/<code>?</code> glob) are removed <i>everywhere</i> before the display rules run.</div>
+        <div id="hideList" class="chips hidechips" style="margin:0 0 14px"></div>
+        <div class="controls" style="margin:0">
+          <input type="search" id="hidePattern" placeholder="pattern or glob to hide (e.g. AbyssCrack, *Daemon*)">
+          <button class="btn primary" id="hideAdd">+ Hide</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═════════════ ATLAS ═════════════ -->
+    <section class="page" data-page="atlas" hidden>
+      <header class="phead">
+        <div><h1>Atlas</h1><p>Track, route to and highlight maps on the in-game Atlas.</p></div>
+        <div class="aside"><span class="tag hint" id="atlasStatus">&mdash;</span>
+          <button class="btn" id="atlasRefresh" title="Re-read the open Atlas">&#8635; Refresh</button>
+          <button class="btn ghost" id="atlasHelp" title="How it works">?</button></div>
+      </header>
+      <div class="card" style="margin-bottom:16px">
+        <div id="atlasHelpBox" hidden class="note-box" style="margin:0 0 12px;line-height:1.6">
+          Open the Atlas in game, then <b>Refresh</b>. Each row is a map type or rolled content read from memory.
+          Per row toggle <b>&#9745; Highlight</b> (ring it in game), <b style="color:var(--good)">&#8674; Nav</b> (draw a route to it) and
+          <b style="color:var(--accent)">&#10148; Arrow</b> (edge pointer when off-screen) &mdash; independently. Click a column header to sort.
+          Hover a tile in game and press <kbd>F10</kbd> to inspect it.
+        </div>
+        <div class="controls" id="atlasPresets" style="gap:6px;margin:0 0 12px">
+          <span class="flbl" style="margin-right:4px">Quick set</span>
+          <button class="chip" data-preset="citadels">&#9733; Citadels</button>
+          <button class="chip" data-preset="deadly">&#9760; Deadly Boss</button>
+          <button class="chip" data-preset="bosses">Bosses</button>
+          <button class="chip" data-preset="towers">Towers</button>
+          <button class="chip" data-preset="uniques">Uniques</button>
+        </div>
+        <div class="controls" id="atlasOpts" style="gap:18px;margin:0 0 12px">
+          <label title="Hide maps you've already completed"><input type="checkbox" data-atset="atlasHideCompleted"> Hide completed</label>
+          <label title="Hide maps you can run right now"><input type="checkbox" data-atset="atlasHideAccessible"> Hide accessible</label>
+          <label title="Draw in-game content art above tracked + fogged maps"><input type="checkbox" data-atset="atlasShowContentIcons"> Content icons</label>
+          <label title="Content icon size (px)">Icon size <input type="number" data-atset="atlasContentIconSize" min="12" max="64" step="1" style="width:64px"></label>
+          <label title="Spacing of the directional arrows along routes">Arrow spacing <input type="number" data-atset="atlasRouteArrowSpacing" min="1.5" max="18" step="0.5" style="width:64px"></label>
+        </div>
+        <div id="atlasActive" style="margin:0 0 10px"></div>
+        <div class="controls" style="gap:6px;margin:0 0 10px">
+          <button class="chip on" data-group="all">All</button>
+          <button class="chip" data-group="Kind">Kind</button>
+          <button class="chip" data-group="Type">Type</button>
+          <button class="chip" data-group="Content">Content</button>
+          <button class="chip" data-group="Map">Map</button>
+          <span class="grow"></span>
+          <button class="chip" id="atlasHlSelOnly">Active only</button>
+          <button class="chip" id="atlasHlClear">Clear all</button>
+          <input type="search" id="atlasHlFilter" placeholder="Search&hellip;" style="max-width:200px">
+        </div>
+        <div id="atlasHlTable" style="max-height:520px;overflow:auto;border:1px solid var(--line);border-radius:6px">
+          <div class="empty">Open the Atlas in game, then Refresh to list filters.</div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Map colour groups <span class="tag">recolour a whole category at once (Citadels, Halls, Uniques&hellip;)</span><span class="grow"></span>
+          <button class="btn sm" id="atlasGroupAdd">+ Add group</button></h3>
+        <div id="atlasGroups"></div>
+      </div>
+    </section>
+
+    <!-- ═════════════ ITEM VALUE ═════════════ -->
+    <section class="page" data-page="value" hidden>
+      <header class="phead">
+        <div><h1>Item Value</h1><p>poe.ninja prices on ground loot, hovered items, monoliths and the currency exchange; waystone mod checks.</p></div>
+      </header>
+      <div class="panel-grid">
+        <div class="card" style="grid-column:1/-1">
+          <h3>General pricing <span class="tag">poe.ninja</span></h3>
+          <div class="row"><div class="rl">Price league<small>leave blank to auto-detect your league (HC/SC/Standard) from the game</small></div>
+            <input class="numin" type="text" id="giLeague" data-gi="league" placeholder="auto-detect" style="width:220px;text-align:left"></div>
+          <div class="row"><div class="rl">Low-listing warning<small>flag a price backed by fewer than N live listings with a &ldquo;?&rdquo;. 0 = never flag</small></div>
+            <input class="numin" type="number" step="1" min="0" data-gi="minQuantity"></div>
+          <div class="row"><div class="rl">Pricing status</div><span id="priceStatus" style="color:var(--ink-dim);text-align:right">&mdash;</span></div>
+        </div>
+
+        <div class="card">
+          <h3>Ground loot</h3>
+          <div class="row"><div class="rl">Show ground loot value<small>draw a value label over dropped items on the map</small></div>
+            <label class="sw"><input type="checkbox" data-gi="enabled"><span class="track"></span><span class="knob"></span></label></div>
+          <div class="row" style="border:none;padding-bottom:4px"><div class="rl hint-row">Label these categories:</div></div>
+          <div class="chips" id="giCats">
+            <span class="chip" data-gicat="Uniques">Uniques</span>
+            <span class="chip" data-gicat="Currency">Currency</span>
+            <span class="chip" data-gicat="Runes">Runes</span>
+            <span class="chip" data-gicat="SoulCores">Soul Cores</span>
+            <span class="chip" data-gicat="UncutGems">Uncut Gems</span>
+            <span class="chip" data-gicat="Essences">Essences</span>
+            <span class="chip" data-gicat="Fragments">Fragments</span>
+            <span class="chip" data-gicat="Tablets">Tablets</span>
+            <span class="chip" data-gicat="Delirium">Delirium</span>
+            <span class="chip" data-gicat="Idols">Idols</span>
+            <span class="chip" data-gicat="Abyss">Abyss</span>
+            <span class="chip" data-gicat="Ritual">Ritual</span>
+            <span class="chip" data-gicat="Breach">Breach</span>
+            <span class="chip" data-gicat="Expedition">Expedition</span>
+          </div>
+          <div class="row"><div class="rl">Uniques min<small>hide uniques under this (ex)</small></div>
+            <input class="numin" type="number" step="0.1" min="0" data-gi="uniqueMinEx"></div>
+          <div class="row"><div class="rl">Currency min<small>hide currency under this (ex)</small></div>
+            <input class="numin" type="number" step="0.1" min="0" data-gi="currencyMinEx"></div>
+          <div class="row"><div class="rl">Other min<small>runes / essences / fragments / &hellip; (ex)</small></div>
+            <input class="numin" type="number" step="0.1" min="0" data-gi="otherMinEx"></div>
+          <div class="row"><div class="rl">Highlight threshold<small>emphasis at or above this value (ex)</small></div>
+            <input class="numin" type="number" step="1" min="0" data-gi="highlightMinEx"></div>
+          <div class="row"><div class="rl hint-row">Unidentified uniques reveal their name + value; everything else shows the value only.</div></div>
+        </div>
+
+        <div class="card">
+          <h3>On hover</h3>
+          <div class="row"><div class="rl">Show item value on hover<small>market estimate under hovered items in inventory / stash / vendor / rewards, or beside ground drops</small></div>
+            <label class="sw"><input type="checkbox" data-hv="enabled"><span class="track"></span><span class="knob"></span></label></div>
+          <div class="row"><div class="rl">Highlight threshold<small>emphasize the chip at or above this (stack) value (ex)</small></div>
+            <input class="numin" type="number" step="1" min="0" data-hv="highlightMinEx"></div>
+          <div class="row"><div class="rl">Price check hotkey<small>hover an item and press it: poe.ninja estimate vs. the cheapest live listings, plus a suggested price</small></div>
+            <input class="numin" type="text" id="pcHotkey" style="width:130px"></div>
+          <div class="row"><div class="rl hint-row">Hovering is explicit intent, so this ignores the ground-loot categories and floors. Stacks show unit and total estimates with league, cache age, listing confidence and recent change. Rare and magic gear check online trade listings after a brief hover, using readable modifier rolls within &plusmn;20% (DPS, defences, item level, sockets, quality and corruption aren't weighed separately). Lookups are cached for ten minutes and respect trade rate limits. Press the price-check hotkey while hovering for the full comparison panel in game; its <b>Open on trade site</b> button opens the matched search.</div></div>
+        </div>
+
+        <div class="card">
+          <h3>Waystone checker</h3>
+          <div class="row"><div class="rl">Enabled<small>when you hover a waystone in game, mod lines matching a pattern below are flagged</small></div>
+            <label class="sw"><input type="checkbox" id="mcEnabled"><span class="track"></span><span class="knob"></span></label></div>
+          <div class="field" style="margin-top:10px"><span>Dangerous mods &mdash; one pattern per line</span>
+            <textarea id="mcList" rows="9" spellcheck="false" style="font-family:var(--mono);font-size:12.5px"></textarea></div>
+          <div class="hint" style="margin-top:6px">Case-insensitive text match; prefix a line with <code>re:</code> for a regular expression (e.g. <code>re:reduced .* recovery</code>). Up to 100 patterns.</div>
+        </div>
+
+        <div class="card">
+          <h3>Monolith rewards <span class="tag">expedition</span></h3>
+          <div class="row"><div class="rl">Enabled<small>read + price runeshape-monolith rewards</small></div>
+            <label class="sw"><input type="checkbox" data-mono="enabled"><span class="track"></span><span class="knob"></span></label></div>
+          <div class="row"><div class="rl">Min value to show / auto-path<small>hide the monolith (icon, panel, auto-nav) below this (ex). 0 = show all</small></div>
+            <input class="numin" type="number" step="1" min="0" data-mono="minValueEx"></div>
+          <div class="row"><div class="rl">Highlight threshold<small>green value tier at or above this (ex)</small></div>
+            <input class="numin" type="number" step="1" min="0" data-mono="highlightMinEx"></div>
+          <div class="row"><div class="rl">Hide collected<small>drop monoliths whose reward was already claimed</small></div>
+            <label class="sw"><input type="checkbox" data-mono="hideCollected"><span class="track"></span><span class="knob"></span></label></div>
+          <div class="row"><div class="rl">Show reward panel<small>the in-overlay nearby-monolith reward list</small></div>
+            <label class="sw"><input type="checkbox" data-mono="showPanel"><span class="track"></span><span class="knob"></span></label></div>
+          <div class="row"><div class="rl">Show map label<small>draw value + top reward at the icon</small></div>
+            <label class="sw"><input type="checkbox" data-mono="showMapLabel"><span class="track"></span><span class="knob"></span></label></div>
+        </div>
+
+        <div class="card">
+          <h3>Currency exchange <span class="tag">order-book depth</span></h3>
+          <div class="row"><div class="rl">Enabled<small>show the depth panel when the exchange is open</small></div>
+            <label class="sw"><input type="checkbox" data-ce="enabled"><span class="track"></span><span class="knob"></span></label></div>
+          <div class="row"><div class="rl">Max rows<small>ladder rows to show per side</small></div>
+            <input class="numin" type="number" step="1" min="1" max="64" data-ce="maxRows"></div>
+          <div class="row"><div class="rl hint-row">When the in-game Currency Exchange is open, a top-right panel lists the best offered/wanted ratios with depth (the best row of each side is highlighted).</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═════════════ SETTINGS ═════════════ -->
+    <section class="page" data-page="settings" hidden>
+      <header class="phead">
+        <div><h1>Settings</h1><p>Radar display, HP bars, terrain, calibration and auto-flask. Changes apply live.</p></div>
+      </header>
+      <div class="panel-grid">
+        <div class="card">
+          <h3>Radar display</h3>
+          <div class="row"><div class="rl">Show terrain<small>walkable-terrain bitmap</small></div>
+            <label class="sw"><input type="checkbox" data-set="showTerrain"><span class="track"></span><span class="knob"></span></label></div>
+          <div class="row"><div class="rl">Show player blip<small>dot marking your own position</small></div>
+            <label class="sw"><input type="checkbox" data-set="showPlayerBlip"><span class="track"></span><span class="knob"></span></label></div>
+          <div class="row"><div class="rl">Always show overlay<small>draw even when PoE2 isn't focused; auto-flask stays focus-gated</small></div>
+            <label class="sw"><input type="checkbox" data-set="alwaysShowOverlay"><span class="track"></span><span class="knob"></span></label></div>
+          <div class="row"><div class="rl">Reduce motion<small>still the in-game menus: no spinning sigils, motes or entrance animations</small></div>
+            <label class="sw"><input type="checkbox" data-set="reduceMotion"><span class="track"></span><span class="knob"></span></label></div>
+          <div class="row"><div class="rl">Hide junk entities<small>suppress cosmetic / FX / daemon dots</small></div>
+            <label class="sw"><input type="checkbox" data-set="hideJunk"><span class="track"></span><span class="knob"></span></label></div>
+          <div class="row"><div class="rl">Navigation paths<small>draw A&#42; routes to selected landmarks</small></div>
+            <label class="sw"><input type="checkbox" data-set="showPath"><span class="track"></span><span class="knob"></span></label></div>
+          <div class="row"><div class="rl">Curated landmark names<small>community labels (boss / reward / exits)</small></div>
+            <label class="sw"><input type="checkbox" data-set="useCuratedLandmarks"><span class="track"></span><span class="knob"></span></label></div>
+          <div class="row"><div class="rl">Overlay FPS cap<small>lower = less load on the game (15&ndash;360)</small></div>
+            <input class="numin" type="number" step="1" min="15" max="360" data-set="fpsCap"></div>
+        </div>
+        <div class="card">
+          <h3>Monster HP bars <span class="tag">by rarity</span></h3>
+          <div class="hint" style="margin:-2px 0 6px">Tick <b>On</b> per rarity (untick all to disable HP bars). Fill follows the monster icon color; border thickness 0 = no border.</div>
+          <div class="hpgrid">
+            <span class="hph">On</span><span class="hph">Rarity</span><span class="hph">Width</span><span class="hph">Color</span><span class="hph">Border</span>
+            <input type="checkbox" data-set="hpBarNormal">
+            <span class="hpr">Normal</span>
+            <input class="numin" type="number" step="1" min="4" data-hp="widthNormal">
+            <input type="color" class="i-color" data-hpcolor="borderColorNormal">
+            <input class="numin" type="number" step="0.5" min="0" max="20" data-hp="borderNormal">
+            <input type="checkbox" data-set="hpBarMagic">
+            <span class="hpr" style="color:var(--magic)">Magic</span>
+            <input class="numin" type="number" step="1" min="4" data-hp="widthMagic">
+            <input type="color" class="i-color" data-hpcolor="borderColorMagic">
+            <input class="numin" type="number" step="0.5" min="0" max="20" data-hp="borderMagic">
+            <input type="checkbox" data-set="hpBarRare">
+            <span class="hpr" style="color:var(--rare)">Rare</span>
+            <input class="numin" type="number" step="1" min="4" data-hp="widthRare">
+            <input type="color" class="i-color" data-hpcolor="borderColorRare">
+            <input class="numin" type="number" step="0.5" min="0" max="20" data-hp="borderRare">
+            <input type="checkbox" data-set="hpBarUnique">
+            <span class="hpr" style="color:var(--unique)">Unique</span>
+            <input class="numin" type="number" step="1" min="4" data-hp="widthUnique">
+            <input type="color" class="i-color" data-hpcolor="borderColorUnique">
+            <input class="numin" type="number" step="0.5" min="0" max="20" data-hp="borderUnique">
+          </div>
+          <div class="hpshared">
+            <label>Height<input class="numin" type="number" step="1" min="1" max="30" data-hp="height"></label>
+            <label>Offset X<input class="numin" type="number" step="1" data-hp="offsetX"></label>
+            <label>Offset Y<input class="numin" type="number" step="1" data-hp="offsetY"></label>
+          </div>
+          <div class="hint" style="margin-top:8px">Offset Y negative = above the monster.</div>
+        </div>
+        <div class="card">
+          <h3>Terrain <span class="tag">walkable overlay</span></h3>
+          <div class="row"><div class="rl">Interior fill<small>wash over walkable cells</small></div>
+            <span class="trow-ctl">
+              <input type="color" class="i-color" data-tcolor="interiorColor">
+              <input type="range" class="op" min="0" max="100" data-topacity="interiorOpacity">
+              <span class="opv" data-topv="interiorOpacity">&mdash;</span></span></div>
+          <div class="row"><div class="rl">Wall edge<small>outlines around rooms</small></div>
+            <span class="trow-ctl">
+              <input type="color" class="i-color" data-tcolor="edgeColor">
+              <input type="range" class="op" min="0" max="100" data-topacity="edgeOpacity">
+              <span class="opv" data-topv="edgeOpacity">&mdash;</span></span></div>
+          <div class="row"><div class="rl hint-row">Edits rebuild the terrain bitmap; use &ldquo;Show terrain&rdquo; to hide it entirely.</div></div>
+        </div>
+        <div class="card">
+          <h3>Map calibration</h3>
+          <div class="row"><div class="rl">Scale multiplier<small>projection scale of the map overlay</small></div>
+            <input class="numin" type="number" step="0.01" data-set="scaleMul"></div>
+          <div class="row"><div class="rl">Offset X</div><input class="numin" type="number" step="1" data-set="offX"></div>
+          <div class="row"><div class="rl">Offset Y</div><input class="numin" type="number" step="1" data-set="offY"></div>
+          <div class="row"><div class="rl hint-row">Changes apply live.</div></div>
+        </div>
+        <div class="card">
+          <h3>Auto-flask <span class="pill" id="flaskPill">&mdash;</span></h3>
+          <div class="hint" style="margin:-2px 0 6px">Armed with <kbd>F8</kbd> in game only &mdash; the dashboard can tune it but never arm it. Status: <span id="flaskState">&mdash;</span></div>
+          <div class="row"><div class="rl">Life flask triggers on<small>which pool the life flask watches &mdash; ES is ignored if your build has none</small></div>
+            <select class="numin selin" data-set="lifeFlaskMode">
+              <option value="Health">Health %</option>
+              <option value="EnergyShield">Energy Shield %</option>
+              <option value="Either">Either (HP or ES)</option>
+            </select></div>
+          <div class="row"><div class="rl">Life threshold %<small>tap the life flask below this Life %</small></div>
+            <input class="numin" type="number" step="1" min="0" max="100" data-set="lifeThresholdPct"></div>
+          <div class="row"><div class="rl">ES threshold %<small>below this Energy Shield % (ES / Either modes)</small></div>
+            <input class="numin" type="number" step="1" min="0" max="100" data-set="esThresholdPct"></div>
+          <div class="row"><div class="rl">Mana threshold %<small>tap the mana flask below this Mana %</small></div>
+            <input class="numin" type="number" step="1" min="0" max="100" data-set="manaThresholdPct"></div>
+          <div class="row"><div class="rl">Life flask key</div>
+            <input class="numin keyin" type="text" maxlength="1" data-set="lifeKey"></div>
+          <div class="row"><div class="rl">Mana flask key</div>
+            <input class="numin keyin" type="text" maxlength="1" data-set="manaKey"></div>
+          <div class="row"><div class="rl">Life cooldown<small>min ms between life taps</small></div>
+            <input class="numin" type="number" step="100" min="0" data-set="lifeCooldownMs"></div>
+          <div class="row"><div class="rl">Mana cooldown<small>min ms between mana taps</small></div>
+            <input class="numin" type="number" step="100" min="0" data-set="manaCooldownMs"></div>
+        </div>
+      </div>
+    </section>
+  </main>
 </div>
+<div class="saved" id="savedMsg" role="status" aria-live="polite">&#10003; Saved</div>
+<datalist id="buffNames"></datalist>
 
 """;
 }

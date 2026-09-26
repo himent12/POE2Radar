@@ -43,46 +43,17 @@ public static partial class GameHost
     /// <summary>True iff the given hwnd is the OS-level foreground window.</summary>
     public static bool IsForeground(nint hwnd) => hwnd != 0 && GetForegroundWindow() == hwnd;
 
-    // ── Input routing. Foreground: real synthesized input (SendInput / XTest) — what the game expects.
-    //    Background mode + game NOT foreground: window-addressed messages (PostMessage / XSendEvent) so the
-    //    bot keeps playing while the user is alt-tabbed and nothing is typed into the focused app. ──
-    private static nint _targetHwnd;
-    private static bool _background;
-
-    public static void SetInputTarget(nint hwnd, bool playInBackground)
-    {
-        _targetHwnd = hwnd;
-        _background = playInBackground;
-        if (OperatingSystem.IsLinux()) LinuxX11.InputTargetHwnd = hwnd;
-    }
-
     /// <summary>
-    /// Linux: route XTest input to a NESTED X server (gamescope / Xephyr) where the game is always focused —
-    /// the only background route Wine games reliably accept. <paramref name="name"/>: ":N", "auto" (scan for a
-    /// server hosting a Path of Exile window), or null/empty to use the main display.
+    /// Is the game in front? Matches the focused window by handle OR by owning process (a recreated window keeps
+    /// the pid), and on Hyprland asks the compositor (XWayland's _NET_ACTIVE_WINDOW isn't maintained there).
+    /// Thread-safe and cheap (compositor answer cached ~100 ms) — use this for every input/draw gate.
     /// </summary>
-    public static void SetInputDisplay(string? name)
+    public static bool IsGameForeground(nint hwnd, int pid)
     {
-        if (OperatingSystem.IsLinux()) LinuxX11.SetInputDisplay(name);
+        if (OperatingSystem.IsLinux()) return LinuxX11.IsGameForeground(hwnd, pid);
+        var fg = GetForegroundWindow();
+        return fg != 0 && (fg == hwnd || (pid != 0 && Win32.WindowProcessId(fg) == pid));
     }
-
-    /// <summary>A nested input server is connected (Linux).</summary>
-    public static bool HasNestedInput => OperatingSystem.IsLinux() && LinuxX11.HasInputDisplay;
-    public static string? NestedInputDisplay => OperatingSystem.IsLinux() ? LinuxX11.InputDisplayResolved : null;
-
-    /// <summary>Route to the game window directly via messages (background mode, game not foreground, no
-    /// nested server)?</summary>
-    private static bool Targeted => _background && _targetHwnd != 0 && !HasNestedInput && GetForegroundWindow() != _targetHwnd;
-
-    /// <summary>True while input is being routed to an unfocused game window.</summary>
-    public static bool IsBackgroundActive => Targeted;
-
-    /// <summary>Can mouse buttons be delivered in background mode? Windows: PostMessage bypasses activation.
-    /// Linux: only through a nested server; a synthetic ButtonPress on the main display activates the window.</summary>
-    public static bool BackgroundSupportsMouse => !OperatingSystem.IsLinux() || HasNestedInput;
-
-    /// <summary>Would this key be dropped right now (mouse button in background mode on Linux)?</summary>
-    public static bool WouldDrop(int vk) => Targeted && !BackgroundSupportsMouse && vk is 0x01 or 0x02 or 0x04 or 0x05 or 0x06;
 
     public static short GetAsyncKeyState(int vKey)
         => OperatingSystem.IsLinux() ? LinuxX11.GetAsyncKeyState(vKey) : Win32.GetAsyncKeyState(vKey);
@@ -94,53 +65,31 @@ public static partial class GameHost
     public static bool IsMouseButtonDown(int vk)
         => OperatingSystem.IsLinux() ? LinuxX11.IsMouseButtonDown(vk) : (Win32.GetAsyncKeyState(vk) & 0x8000) != 0;
 
+    /// <summary>Synthesized press+release (SendInput / XTest) — goes to whatever window is focused, so
+    /// every caller gates on PoE2 being the foreground window first.</summary>
     public static void TapKey(ushort vk)
     {
-        if (Targeted) { SendKeyTargeted(vk, true); SendKeyTargeted(vk, false); return; }
         if (OperatingSystem.IsLinux()) LinuxX11.TapKey(vk);
         else Win32.TapKey(vk);
     }
 
-    /// <summary>Press and HOLD a key/button until <see cref="KeyUp"/> — continuous WASD movement + run.</summary>
+    /// <summary>Press and HOLD a key until <see cref="KeyUp"/> — modifier chords (Ctrl/Shift/Alt + key).</summary>
     public static void KeyDown(ushort vk)
     {
-        if (Targeted) { SendKeyTargeted(vk, true); return; }
         if (OperatingSystem.IsLinux()) LinuxX11.SetKey(vk, true);
         else Win32.SetKey(vk, true);
     }
 
     public static void KeyUp(ushort vk)
     {
-        // Always release on BOTH paths: a key pressed while foreground must not stay down after alt-tab.
-        if (_background && _targetHwnd != 0) SendKeyTargeted(vk, false);
         if (OperatingSystem.IsLinux()) LinuxX11.SetKey(vk, false);
         else Win32.SetKey(vk, false);
-    }
-
-    private static void SendKeyTargeted(ushort vk, bool down)
-    {
-        if (OperatingSystem.IsLinux()) LinuxX11.SendKeyToWindow(_targetHwnd, vk, down);
-        else Win32.SendKeyToWindow(_targetHwnd, vk, down);
     }
 
     /// <summary>Undo any input-side state we changed (Linux: keyboard autorepeat). Call on shutdown.</summary>
     public static void RestoreInputState()
     {
         if (OperatingSystem.IsLinux()) LinuxX11.RestoreAutoRepeat();
-    }
-
-    public static void SetCursorPos(int x, int y)
-    {
-        if (Targeted)
-        {
-            // Never warp the real pointer while the user is in another app — tell the game where "its" cursor is.
-            if (!TryGetWindowRect(_targetHwnd, out var r)) return;
-            if (OperatingSystem.IsLinux()) LinuxX11.SendPointerToWindow(_targetHwnd, x - r.Left, y - r.Top);
-            else Win32.SendPointerToWindow(_targetHwnd, x - r.Left, y - r.Top);
-            return;
-        }
-        if (OperatingSystem.IsLinux()) LinuxX11.SetCursorPos(x, y);
-        else Win32.SetCursorPos(x, y);
     }
 
     public static void BeginHighResTimer()
@@ -202,6 +151,12 @@ public static partial class GameHost
         [DllImport("user32.dll")] private static extern nint MonitorFromWindow(nint hwnd, uint dwFlags);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern bool GetMonitorInfoW(nint hMonitor, ref MonitorInfoEx lpmi);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern bool EnumDisplaySettingsW(string? lpszDeviceName, int iModeNum, ref DevMode lpDevMode);
+
+        public static int WindowProcessId(nint hwnd)
+        {
+            GetWindowThreadProcessId(hwnd, out var pid);
+            return (int)pid;
+        }
 
         public static nint FindWindowForProcess(int processId)
         {
@@ -286,35 +241,6 @@ public static partial class GameHost
             inputsK[1].type = INPUT_KEYBOARD;
             inputsK[1].U.ki = new KEYBDINPUT { wScan = scan, dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP };
             SendInput(2, inputsK, Marshal.SizeOf<INPUT>());
-        }
-
-        [DllImport("user32.dll")] private static extern bool PostMessageW(nint hWnd, uint msg, nint wParam, nint lParam);
-        private const uint WM_KEYDOWN = 0x0100, WM_KEYUP = 0x0101, WM_MOUSEMOVE = 0x0200;
-        private const uint WM_LBUTTONDOWN = 0x0201, WM_LBUTTONUP = 0x0202, WM_RBUTTONDOWN = 0x0204, WM_RBUTTONUP = 0x0205;
-        private const uint WM_MBUTTONDOWN = 0x0207, WM_MBUTTONUP = 0x0208;
-        private static int _bgX, _bgY;
-        private static nint _bgKeys; // MK_* button state for mouse messages
-
-        public static void SendKeyToWindow(nint hwnd, ushort vk, bool down)
-        {
-            if (hwnd == 0) return;
-            var lp = (nint)((_bgY << 16) | (_bgX & 0xFFFF));
-            switch (vk)
-            {
-                case 0x01: _bgKeys = down ? _bgKeys | 0x1 : _bgKeys & ~0x1; PostMessageW(hwnd, down ? WM_LBUTTONDOWN : WM_LBUTTONUP, _bgKeys, lp); return;
-                case 0x02: _bgKeys = down ? _bgKeys | 0x2 : _bgKeys & ~0x2; PostMessageW(hwnd, down ? WM_RBUTTONDOWN : WM_RBUTTONUP, _bgKeys, lp); return;
-                case 0x04: _bgKeys = down ? _bgKeys | 0x10 : _bgKeys & ~0x10; PostMessageW(hwnd, down ? WM_MBUTTONDOWN : WM_MBUTTONUP, _bgKeys, lp); return;
-            }
-            var scan = MapVirtualKey(vk, MAPVK_VK_TO_VSC);
-            var lParam = (nint)(1 | (scan << 16) | (down ? 0u : 0xC0000000u));
-            PostMessageW(hwnd, down ? WM_KEYDOWN : WM_KEYUP, vk, lParam);
-        }
-
-        public static void SendPointerToWindow(nint hwnd, int clientX, int clientY)
-        {
-            if (hwnd == 0) return;
-            _bgX = clientX; _bgY = clientY;
-            PostMessageW(hwnd, WM_MOUSEMOVE, _bgKeys, (nint)((clientY << 16) | (clientX & 0xFFFF)));
         }
 
         public static void SetKey(ushort vk, bool down)

@@ -1,431 +1,387 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Net;
 using System.Net.Http;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 
 namespace POE2Radar.Overlay.Pricing;
 
-/// <summary>
-/// Result of a price lookup. <see cref="Exalted"/> is the item's value in Exalted Orbs (PoE2's base
-/// economy unit). <see cref="Quantity"/> is the listing count / trade volume — a confidence signal:
-/// low-volume rows are often mislisted (a 2-listing leveling unique priced at 5000 div).
-/// </summary>
-public readonly record struct PriceResult(string Name, double Exalted, int Quantity, string Category)
+public readonly record struct PriceResult(string Name, double Exalted, int Quantity, string Category,
+    string? Variant = null, bool Corrupted = false, double? TrendPercent = null,
+    double? TradedVolumeEx = null, string? BaseType = null, string? DetailsId = null)
 {
-    public bool LowConfidence(int minQty) => Quantity < minQty;
+    public bool IsListingPrice => Category.StartsWith("Unique", StringComparison.Ordinal) || Category == "PrecursorTablets";
+    public bool LowConfidence(int minQty) => IsListingPrice && Quantity < minQty;
 }
 
-/// <summary>
-/// Centralized price source, ported in spirit from the user's PoE1 NinjaPriceService and built around
-/// the live <b>poe.ninja</b> PoE2 economy API (the gold-standard source, estimated off the official trade
-/// API). Fetches the current league's currency-like + unique prices, converts everything to Exalted, and
-/// indexes them by normalized name AND by 2D-art basename (the bridge to in-game item reads: a dropped
-/// item's RenderItem .dds basename equals poe.ninja's icon basename), caches to disk, and refreshes on a
-/// TTL. Reads are lock-free off volatile snapshots; the whole index is swapped atomically.
-///
-/// <para>Two poe.ninja endpoints, both returning all rows in one (un-paginated) response:</para>
-/// <list type="bullet">
-///   <item><b>exchange</b> (<c>.../exchange/current/overview?type=…</c>) — fungible/currency-like rows.
-///   <c>items[]</c> maps id→name/image, <c>lines[]</c> carries the price; joined by id.</item>
-///   <item><b>stash item</b> (<c>.../stash/current/item/overview?type=Unique…</c>) — uniques, with
-///   name/icon/price/listingCount all inline on each <c>lines[]</c> row.</item>
-/// </list>
-///
-/// <para>Price unit: every line's <c>primaryValue</c> is in <b>Divine Orbs</b> (validated against known
-/// anchors — Divine=1, Exalted≈0.0066, and the dirt-cheap unique floor ≈0.0017 div), and
-/// <c>core.rates.exalted</c> is Exalted-per-Divine, so <c>ex = primaryValue × rates.exalted</c> uniformly.</para>
-///
-/// <para>poe.ninja has no clean league-list endpoint, so the current league NAME is still discovered via
-/// poe2scout's lightweight <c>/Leagues</c> (its <c>Value</c> strings match what poe.ninja expects, e.g.
-/// "Runes of Aldur"); the divine/chaos RATES come from poe.ninja itself so prices stay self-consistent.</para>
-///
-/// <para>This is the recyclable data source: ground-loot valuation, runeforge rewards, expedition choices,
-/// ritual/vendor overlays all consume <see cref="TryByArt"/> / <see cref="TryByName"/>.</para>
-/// </summary>
+/// <summary>Cached poe.ninja economy estimates. No HTTP runs on the game/render thread.
+/// League, currency rates and indexes are published as one immutable snapshot.</summary>
 public sealed class PriceBook
 {
-    // poe.ninja "stash item" overview types (icon → art basename + price inline per line). Mostly
-    // uniques, plus PrecursorTablets (the atlas/tower tablets — Overseer/Breach/Ritual/… Tablet), which
-    // share this endpoint's shape rather than the exchange one.
-    private static readonly string[] UniqueTypes =
-        { "UniqueWeapons", "UniqueArmours", "UniqueAccessories", "UniqueFlasks", "UniqueJewels",
-          "UniqueTablets", "PrecursorTablets" };
-
-    // poe.ninja "exchange" currency-like types. Superset of the old poe2scout set — includes
-    // SoulCores (poe2scout's "ultimatum"), UncutGems (Uncut Skill/Spirit/Support Gem by level) and
-    // LineageSupportGems (named, tradeable). NOTE: individual CUT active skill gems (e.g. "Rain of
-    // Blades") are not a traded market on poe.ninja or anywhere — only UncutGems carry a value.
-    // "Verisium" is the Expedition-2 / rune-crafting currency family (Runes of Aldur): the Alloys
-    // (Mystic/Prismatic/Swift/Runic/… Alloy), Verisium, Starlit Ores, and Crests — the runeforge reward
-    // pool. Without it those rewards have no price and draw no overlay label.
     private static readonly string[] ExchangeTypes =
-        { "Currency", "Runes", "Fragments", "Essences", "Expedition", "Verisium", "Breach", "Ritual",
-          "Delirium", "UncutGems", "Abyss", "SoulCores", "LineageSupportGems", "Idols" };
-
-    private const string NinjaExchange = "https://poe.ninja/poe2/api/economy/exchange/current/overview";
-    private const string NinjaStashItem = "https://poe.ninja/poe2/api/economy/stash/current/item/overview";
-
-    private static readonly HttpClient Http = CreateHttp();
-    private static readonly JsonSerializerOptions Json = new()
-    {
-        PropertyNameCaseInsensitive = true,
-        WriteIndented = false,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-    };
-
+        ["Currency", "Runes", "Fragments", "Essences", "Expedition", "Verisium", "Breach", "Ritual",
+         "Delirium", "UncutGems", "Abyss", "SoulCores", "LineageSupportGems", "Idols"];
+    private static readonly string[] UniqueTypes =
+        ["UniqueWeapons", "UniqueArmours", "UniqueAccessories", "UniqueFlasks", "UniqueCharms", "UniqueJewels",
+         "UniqueSanctumRelics", "UniqueTablets", "PrecursorTablets"];
+    private const string Api = "https://poe.ninja/poe2/api/economy";
+    private static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true };
+    private static readonly HttpClient SharedHttp = CreateHttp();
+    private readonly HttpClient _http;
     private readonly string _cachePath;
     private readonly object _gate = new();
+    private readonly ConcurrentDictionary<string, (string Body, string? Etag)> _responses = new();
+    private volatile Snapshot _snapshot = new();
+    private string? _leagueOverride, _detectedLeague;
+    private int _generation;
+    private Task? _fetchTask;
+    private DateTime _nextAttemptUtc;
+    private string _status = "not started";
 
-    // Atomically-swapped snapshots (volatile; lock-free reads on the tick/render thread).
-    private volatile Dictionary<string, PricedItem> _byArt = new(StringComparer.OrdinalIgnoreCase);
-    private volatile Dictionary<string, PricedItem> _byName = new(StringComparer.OrdinalIgnoreCase);
+    public sealed class Snapshot
+    {
+        public int Version { get; set; } = 3;
+        public string League { get; set; } = "";
+        public DateTime FetchedUtc { get; set; }
+        public double ExPerDivine { get; set; }
+        public double ExPerChaos { get; set; }
+        public int MarketRowCount { get; set; }
+        public int CategoryCount { get; set; }
+        public double FetchMilliseconds { get; set; }
+        public Dictionary<string, List<PriceResult>> VariantsByName { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, MarketRange> RangesByName { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, PriceResult> ByArt { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, PriceResult> ByName { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    }
 
-    private volatile bool _fetching;
-    private DateTime _lastFetchUtc = DateTime.MinValue;
-    private string _league = "";
-    private string? _leagueOverride;
-    private volatile string? _detectedLeague; // league name read from game memory (Poe2Live.LeagueName)
+    public sealed record MarketRange(int Variants, long Listings, double MinExalted, double MaxExalted);
+    public int MarketRowCount => _snapshot.MarketRowCount;
+    public int CategoryCount => _snapshot.CategoryCount;
+    public double FetchMilliseconds => _snapshot.FetchMilliseconds;
 
-    public double ExPerDivine { get; private set; } = 1;
-    public double ExPerChaos { get; private set; } = 1;
-    public bool IsLoaded => _byName.Count > 0 || _byArt.Count > 0;
-    public int ItemCount => _byArt.Count + _byName.Count;
-    public string League => _league;
-    public string Status { get; private set; } = "not started";
-    public DateTime LastFetchUtc => _lastFetchUtc;
-    public int RefreshIntervalMinutes { get; set; } = 30;
+    internal Snapshot Current => _snapshot;
+    public string ComparisonLeague { get { lock (_gate) return _leagueOverride ?? _detectedLeague ?? League; } }
+    public double ExPerDivine => _snapshot.ExPerDivine;
+    public double ExPerChaos => _snapshot.ExPerChaos;
+    public bool IsLoaded => _snapshot.ByName.Count > 0;
+    public int ItemCount => _snapshot.ByName.Count;
+    public string League => _snapshot.League;
+    public string Status => Volatile.Read(ref _status);
+    public DateTime LastFetchUtc => _snapshot.FetchedUtc;
+    public bool IsStale => IsLoaded && DateTime.UtcNow - LastFetchUtc > TimeSpan.FromMinutes(Math.Max(5, RefreshIntervalMinutes));
+    public int RefreshIntervalMinutes { get; set; } = 60;
 
-    private sealed record PricedItem(string Name, double Exalted, int Quantity, string Category);
-
-    public PriceBook(string cachePath, string? leagueOverride = null)
+    public PriceBook(string cachePath, string? leagueOverride = null, HttpClient? http = null)
     {
         _cachePath = cachePath;
-        _leagueOverride = string.IsNullOrWhiteSpace(leagueOverride) ? null : leagueOverride.Trim();
+        _leagueOverride = Clean(leagueOverride);
+        _http = http ?? SharedHttp;
         TryLoadCache();
     }
 
     private static HttpClient CreateHttp()
     {
-        var c = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-        c.DefaultRequestHeaders.UserAgent.ParseAdd("POE2Radar-PriceBook");
-        return c;
+        var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        client.DefaultRequestHeaders.UserAgent.ParseAdd("POE2Radar/1.0 (+https://github.com/himent12/POE2Radar)");
+        return client;
     }
 
-    /// <summary>Set/clear a manual league (e.g. from settings); triggers a refresh if it changed.</summary>
+    private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
     public void SetLeagueOverride(string? league)
     {
-        var v = string.IsNullOrWhiteSpace(league) ? null : league.Trim();
-        if (v == _leagueOverride) return;
-        _leagueOverride = v;
-        _lastFetchUtc = DateTime.MinValue; // force the next RefreshIfDue to re-fetch
+        lock (_gate)
+        {
+            var value = Clean(league);
+            if (value == _leagueOverride) return;
+            _leagueOverride = value;
+            InvalidateLeague();
+        }
     }
 
-    /// <summary>Report the league read from game memory (Poe2Live.LeagueName, e.g. "HC Runes of Aldur").
-    /// When no manual override is set, this is what we price against — it disambiguates the softcore vs
-    /// hardcore league that poe2scout reports both as current. Triggers a re-fetch when it changes.</summary>
     public void SetDetectedLeague(string? league)
     {
-        var v = string.IsNullOrWhiteSpace(league) ? null : league.Trim();
-        if (v == _detectedLeague) return;
-        _detectedLeague = v;
-        if (_leagueOverride == null) _lastFetchUtc = DateTime.MinValue; // only matters when auto-detecting
+        lock (_gate)
+        {
+            var value = Clean(league);
+            // A transient memory-read failure must not switch the character to the default league.
+            if (value == null || value == _detectedLeague) return;
+            _detectedLeague = value;
+            if (_leagueOverride == null) InvalidateLeague();
+        }
     }
 
-    /// <summary>Call periodically (cheap when not due). Kicks a background fetch when stale and not already running.</summary>
-    public void RefreshIfDue()
+    private void InvalidateLeague()
     {
-        if (_fetching) return;
-        if (DateTime.UtcNow - _lastFetchUtc < TimeSpan.FromMinutes(RefreshIntervalMinutes)) return;
-        _fetching = true;
-        _ = Task.Run(FetchAsync);
+        _generation++;
+        var requested = _leagueOverride ?? _detectedLeague;
+        if (!string.Equals(requested, League, StringComparison.OrdinalIgnoreCase))
+            _snapshot = new(); // never show another league's prices while loading
+        _nextAttemptUtc = DateTime.MinValue;
+        _status = IsLoaded ? $"cached prices for '{League}'" : "league changed; waiting for prices";
     }
 
-    public void ForceRefresh()
+    public void RefreshIfDue() => _ = RefreshAsync();
+    public void ForceRefresh() => _ = RefreshAsync(force: true);
+
+    /// <summary>Coalesces simultaneous requests. Manual refresh also respects the network backoff.</summary>
+    public Task RefreshAsync(bool force = false)
     {
-        if (_fetching) return;
-        _fetching = true;
-        _ = Task.Run(FetchAsync);
+        lock (_gate)
+        {
+            if (_fetchTask is { IsCompleted: false }) return _fetchTask;
+            var now = DateTime.UtcNow;
+            if (now < _nextAttemptUtc || (!force && IsLoaded && !IsStale)) return Task.CompletedTask;
+            var requested = _leagueOverride ?? _detectedLeague;
+            var generation = _generation;
+            _fetchTask = Task.Run(() => FetchAsync(requested, generation));
+            return _fetchTask;
+        }
     }
 
-    /// <summary>Look up a unique by its 2D-art basename (e.g. "Earthbound") — the in-game item read key.</summary>
-    public PriceResult? TryByArt(string? artBasename)
-    {
-        if (string.IsNullOrWhiteSpace(artBasename)) return null;
-        return _byArt.TryGetValue(artBasename.Trim(), out var p)
-            ? new PriceResult(p.Name, p.Exalted, p.Quantity, p.Category) : null;
-    }
+    public PriceResult? TryByArt(string? art) => Clean(art) is { } key && _snapshot.ByArt.TryGetValue(key, out var p) ? p : null;
+    public PriceResult? TryByName(string? name) => Clean(name) is { } key && _snapshot.ByName.TryGetValue(key, out var p) ? p : null;
+    public string Format(double ex) => Format(ex, ExPerDivine);
+    internal static string Format(double ex, double rate)
+        => rate > 1 && ex >= rate ? $"{ex / rate:0.##} div" : ex is > 0 and < 0.01 ? "<0.01 ex" : $"{ex:0.##} ex";
 
-    /// <summary>Look up any priced item (unique or currency) by display name.</summary>
-    public PriceResult? TryByName(string? name)
+    private async Task FetchAsync(string? requested, int generation)
     {
-        if (string.IsNullOrWhiteSpace(name)) return null;
-        return _byName.TryGetValue(Normalize(name), out var p)
-            ? new PriceResult(p.Name, p.Exalted, p.Quantity, p.Category) : null;
-    }
-
-    /// <summary>Convert an Exalted value to a short display string in the largest sensible unit.</summary>
-    public string Format(double ex)
-    {
-        if (ExPerDivine > 1 && ex >= ExPerDivine) return $"{ex / ExPerDivine:0.##} div";
-        return $"{ex:0.##} ex";
-    }
-
-    // ── fetch ────────────────────────────────────────────────────────────────
-
-    private async Task FetchAsync()
-    {
+        var timer = Stopwatch.StartNew();
+        var retry = TimeSpan.FromMinutes(5);
         try
         {
-            Status = "fetching…";
-            var league = await ResolveLeagueAsync().ConfigureAwait(false);
-            if (string.IsNullOrEmpty(league)) { Status = "no league"; return; }
-            var lg = Uri.EscapeDataString(league);
-
-            var byArt = new Dictionary<string, PricedItem>(StringComparer.OrdinalIgnoreCase);
-            var byName = new Dictionary<string, PricedItem>(StringComparer.OrdinalIgnoreCase);
-
-            // Rates default to "not yet known"; the first overview response that carries core.rates sets
-            // them, and ApplyRates fixes ExPerDivine/ExPerChaos for the rest of the fetch + conversions.
-            double exPerDivine = 0;
-
-            foreach (var type in ExchangeTypes)
-                await FetchExchangeAsync(lg, type, byArt, byName, () => exPerDivine, r => exPerDivine = r).ConfigureAwait(false);
-            foreach (var type in UniqueTypes)
-                await FetchUniquesAsync(lg, type, byArt, byName, () => exPerDivine, r => exPerDivine = r).ConfigureAwait(false);
-
-            if (byArt.Count == 0 && byName.Count == 0) { Status = "fetch returned no rows"; return; }
-
-            _byArt = byArt;
-            _byName = byName;
-            _league = league;
-            _lastFetchUtc = DateTime.UtcNow;
-            Status = $"loaded {byName.Count} by name + {byArt.Count} by art for '{league}'";
-            SaveCache();
-        }
-        catch (Exception ex) { Status = $"fetch failed: {ex.Message}"; }
-        finally { _fetching = false; }
-    }
-
-    /// <summary>Resolve the league to price against. Precedence: (1) a manual override from settings;
-    /// (2) the league read from game memory (<see cref="SetDetectedLeague"/>) — validated against
-    /// poe2scout's /Leagues so we use its canonical Value casing, but used as-is if the list is
-    /// unreachable, since the in-game string already matches poe.ninja verbatim; (3) fallback to the
-    /// current softcore league from /Leagues. poe2scout's Value strings are exactly what poe.ninja expects.</summary>
-    private async Task<string> ResolveLeagueAsync()
-    {
-        if (_leagueOverride != null) return _leagueOverride;
-        var detected = _detectedLeague;
-        List<ScoutLeague> leagues;
-        try
-        {
-            var json = await Http.GetStringAsync("https://poe2scout.com/api/poe2/Leagues").ConfigureAwait(false);
-            leagues = JsonSerializer.Deserialize<List<ScoutLeague>>(json, Json) ?? new();
-        }
-        catch
-        {
-            return detected ?? ""; // list unreachable — trust the in-game string (already poe.ninja-shaped)
-        }
-
-        if (detected != null)
-        {
-            var match = leagues.FirstOrDefault(l => string.Equals(l.Value, detected, StringComparison.OrdinalIgnoreCase));
-            return match?.Value ?? detected; // canonical casing if known, else the raw in-game name
-        }
-
-        var pick = leagues.FirstOrDefault(l => l.IsCurrent && !l.Value.StartsWith("HC", StringComparison.OrdinalIgnoreCase))
-                   ?? leagues.FirstOrDefault(l => l.IsCurrent)
-                   ?? leagues.FirstOrDefault();
-        return pick?.Value ?? "";
-    }
-
-    // Convert poe.ninja core.rates → our Exalted-per-Divine / Exalted-per-Chaos. rates are "units per
-    // Divine": exalted = ex/div directly; chaos = chaos/div, so ex/chaos = (ex/div)/(chaos/div).
-    private void ApplyRates(NinjaCore? core)
-    {
-        if (core?.Rates == null) return;
-        if (core.Rates.TryGetValue("exalted", out var exPerDiv) && exPerDiv > 0)
-        {
-            ExPerDivine = exPerDiv;
-            if (core.Rates.TryGetValue("chaos", out var chaosPerDiv) && chaosPerDiv > 0)
-                ExPerChaos = exPerDiv / chaosPerDiv;
-        }
-    }
-
-    private async Task FetchExchangeAsync(string leagueEscaped, string type,
-        Dictionary<string, PricedItem> byArt, Dictionary<string, PricedItem> byName,
-        Func<double> getRate, Action<double> setRate)
-    {
-        try
-        {
-            var url = $"{NinjaExchange}?league={leagueEscaped}&type={type}";
-            var data = JsonSerializer.Deserialize<NinjaOverview>(await Http.GetStringAsync(url).ConfigureAwait(false), Json);
-            if (data?.Lines == null) return;
-            if (getRate() <= 0) { ApplyRates(data.Core); setRate(ExPerDivine); }
-            var rate = getRate();
-            if (rate <= 0) return; // can't price without a rate
-
-            // items[] maps id → name/image; join the priced lines[] to it by id.
-            var meta = new Dictionary<string, NinjaItem>(StringComparer.Ordinal);
-            if (data.Items != null)
-                foreach (var it in data.Items)
-                    if (!string.IsNullOrEmpty(it.Id)) meta[it.Id] = it;
-
-            foreach (var ln in data.Lines)
+            _status = "fetching market prices…";
+            var league = requested;
+            if (league == null)
             {
-                if (ln.Id.ValueKind != JsonValueKind.String) continue; // exchange ids are strings
-                var id = ln.Id.GetString();
-                if (string.IsNullOrEmpty(id) || !meta.TryGetValue(id, out var m)) continue;
-                if (string.IsNullOrWhiteSpace(m.Name) || ln.PrimaryValue <= 0) continue;
-                var ex = ln.PrimaryValue * rate;
-                var qty = (int)Math.Clamp(ln.VolumePrimaryValue ?? 0, 0, int.MaxValue);
-                var item = new PricedItem(m.Name.Trim(), ex, qty, type);
-                Upsert(byName, Normalize(m.Name), item);
-                var art = ArtBasenameFromIcon(m.Image);
-                if (art != null) Upsert(byArt, art, item, preferVolume: true);
+                var leagues = JsonSerializer.Deserialize<List<LeagueDto>>(await GetAsync($"{Api}/leagues"), Json);
+                league = leagues?.FirstOrDefault()?.Id;
             }
-        }
-        catch { /* a missing/empty category is fine — skip it */ }
-    }
-
-    private async Task FetchUniquesAsync(string leagueEscaped, string type,
-        Dictionary<string, PricedItem> byArt, Dictionary<string, PricedItem> byName,
-        Func<double> getRate, Action<double> setRate)
-    {
-        try
-        {
-            var url = $"{NinjaStashItem}?league={leagueEscaped}&type={type}";
-            var data = JsonSerializer.Deserialize<NinjaOverview>(await Http.GetStringAsync(url).ConfigureAwait(false), Json);
-            if (data?.Lines == null) return;
-            if (getRate() <= 0) { ApplyRates(data.Core); setRate(ExPerDivine); }
-            var rate = getRate();
-            if (rate <= 0) return;
-
-            foreach (var ln in data.Lines)
+            if (string.IsNullOrWhiteSpace(league)) throw new InvalidDataException("No market league available");
+            var next = new Snapshot { League = league };
+            var ambiguousArt = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            // Currency must finish first. Two requests per subsequent batch bounds community API load.
+            var batches = new[] { new[] { "Currency" } }.Concat(ExchangeTypes.Skip(1).Concat(UniqueTypes).Chunk(2));
+            foreach (var batch in batches)
             {
-                if (string.IsNullOrWhiteSpace(ln.Name) || ln.PrimaryValue <= 0) continue;
-                var ex = ln.PrimaryValue * rate;
-                var item = new PricedItem(ln.Name.Trim(), ex, ln.ListingCount ?? 0, type);
-                Upsert(byName, Normalize(ln.Name), item);
-                var art = ArtBasenameFromIcon(ln.Icon);
-                if (art != null) Upsert(byArt, art, item, preferVolume: true);
+                lock (_gate) { if (generation != _generation) return; }
+                var tasks = batch.Select(type => ReadOverviewAsync(league, type)).ToArray();
+                Overview[] responses;
+                try { responses = await Task.WhenAll(tasks).ConfigureAwait(false); }
+                catch
+                {
+                    // Inspect every completed request; a sibling failure must not mask Retry-After.
+                    var limit = tasks.Where(t => t.Exception != null)
+                        .SelectMany(t => t.Exception!.Flatten().InnerExceptions).OfType<RateLimitException>()
+                        .OrderByDescending(e => e.Delay).FirstOrDefault();
+                    if (limit != null) throw limit;
+                    throw;
+                }
+                for (int index = 0; index < batch.Length; index++)
+                {
+                    var type = batch[index];
+                    var exchange = ExchangeTypes.Contains(type);
+                    var data = responses[index];
+                    next.CategoryCount++;
+                    // Category responses may have older cached exchange rates. Normalize all categories
+                    // to this snapshot's Currency overview so an 18-divine listing still displays as 18 div.
+                    var rate = data.Core?.Primary switch
+                    {
+                        "divine" when next.ExPerDivine > 0 => next.ExPerDivine,
+                        "chaos" when next.ExPerChaos > 0 => next.ExPerChaos,
+                        _ => ExaltedPerPrimary(data.Core),
+                    };
+                    // Never assume a missing rate is 1 or reuse a rate from a different reference currency.
+                    if (rate <= 0) throw new InvalidDataException($"Missing currency conversion for {type}");
+                    if (type == "Currency")
+                    {
+                        next.ExPerDivine = CurrencyValue(data.Core!, "divine", rate);
+                        next.ExPerChaos = CurrencyValue(data.Core!, "chaos", rate);
+                    }
+                    var metadata = (data.Items ?? []).Concat(data.Core?.Items ?? [])
+                        .GroupBy(x => x.Id).ToDictionary(g => g.Key, g => g.First());
+                    foreach (var line in data.Lines!)
+                    {
+                        string? name = line.Name, icon = line.Icon;
+                        if (exchange)
+                        {
+                            if (line.Id.ValueKind != JsonValueKind.String || !metadata.TryGetValue(line.Id.GetString()!, out var item)) continue;
+                            name = item.Name; icon = item.Image;
+                        }
+                        var value = line.PrimaryValue * rate;
+                        if (string.IsNullOrWhiteSpace(name) || !double.IsFinite(value) || value <= 0) continue;
+                        // Exchange volume is a currency value, not a count of item listings.
+                        var result = new PriceResult(name.Trim(), value, exchange ? 0 : Math.Max(0, line.ListingCount ?? 0),
+                            type, line.Variant, line.Corrupted, Finite(line.SparkLine?.TotalChange),
+                            exchange ? Positive(line.VolumePrimaryValue * rate) : null, line.BaseType, line.DetailsId);
+                        next.MarketRowCount++;
+                        if (!next.VariantsByName.TryGetValue(result.Name, out var variants))
+                            next.VariantsByName[result.Name] = variants = [];
+                        variants.Add(result);
+                        Upsert(next.ByName, result.Name, result);
+                        if (!exchange && ArtBasename(icon) is { } art && !ambiguousArt.Contains(art))
+                        {
+                            if (next.ByArt.TryGetValue(art, out var prior) && prior.Name != result.Name)
+                            {
+                                next.ByArt.Remove(art); ambiguousArt.Add(art);
+                            }
+                            else Upsert(next.ByArt, art, result);
+                        }
+                    }
+                }
             }
+            foreach (var (name, variants) in next.VariantsByName)
+                next.RangesByName[name] = new(variants.Count, variants.Sum(v => (long)v.Quantity),
+                    variants.Min(v => v.Exalted), variants.Max(v => v.Exalted));
+            next.FetchMilliseconds = timer.Elapsed.TotalMilliseconds;
+            if (next.ByName.Count == 0) throw new InvalidDataException("Market returned no prices");
+            next.FetchedUtc = DateTime.UtcNow;
+            lock (_gate)
+            {
+                if (generation != _generation) return; // league changed during the request
+                _snapshot = next;
+                _nextAttemptUtc = DateTime.UtcNow.AddMinutes(5);
+                _status = $"loaded {next.ByName.Count} items for '{league}'";
+            }
+            // Disk serialization is independent of readers; never hold the game-thread gate during IO.
+            SaveCache(next);
         }
-        catch { }
+        catch (RateLimitException ex)
+        {
+            retry = ex.Delay > retry ? ex.Delay : retry;
+            if (generation == _generation) _status = "market rate limited; retrying later";
+        }
+        catch (Exception ex)
+        {
+            if (generation == _generation) _status = $"price refresh failed: {ex.Message}";
+        }
+        finally
+        {
+            lock (_gate)
+                if (generation == _generation && _nextAttemptUtc < DateTime.UtcNow)
+                    _nextAttemptUtc = DateTime.UtcNow.Add(retry);
+        }
     }
 
-    /// <summary>Insert/replace on a key collision. By NAME (unique keys) keep the higher value. By ART,
-    /// currency TIERS share one icon (Exalted/Greater/Perfect Exalted → same "CurrencyAddModToRare" art),
-    /// so keeping the most VALUABLE made every plain Exalted inherit Perfect Exalted's price — instead keep
-    /// the MOST-TRADED listing (<paramref name="preferVolume"/>), which is the common drop.</summary>
-    private static void Upsert(Dictionary<string, PricedItem> map, string key, PricedItem item, bool preferVolume = false)
+    private async Task<Overview> ReadOverviewAsync(string league, string type)
     {
-        if (string.IsNullOrEmpty(key)) return;
-        if (!map.TryGetValue(key, out var cur)) { map[key] = item; return; }
-        var replace = preferVolume
-            ? item.Quantity > cur.Quantity || (item.Quantity == cur.Quantity && item.Exalted > cur.Exalted)
-            : item.Exalted > cur.Exalted;
-        if (replace) map[key] = item;
+        var route = ExchangeTypes.Contains(type) ? "exchange/current" : "stash/current/item";
+        var body = await GetAsync($"{Api}/{route}/overview?league={Uri.EscapeDataString(league)}&type={type}");
+        var data = JsonSerializer.Deserialize<Overview>(body, Json);
+        if (data?.Lines == null) throw new InvalidDataException($"Missing market price rows for {type}");
+        return data;
     }
 
-    /// <summary>poe.ninja icon → basename. ".../<hash>/Earthbound.png" → "Earthbound" (handles both the
-    /// absolute web.poecdn.com unique icons and the relative "/gen/image/.../X.png" currency images).</summary>
-    private static string? ArtBasenameFromIcon(string? iconUrl)
+    private static double? Finite(double? value) => value.HasValue && double.IsFinite(value.Value) ? value : null;
+    private static double? Positive(double? value) => Finite(value) is > 0 ? value : null;
+
+    private async Task<string> GetAsync(string url)
     {
-        if (string.IsNullOrWhiteSpace(iconUrl)) return null;
-        var noQuery = iconUrl.Split('?')[0];
-        var seg = noQuery.Split('/').LastOrDefault();
-        if (string.IsNullOrWhiteSpace(seg)) return null;
-        var dot = seg.LastIndexOf('.');
-        var name = dot > 0 ? seg[..dot] : seg;
-        return name.Length >= 2 ? name : null;
+        using var request = new HttpRequestMessage(HttpMethod.Get, url);
+        _responses.TryGetValue(url, out var cached);
+        if (cached.Etag != null) request.Headers.TryAddWithoutValidation("If-None-Match", cached.Etag);
+        using var response = await _http.SendAsync(request).ConfigureAwait(false);
+        if (response.StatusCode == HttpStatusCode.NotModified && cached.Body != null) return cached.Body;
+        if (response.StatusCode == HttpStatusCode.TooManyRequests)
+            throw new RateLimitException(response.Headers.RetryAfter?.Delta
+                ?? (response.Headers.RetryAfter?.Date - DateTimeOffset.UtcNow) ?? TimeSpan.FromMinutes(5));
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+        if (_responses.Count > 100) _responses.Clear();
+        _responses[url] = (body, response.Headers.ETag?.ToString());
+        return body;
     }
 
-    private static string Normalize(string s) => s.Trim();
-
-    // ── disk cache ─────────────────────────────────────────────────────────────
-
-    private sealed class CacheDto
+    private sealed class RateLimitException(TimeSpan delay) : Exception { public TimeSpan Delay { get; } = delay; }
+    private static double ExaltedPerPrimary(Core? core)
     {
-        public string League { get; set; } = "";
-        public DateTime FetchedUtc { get; set; }
-        public double ExPerDivine { get; set; }
-        public double ExPerChaos { get; set; }
-        public Dictionary<string, PricedItem> ByArt { get; set; } = new();
-        public Dictionary<string, PricedItem> ByName { get; set; } = new();
+        if (core?.Primary == "exalted") return 1;
+        return core?.Rates?.TryGetValue("exalted", out var rate) == true && double.IsFinite(rate) && rate > 0 ? rate : 0;
+    }
+    private static double CurrencyValue(Core core, string currency, double rate)
+    {
+        if (core.Primary == currency) return rate;
+        return core.Rates?.TryGetValue(currency, out var units) == true && double.IsFinite(units) && units > 0 ? rate / units : 0;
+    }
+    private static void Upsert(Dictionary<string, PriceResult> map, string key, PriceResult item)
+    {
+        // Representative market row: most listings; cheaper on ties, never the highest outlier.
+        if (!map.TryGetValue(key, out var current) || item.Quantity > current.Quantity
+            || (item.Quantity == current.Quantity && item.Exalted < current.Exalted)) map[key] = item;
+    }
+    private static string? ArtBasename(string? icon)
+    {
+        if (string.IsNullOrWhiteSpace(icon)) return null;
+        return Path.GetFileNameWithoutExtension(icon.Split('?')[0]);
     }
 
     private void TryLoadCache()
     {
         try
         {
-            if (!File.Exists(_cachePath)) { Status = "no cache; will fetch"; return; }
-            var dto = JsonSerializer.Deserialize<CacheDto>(File.ReadAllText(_cachePath), Json);
-            if (dto == null) return;
-            // Honor a configured league: a cache for a different league shouldn't be used.
-            if (_leagueOverride != null && !string.Equals(dto.League, _leagueOverride, StringComparison.OrdinalIgnoreCase)) return;
-            _byArt = new Dictionary<string, PricedItem>(dto.ByArt, StringComparer.OrdinalIgnoreCase);
-            _byName = new Dictionary<string, PricedItem>(dto.ByName, StringComparer.OrdinalIgnoreCase);
-            _league = dto.League;
-            _lastFetchUtc = dto.FetchedUtc;
-            if (dto.ExPerDivine > 0) ExPerDivine = dto.ExPerDivine;
-            if (dto.ExPerChaos > 0) ExPerChaos = dto.ExPerChaos;
-            Status = $"cache: {ItemCount} entries for '{_league}'";
+            if (!File.Exists(_cachePath)) return;
+            var body = File.ReadAllText(_cachePath);
+            var data = JsonSerializer.Deserialize<Snapshot>(body, Json);
+            // Older caches do not retain market variants and trend/volume evidence.
+            using var raw = JsonDocument.Parse(body);
+            if (!raw.RootElement.TryGetProperty("Version", out var version) || version.GetInt32() != 3 || data == null) return;
+            if (_leagueOverride != null && !string.Equals(data.League, _leagueOverride, StringComparison.OrdinalIgnoreCase)) return;
+            if (data.FetchedUtc > DateTime.UtcNow || string.IsNullOrWhiteSpace(data.League)
+                || !double.IsFinite(data.ExPerDivine) || data.ExPerDivine <= 0
+                || data.ByName.Values.Concat(data.ByArt.Values).Any(p => !double.IsFinite(p.Exalted) || p.Exalted <= 0)) return;
+            data.ByName = new(data.ByName, StringComparer.OrdinalIgnoreCase);
+            data.ByArt = new(data.ByArt, StringComparer.OrdinalIgnoreCase);
+            data.VariantsByName = new(data.VariantsByName, StringComparer.OrdinalIgnoreCase);
+            data.RangesByName = new(data.RangesByName, StringComparer.OrdinalIgnoreCase);
+            _snapshot = data;
+            _status = $"cached prices for '{data.League}'";
         }
-        catch (Exception ex) { Status = $"cache load failed: {ex.Message}"; }
+        catch { _status = "price cache unavailable; will fetch"; }
     }
-
-    private void SaveCache()
+    private void SaveCache(Snapshot snapshot)
     {
         try
         {
             var dir = Path.GetDirectoryName(_cachePath);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-            var dto = new CacheDto
-            {
-                League = _league, FetchedUtc = _lastFetchUtc, ExPerDivine = ExPerDivine, ExPerChaos = ExPerChaos,
-                ByArt = new(_byArt), ByName = new(_byName),
-            };
-            File.WriteAllText(_cachePath, JsonSerializer.Serialize(dto, Json));
+            File.WriteAllText(_cachePath + ".tmp", JsonSerializer.Serialize(snapshot, Json));
+            File.Move(_cachePath + ".tmp", _cachePath, overwrite: true);
         }
-        catch { }
+        catch { /* Pricing still works if the cache directory is read-only. */ }
     }
-
-    // ── DTOs ─────────────────────────────────────────────────────────────────────
-
-    // poe2scout /Leagues — used only to discover the current league name.
-    private sealed class ScoutLeague
+    private sealed class LeagueDto { public string Id { get; set; } = ""; }
+    private sealed class Overview
     {
-        public string Value { get; set; } = "";
-        public bool IsCurrent { get; set; }
+        public Core? Core { get; set; }
+        public List<Line>? Lines { get; set; }
+        public List<Item>? Items { get; set; }
     }
-
-    // poe.ninja overview (both exchange + stash item share this shape).
-    private sealed class NinjaOverview
+    private sealed class Core
     {
-        public NinjaCore? Core { get; set; }
-        public List<NinjaLine>? Lines { get; set; }
-        public List<NinjaItem>? Items { get; set; }   // exchange only (id→name/image); empty for uniques
-    }
-    private sealed class NinjaCore
-    {
-        public Dictionary<string, double>? Rates { get; set; }   // "units per Divine": exalted, chaos
         public string? Primary { get; set; }
-        public string? Secondary { get; set; }
+        public Dictionary<string, double>? Rates { get; set; }
+        public List<Item>? Items { get; set; }
     }
-    private sealed class NinjaItem
+    private sealed class Item
     {
-        public string Id { get; set; } = "";       // string id ("exalted", "divine", …) on exchange
+        public string Id { get; set; } = "";
         public string Name { get; set; } = "";
         public string? Image { get; set; }
     }
-    private sealed class NinjaLine
+    private sealed class SparkLine { public double? TotalChange { get; set; } }
+    private sealed class Line
     {
-        // id is a string on the exchange endpoint and a number on the uniques endpoint — read raw and
-        // branch on ValueKind (uniques carry name/icon inline so their id is unused).
         public JsonElement Id { get; set; }
-        public string? Name { get; set; }            // uniques: display name
-        public string? Icon { get; set; }            // uniques: absolute art url
-        public double PrimaryValue { get; set; }     // value in Divine Orbs (× rates.exalted → Exalted)
-        public double? VolumePrimaryValue { get; set; } // exchange: trade volume (confidence)
-        public int? ListingCount { get; set; }       // uniques: listing count (confidence)
+        public string? Name { get; set; }
+        public string? Icon { get; set; }
+        public double PrimaryValue { get; set; }
+        public int? ListingCount { get; set; }
+        public string? Variant { get; set; }
+        public bool Corrupted { get; set; }
+        public double? VolumePrimaryValue { get; set; }
+        public SparkLine? SparkLine { get; set; }
+        public string? BaseType { get; set; }
+        public string? DetailsId { get; set; }
     }
 }

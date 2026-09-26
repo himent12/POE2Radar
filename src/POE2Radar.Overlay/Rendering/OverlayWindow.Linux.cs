@@ -12,6 +12,23 @@ public sealed partial class OverlayWindow
     private int _depth = 32;
     private bool _xClickThrough = true;
     private bool _xGrabbed;
+    private LinuxX11.ShmImage _shm;          // MIT-SHM present image (Image == 0 → plain XPutImage path)
+    private bool _shmLogged;
+
+    private bool TryCreateShmLinux(int width, int height)
+    {
+        if (_dpy == 0 || _xwin == 0) return false;
+        var ok = LinuxX11.TryCreateShmImage(_dpy, _visual, _depth, width, height, out _shm);
+        if (!_shmLogged) { _shmLogged = true; Console.WriteLine(ok ? "Overlay: MIT-SHM present." : "Overlay: MIT-SHM unavailable, using XPutImage."); }
+        return ok;
+    }
+
+    private void DestroyShmLinux()
+    {
+        if (_shm.Image == 0) return;
+        LinuxX11.DestroyShmImage(_dpy, _shm);
+        _shm = default;
+    }
 
     private void InitLinux()
     {
@@ -44,6 +61,10 @@ public sealed partial class OverlayWindow
         LinuxX11.SetAtoms(_dpy, _xwin);
         _gc = LinuxX11.XCreateGC(_dpy, _xwin, 0, 0);
         LinuxX11.SetClickThrough(_dpy, _xwin, true);
+        // Never take keyboard focus: the overlay floats over the game, and if a click on it (the Insert menu)
+        // made it the focused X client, the game would lose focus and our key taps would land on the overlay.
+        var hints = new LinuxX11.XWMHints { Flags = (nint)LinuxX11.InputHint, Input = 0 };
+        LinuxX11.XSetWMHints(_dpy, _xwin, ref hints);
         LinuxX11.XMapRaised(_dpy, _xwin);
         LinuxX11.XFlush(_dpy);
         Console.WriteLine("Overlay: X11 ARGB window (click-through). F9 quits.");
@@ -54,6 +75,12 @@ public sealed partial class OverlayWindow
         if (_dpy == 0 || _xwin == 0) return;
         DestroyXImage();
         if (PixelBuffer == 0) return;
+        if (_shm.Image != 0)
+        {
+            LinuxX11.XMoveResizeWindow(_dpy, _xwin, OriginX, OriginY, (uint)width, (uint)height);
+            LinuxX11.XFlush(_dpy);
+            return;
+        }
         _ximage = LinuxX11.XCreateImage(_dpy, _visual, (uint)_depth, LinuxX11.ZPixmap, 0, PixelBuffer,
             (uint)width, (uint)height, 32, PixelRowBytes);
         LinuxX11.XMoveResizeWindow(_dpy, _xwin, OriginX, OriginY, (uint)width, (uint)height);
@@ -91,6 +118,15 @@ public sealed partial class OverlayWindow
 
     private void PresentLinux()
     {
+        if (_dpy != 0 && _xwin != 0 && _shm.Image != 0)
+        {
+            LinuxX11.PutShmImage(_dpy, _xwin, _gc, _shm, Width, Height);
+            LinuxX11.XRaiseWindow(_dpy, _xwin);
+            // Round-trip: returns once the server has processed the put (copied the shared pixels), so the next
+            // frame can be drawn into the segment without tearing this one.
+            LinuxX11.XSync(_dpy, 0);
+            return;
+        }
         if (_dpy == 0 || _xwin == 0 || _ximage == 0) return;
         LinuxX11.XPutImage(_dpy, _xwin, _gc, _ximage, 0, 0, 0, 0, (uint)Width, (uint)Height);
         LinuxX11.XRaiseWindow(_dpy, _xwin);
@@ -146,6 +182,7 @@ public sealed partial class OverlayWindow
     {
         if (_xGrabbed && _dpy != 0) { LinuxX11.UngrabPointer(_dpy); _xGrabbed = false; }
         DestroyXImage();
+        DestroyShmLinux();
         if (_gc != 0 && _dpy != 0) { LinuxX11.XFreeGC(_dpy, _gc); _gc = 0; }
         if (_xwin != 0 && _dpy != 0) { LinuxX11.XDestroyWindow(_dpy, _xwin); _xwin = 0; }
         if (_dpy != 0) LinuxX11.XFlush(_dpy);

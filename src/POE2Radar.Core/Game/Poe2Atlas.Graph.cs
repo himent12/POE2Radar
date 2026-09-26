@@ -82,7 +82,7 @@ public sealed partial class Poe2Atlas
             _reader.TryReadStruct<float>(el + Poe2.UiElement.RelativePos + 4, out var y);
             _reader.TryReadStruct<float>(el + Poe2.UiElement.SizeW, out var w);
             _reader.TryReadStruct<float>(el + Poe2.UiElement.SizeH, out var h);
-            _reader.TryReadStruct<float>(el + 0x130, out var scale);
+            _reader.TryReadStruct<float>(el + Poe2.UiElement.LocalScaleMul, out var scale);
             _reader.TryReadStruct<int>(el + Poe2.AtlasNode.GridPos, out var gridX);     // StdTuple2D<int> atlas grid coord
             _reader.TryReadStruct<int>(el + Poe2.AtlasNode.GridPos + 4, out var gridY); // → the routing graph key
             _reader.TryReadStruct<uint>(el + Poe2.UiElement.Flags, out var uiFlags);

@@ -103,7 +103,7 @@ $('#hidePattern').onkeydown=e=>{ if(e.key==='Enter') $('#hideAdd').click(); };
 
 /* ── Landmarks tab: view/edit the curated map-label table (baked + user overlay) + import/export ── */
 let lmEntries=[], lmAreaOnly=true, lmQ='';
-function flashL(){ const m=$('#savedMsgL'); if(!m) return; m.classList.add('show'); clearTimeout(m._t); m._t=setTimeout(()=>m.classList.remove('show'),1100); }
+function flashL(){ flashSaved(); }
 async function loadLandmarks(){
   try{ const r=await getJSON('/api/landmarks'); lmEntries=r.entries||[]; }catch(e){ lmEntries=[]; }
   const a=$('#lmArea'); if(a && !a.value) a.value=(state&&state.areaCode)||'';
@@ -180,16 +180,16 @@ async function wireAtlasOpts(){
 function saveAtlasGroups(){ saveSetting('atlasGroups', atlasGroupsData); }
 function renderAtlasGroups(){
   const box=document.querySelector('#atlasGroups'); if(!box) return;
-  if(atlasGroupsData.length===0){ box.innerHTML='<span class="hint-row" style="opacity:.6">No groups. Maps in a group draw in its colour when tracked.</span>'; return; }
+  if(atlasGroupsData.length===0){ box.innerHTML='<div class="empty">No groups. Maps in a group draw in its colour when tracked.</div>'; return; }
   box.innerHTML = atlasGroupsData.map((g,i)=>
-    '<div style="display:grid;grid-template-columns:130px 44px 1fr 60px;gap:8px;align-items:start;padding:5px 0;border-bottom:1px solid var(--line)">'
-    +'<input data-gi="'+i+'" data-gf="name" value="'+esc(g.name)+'" placeholder="group name" style="width:100%">'
-    +'<input data-gi="'+i+'" data-gf="color" type="color" value="'+esc(g.color)+'" style="width:40px;height:28px;padding:0;border:none;background:none">'
-    +'<textarea data-gi="'+i+'" data-gf="maps" rows="2" placeholder="one map name per line" style="width:100%;resize:vertical">'+esc((g.maps||[]).join('\n'))+'</textarea>'
-    +'<button class="chip" data-gdel="'+i+'">Delete</button></div>'
+    '<div style="display:grid;grid-template-columns:170px 40px minmax(0,1fr) auto;gap:10px;align-items:start;padding:10px 0;border-bottom:1px solid var(--line-soft)">'
+    +'<input data-agi="'+i+'" data-gf="name" value="'+esc(g.name)+'" placeholder="group name">'
+    +'<input data-agi="'+i+'" data-gf="color" type="color" value="'+esc(g.color)+'">'
+    +'<textarea data-agi="'+i+'" data-gf="maps" rows="2" placeholder="one map name per line">'+esc((g.maps||[]).join('\n'))+'</textarea>'
+    +'<button class="delbtn" data-gdel="'+i+'">Delete</button></div>'
   ).join('');
   box.querySelectorAll('[data-gf]').forEach(el=>{
-    const i=+el.dataset.gi, f=el.dataset.gf;
+    const i=+el.dataset.agi, f=el.dataset.gf;
     el.onchange=()=>{ if(f==='maps') atlasGroupsData[i].maps=el.value.split('\n').map(x=>x.trim()).filter(Boolean); else atlasGroupsData[i][f]=el.value; saveAtlasGroups(); };
   });
   box.querySelectorAll('[data-gdel]').forEach(b=>b.onclick=()=>{ atlasGroupsData.splice(+b.dataset.gdel,1); renderAtlasGroups(); saveAtlasGroups(); });
@@ -238,7 +238,7 @@ let atlasHlSort={key:'count',dir:-1};
 function renderAtlasHighlight(d){
   const box=$('#atlasHlTable'); if(!box) return;
   let rows=atlasFilterRows(d);
-  if(rows.length===0){ box.innerHTML='<span class="hint-row" style="padding:8px;display:block">No filters yet (open the Atlas + Refresh).</span>'; updateHlCount(); return; }
+  if(rows.length===0){ box.innerHTML='<div class="empty">No filters yet &mdash; open the Atlas in game, then Refresh.</div>'; updateHlCount(); return; }
   if(atlasGroup!=='all') rows=rows.filter(r=>r.group===atlasGroup);
   const flt=($('#atlasHlFilter')?.value||'').trim().toLowerCase();
   if(flt) rows=rows.filter(r=>r.title.toLowerCase().includes(flt)||r.cat.toLowerCase().includes(flt)||r.group.toLowerCase().includes(flt));
@@ -256,7 +256,7 @@ function renderAtlasHighlight(d){
   });
   const sa=key=> atlasHlSort.key===key ? (atlasHlSort.dir<0?' ▼':' ▲') : '';
   const cell='display:grid;grid-template-columns:30px 30px 34px 1fr 50px 90px;gap:8px;align-items:center;padding:5px 9px';
-  let html='<div style="'+cell+';position:sticky;top:0;background:var(--panel,#1a1a1a);border-bottom:1px solid var(--line);font-weight:600;font-size:11px;text-transform:uppercase;opacity:.75">'
+  let html='<div style="'+cell+';position:sticky;top:0;z-index:1;background:var(--panel2);border-bottom:1px solid var(--line);font-weight:600;font-size:11.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-faint)">'
     +'<span data-sort="trk" title="Highlight: ring the map in-game (click to sort)" style="cursor:pointer">&#9745;'+sa('trk')+'</span>'
     +'<span data-sort="nav" title="Nav-to: draw a route to it (click to sort)" style="cursor:pointer">&#8674;'+sa('nav')+'</span>'
     +'<span data-sort="arw" title="Arrow: edge arrow toward it when off-screen (click to sort)" style="cursor:pointer">&#10148;'+sa('arw')+'</span>'
@@ -265,10 +265,10 @@ function renderAtlasHighlight(d){
     +'<span data-sort="cat" style="cursor:pointer">Category'+sa('cat')+'</span></div>';
   html+=rows.map(r=>{
     const key=r.title.toLowerCase(); const trk=atlasHl.has(key), nav=atlasNav.has(key), arw=atlasArrow.has(key);
-    return '<div class="hlrow" data-tag="'+esc(r.title)+'" title="click row = toggle Highlight" style="'+cell+';cursor:pointer;border-bottom:1px solid var(--line)'+((trk||nav||arw)?';background:rgba(60,160,255,.14)':'')+'">'
+    return '<div class="hlrow" data-tag="'+esc(r.title)+'" title="click row = toggle Highlight" style="'+cell+';cursor:pointer;border-bottom:1px solid var(--line-soft)'+((trk||nav||arw)?';background:rgba(242,194,90,.08)':'')+'">'
       +'<span style="font-size:15px">'+(trk?'☑':'☐')+'</span>'
-      +'<span class="hlnav" data-tag="'+esc(r.title)+'" title="toggle nav-to (route)" style="font-size:15px;cursor:pointer;color:'+(nav?'#3ddc97':'#4a525c')+'">&#8674;</span>'
-      +'<span class="hlarw" data-tag="'+esc(r.title)+'" title="toggle off-screen arrow" style="font-size:15px;cursor:pointer;color:'+(arw?'#e0b341':'#4a525c')+'">➤</span>'
+      +'<span class="hlnav" data-tag="'+esc(r.title)+'" title="toggle nav-to (route)" style="font-size:15px;cursor:pointer;color:'+(nav?'var(--good)':'#4a4d54')+'">&#8674;</span>'
+      +'<span class="hlarw" data-tag="'+esc(r.title)+'" title="toggle off-screen arrow" style="font-size:15px;cursor:pointer;color:'+(arw?'var(--accent)':'#4a4d54')+'">➤</span>'
       +'<span title="'+esc(r.desc||r.title)+'">'+esc(r.title)+'</span>'
       +'<span class="amono" style="text-align:right">'+r.count+'</span>'
       +'<span>'+catBadge(r.cat)+'</span></div>';
@@ -296,11 +296,11 @@ function renderAtlasHighlight(d){
 function updateHlCount(){
   const box=$('#atlasActive'); if(!box) return;
   const keys=new Set([...(atlasHl||[]),...(atlasNav||[]),...(atlasArrow||[])]);
-  if(keys.size===0){ box.innerHTML='<span class="hint-row" style="opacity:.6">No active rules &mdash; click a row or a Quick set.</span>'; return; }
+  if(keys.size===0){ box.innerHTML='<span class="hint">No active rules &mdash; click a row or a quick set.</span>'; return; }
   // Recover original-case titles from the data.
   const titleOf={}; (atlasData?atlasFilterRows(atlasData):[]).forEach(r=>titleOf[r.title.toLowerCase()]=r.title);
-  const chip=k=>{ const t=titleOf[k]||k; const marks=(atlasHl.has(k)?'<span title="Highlight">&#9745;</span>':'')+(atlasNav.has(k)?'<span style="color:#3ddc97" title="Nav">&#8674;</span>':'')+(atlasArrow.has(k)?'<span style="color:#e0b341" title="Arrow">&#10148;</span>':'');
-    return '<span class="achip" data-k="'+esc(k)+'" style="display:inline-flex;align-items:center;gap:5px;padding:3px 7px;margin:0 5px 5px 0;border:1px solid var(--line);border-radius:12px;font-size:12px;background:rgba(60,160,255,.10)">'+marks+'<b>'+esc(t)+'</b><span class="achipx" data-k="'+esc(k)+'" style="cursor:pointer;opacity:.6;font-weight:700">&times;</span></span>'; };
+  const chip=k=>{ const t=titleOf[k]||k; const marks=(atlasHl.has(k)?'<span title="Highlight">&#9745;</span>':'')+(atlasNav.has(k)?'<span style="color:var(--good)" title="Nav">&#8674;</span>':'')+(atlasArrow.has(k)?'<span style="color:var(--accent)" title="Arrow">&#10148;</span>':'');
+    return '<span class="achip" data-k="'+esc(k)+'" style="display:inline-flex;align-items:center;gap:6px;padding:3px 10px;margin:0 6px 6px 0;border:1px solid var(--line);border-radius:999px;font-size:12.5px">'+marks+'<b>'+esc(t)+'</b><span class="achipx" data-k="'+esc(k)+'" style="cursor:pointer;opacity:.6;font-weight:700">&times;</span></span>'; };
   box.innerHTML=[...keys].sort().map(chip).join('');
   $$('#atlasActive .achipx').forEach(x=>x.onclick=()=>{ const k=x.dataset.k; atlasHl.delete(k); atlasNav.delete(k); atlasArrow.delete(k); renderAtlasHighlight(atlasData); postAtlasHighlight(); });
 }
@@ -373,85 +373,80 @@ $$('#atlasViewCatalog,#atlasViewRegion,#atlasViewNodes').forEach(b=>b?.addEventL
   renderAtlas();
 }));
 
-/* ── left rail ── */
+/* ── live state → rail footer + overview tiles/cards ── */
+const setT=(id,v)=>{ const el=document.getElementById(id); if(el && el.textContent!==String(v)) el.textContent=v; };
+function setPill(id,cls,txt){ const el=document.getElementById(id); if(!el) return; el.className='pill'+(cls?' '+cls:''); el.textContent=txt; }
 function renderState(){
   const s=state; if(!s) return;
-  const hp=Math.max(0,Math.min(100,s.hpPct||0)), mp=Math.max(0,Math.min(100,s.manaPct||0)), es=Math.max(0,Math.min(100,s.esPct||0));
-  $('#hpBar').style.width=hp+'%'; $('#mpBar').style.width=mp+'%'; $('#esBar').style.width=es+'%';
-  $('#hpNum').textContent=hp.toFixed(0)+'%'; $('#mpNum').textContent=mp.toFixed(0)+'%'; $('#esNum').textContent=es.toFixed(0)+'%';
+  const clamp=v=>Math.max(0,Math.min(100,v||0));
+  const hp=clamp(s.hpPct), mp=clamp(s.manaPct), es=clamp(s.esPct), ig=!!s.inGame;
+  $('#hpBar').style.width=(ig?hp:0)+'%'; $('#mpBar').style.width=(ig?mp:0)+'%'; $('#esBar').style.width=(ig?es:0)+'%';
+  setT('hpNum', ig?hp.toFixed(0)+'%':'\u2014'); setT('mpNum', ig?mp.toFixed(0)+'%':'\u2014'); setT('esNum', ig?es.toFixed(0)+'%':'\u2014');
   const areaName=(s.areaName&&s.areaName!==s.areaCode)?s.areaName:'';
-  $('#kAreaName').textContent=areaName||s.areaCode||'—';
-  $('#kArea').textContent=s.areaCode||'—';
+  setT('kAreaName', areaName||s.areaCode||'\u2014');
+  setT('kArea', s.areaCode||'\u2014');
   const act=s.areaAct||0;
-  $('#kAlvl').textContent=(act?'Act '+act+' · ':'')+(s.areaLevel?('lvl '+s.areaLevel):'—');
-  $('#kMap').textContent=s.mapVisible?'yes':'no';
-  $('#kFlask').textContent=(s.autoFlask?'on':'off')+(s.flask?' · '+s.flask:'');
-  const fs=$('#flaskState'); if(fs) fs.textContent=(s.autoFlask?'ON':'OFF')+(s.flask?' · '+s.flask:'');
-  $('#kBot').textContent=(s.bot?'on':'off')+(s.botNote?' · '+s.botNote:'');
-  const bs=$('#botState'); if(bs) bs.textContent=(s.bot?'ON':'OFF')+(s.botNote?' · '+s.botNote:'');
-  $('#kClear').textContent=(s.mapClear?'on':'off')+(s.clear?' · '+s.clear:'');
-  const cls=$('#mapClearState'); if(cls) cls.textContent=(s.mapClear?'ON':'OFF')+(s.clear?' · '+s.clear:'');
-  const fst=$('#farmState'); if(fst) fst.textContent=(s.farmLoop?'ON':'OFF')+(s.farm?' · '+s.farm:'');
-  $('#kCombat').textContent=(s.combatAssist?'on':'off')+(s.combat?' · '+s.combat:'');
-  const cs=$('#combatState'); if(cs) cs.textContent=(s.combatAssist?'ON':'OFF')+(s.combat?' · '+s.combat:'');
-  $('#kQuest').textContent=(s.questFollow?'on':'off')+(s.quest?' · '+s.quest:'');
-  const qs=$('#questFollowState'); if(qs) qs.textContent=(s.questFollow?'ON':'OFF')+(s.quest?' · '+s.quest:'');
-  $('#kMove').textContent=(s.pathMove?'on':'off')+(s.move?' · '+s.move:'');
-  const ms=$('#pathMoveState'); if(ms) ms.textContent=(s.pathMove?'ON':'OFF')+(s.move?' · '+s.move:'');
-  $('#cEnt').textContent=s.entityCount||0;
-  $('#cPoi').textContent=s.poiCount||0;
-  $('#cMon').textContent=(s.counts&&s.counts.Monster)||0;
-  $('#cLm').textContent=s.landmarkCount||0;
-  $('#areaChip').innerHTML = (areaName||s.areaCode||'—') + ' <b>·</b> ' + (s.inGame?'in game':'town/menu');
+  setT('kAlvl', (act?'Act '+act+' \u00b7 ':'')+(s.areaLevel?('Level '+s.areaLevel):'\u2014'));
+  setT('kMap', s.mapVisible?'Yes':'No');
+  setT('kFps', s.fps? Math.round(s.fps)+' fps \u00b7 '+(s.renderMs||0).toFixed(1)+' ms' : '\u2014');
+  setT('kWorld', s.worldMs!=null? (s.worldMs||0).toFixed(1)+' ms' : '\u2014');
+  setPill('ovGame', ig?'on':'', ig?'In game':'Not in game');
+  // rail footer
+  setT('areaChip', ig?(areaName||s.areaCode||'In game'):'Not in game');
+  setT('railSub', ig&&s.areaLevel ? ('Lv '+s.areaLevel+(s.fps?' \u00b7 '+Math.round(s.fps)+' fps':'')) : '\u00a0');
+  // modules
+  setPill('mFlaskPill', s.autoFlask?'on':'', s.autoFlask?'Armed':'Off');
+  setT('kFlask', s.flask || (s.autoFlask?'Watching life / mana':'Disarmed'));
+  setPill('flaskPill', s.autoFlask?'on':'', s.autoFlask?'Armed':'Off');
+  const fs=$('#flaskState'); if(fs) fs.textContent=(s.autoFlask?'armed':'off')+(s.flask?' \u00b7 '+s.flask:'');
+  setPill('mBuffPill', s.buffKeeper?'on':'', s.buffKeeper?'Armed':'Off');
+  setT('mBuffNote', s.buffNote || (s.buffKeeper?'Armed':'Disarmed'));
+  setPill('mChatPill', s.chat?'blue':'nodot', s.chat?'Active':'Idle');
+  setT('mChatNote', s.chat || 'No command sent yet');
+  const open=s.tradeOpen||0, nb=$('#navTradeBadge');
+  if(nb){ nb.hidden=!open; nb.textContent=open; }
+  setT('mTradeOpen', open+' open request'+(open===1?'':'s'));
+  setT('cEnt', s.entityCount||0);
+  setT('cPoi', s.poiCount||0);
+  setT('cMon', (s.counts&&s.counts.Monster)||0);
+  setT('cLm', s.landmarkCount||0);
 
-  // Runeshape monoliths (from /state): each monolith's value-tier header (best ex · anchor · N holes)
-  // with its priced reward rows. Sorted server-side by value; hidden when the area has none.
+  // Runeshape monoliths (from /state): value-tier header (best ex · anchor · N holes) + priced reward rows.
   const mc=$('#monoCard'), ml=$('#monoList');
   const monos=(s.monoliths||[]).slice().sort((a,b)=>(b.bestEx||0)-(a.bestEx||0));
   if(monos.length){
     mc.hidden=false;
     ml.innerHTML = monos.map(m=>{
-      const tier = (m.bestEx||0)>=30 ? '#66e066' : (m.bestEx||0)>=18 ? '#e6c84d' : '#cfcfcf';
-      const hdr = (m.bestEx>0?('<b style="color:'+tier+'">'+Math.round(m.bestEx)+' ex</b> · '):'')
-                + esc(m.anchor||'?') + ' · ' + (m.holes||0) + 'h' + (m.collected?' · <span style="opacity:.6">collected</span>':'');
+      const tier = (m.bestEx||0)>=30 ? 'on' : (m.bestEx||0)>=18 ? 'warn' : '';
+      const hdr = (m.bestEx>0?('<span class="pill nodot '+tier+'">'+Math.round(m.bestEx)+' ex</span>'):'')
+                + '<b>'+esc(m.anchor||'?')+'</b><span class="hint">'+(m.holes||0)+' holes'+(m.collected?' \u00b7 collected':'')+'</span>';
       const rows=(m.rewards||[]).filter(r=>r.ex>0).slice(0,6)
-        .map(r=>'<div style="display:flex;justify-content:space-between;gap:8px"><span>'+esc(r.name)+(r.count>1?(' ×'+r.count):'')+'</span><span style="opacity:.85">'+Math.round(r.ex)+' ex</span></div>').join('');
-      return '<div style="margin:0 0 9px"><div style="margin-bottom:2px">'+hdr+'</div>'
-           + '<div style="font-size:12px;opacity:.9;padding-left:8px">'+(rows||'<span style="opacity:.6">no priced rewards</span>')+'</div></div>';
+        .map(r=>'<div class="mono-rw"><span>'+esc(r.name)+(r.count>1?(' \u00d7'+r.count):'')+'</span><span class="mono">'+Math.round(r.ex)+' ex</span></div>').join('');
+      return '<div class="mono-item"><div class="mono-hd">'+hdr+'</div>'+(rows||'<div class="mono-rw"><span>no priced rewards</span></div>')+'</div>';
     }).join('');
   } else { mc.hidden=true; ml.innerHTML=''; }
-
-  // Zone leveling notes (from /api/zone): title + note text, hidden when there's nothing to show.
-  const zn=$('#zoneNotes');
+}
+/* Zone leveling notes (from /api/zone, polled on the overview only). */
+function renderZone(){
+  const zc=$('#zoneCard'), zn=$('#zoneNotes'); if(!zc) return;
   if(zone && (zone.notes||'').trim()){
-    zn.hidden=false;
+    zc.hidden=false;
     zn.innerHTML='<div class="zt">'+esc(zone.title||zone.name||'')+'</div>'+esc(zone.notes);
-  } else { zn.hidden=true; }
+  } else zc.hidden=true;
 }
 
 // Update banner: show a download link if a newer version exists on GitHub (best-effort).
 async function checkVersion(){
   try{
     const v=await getJSON('/api/version');
+    if(v && v.current) setT('verTxt','v'+String(v.current).replace(/^v/,''));
     if(v && v.updateAvailable){
       const b=$('#updateBanner'); if(!b) return;
       const m=$('#updateMsg'); if(m) m.textContent=' — '+(v.latest||'')+' (you have v'+(v.current||'?')+')';
-      b.href=v.url||'#'; b.hidden=false; b.style.display='flex';
+      b.href=v.url||'#'; b.hidden=false;
     }
   }catch(e){}
 }
 
-wireSettings(); wireHpBars(); wireTerrain(); wireGround(); wireHover(); wireMono(); wireExchange();
-document.querySelector('#combatSkillAdd')?.addEventListener('click',()=>{
-  if(combatSkillsData.length>=13) return;
-  combatSkillsData.push({key:nextQwer(), cooldownMs:400, range:0});
-  renderCombatSkills(); saveCombatSkills();
-});
-loadIcons().then(()=>{ loadSettings(); loadFilters(); }); // Rules is the default tab
-tick(); setInterval(tick, 1000);
-checkVersion();
-</script>
-</body>
-</html>
 """;
 }

@@ -3,51 +3,6 @@ using System.Text.Json.Serialization;
 namespace POE2Radar.Overlay.Config;
 
 /// <summary>
-/// One combat-assist rotation slot: a Win32 virtual-key, a per-skill cooldown, and an optional
-/// tighter grid range (0 = use <see cref="RadarSettings.CombatRange"/>).
-/// </summary>
-public sealed class CombatSkill
-{
-    public int Key { get; set; } = 0x51; // Q
-    public int Modifiers { get; set; } // PoE modifier mask: Shift=1, Ctrl=2, Alt=4
-    public int SourceSlot { get; set; } // 1..13 confirmed game skill-bar slot; 0 = manual key
-    public bool SourceLiveBinding { get; set; } // generated from a validated live skill bar
-    public int CooldownMs { get; set; } = 400;
-    public float Range { get; set; }
-    /// <summary>Only fire when at least this many hostiles are inside the skill's range (AoE gating).</summary>
-    public int MinTargets { get; set; } = 1;
-    /// <summary>Only fire when the target is rare or unique.</summary>
-    public bool RareOnly { get; set; }
-    /// <summary>&gt; 0: only fire while the player's life is under this % (defensive / guard skills).</summary>
-    public float HpBelowPct { get; set; }
-    public bool Enabled { get; set; } = true;
-    // ── Combo controls ──
-    /// <summary>Tap the key this many times per cast (1..10).</summary>
-    public int Repeat { get; set; } = 1;
-    /// <summary>Gap between repeated taps.</summary>
-    public int RepeatGapMs { get; set; } = 150;
-    /// <summary>&gt; 0: hold the key for this long instead of tapping (channelled skills).</summary>
-    public int HoldMs { get; set; }
-    /// <summary>After the casts, dodge-roll away from the target.</summary>
-    public bool DodgeAfter { get; set; }
-    /// <summary>Block the whole rotation for this long after the cast (animation / combo timing).</summary>
-    public int NextDelayMs { get; set; }
-
-    public string Name { get; set; } = "";
-    public float ManaBelowPct { get; set; }
-    public float MinManaPct { get; set; }
-    public float EsBelowPct { get; set; }
-    public float TargetHpBelowPct { get; set; }
-    public bool RequireTarget { get; set; } = true;
-    public bool Priority { get; set; }
-    public string AimMode { get; set; } = "Target";
-    /// <summary>Any enabled low-life/mana/ES trigger may fire; other conditions still all apply.</summary>
-    public bool AnyLowResource { get; set; }
-    public string SourceMetadata { get; set; } = "";
-    public string SourceCharacter { get; set; } = "";
-}
-
-/// <summary>
 /// A named Atlas colour group (#7): a set of map display names that all draw in one ring/label colour,
 /// so a whole category (Citadels, Halls, Uniques, Expedition) recolours together. Adopted from the
 /// GameHelper2 Atlas plugin's Map Styles. <see cref="Color"/> is <c>#RRGGBB</c>.
@@ -218,6 +173,31 @@ public sealed class HoverPriceSettings
 {
     public bool Enabled { get; set; } = true;
     public double HighlightMinEx { get; set; } = 10.0;   // emphasize the chip when the (stack) value ≥ this many Exalted
+    /// <summary>Hover an item (inventory, stash, vendor, ground) and press this to open the price-check panel:
+    /// the poe.ninja estimate next to the cheapest live trade listings, with a suggested list price.</summary>
+    public string PriceCheckHotkey { get; set; } = "Ctrl+D";
+}
+
+/// <summary>Waystone mod checker: hovering a waystone lists any mod line matching one of <see cref="Dangerous"/>
+/// (case-insensitive substring, or <c>re:</c> + regex). Defaults cover the commonly build-breaking PoE2 mods;
+/// trim or extend them for your build.</summary>
+public sealed class MapCheckSettings
+{
+    public bool Enabled { get; set; } = true;
+    public List<string> Dangerous { get; set; } = new()
+    {
+        "cannot Regenerate",
+        "Recovery Rate",
+        "Flask Charges",
+        "Players are Cursed",
+        "maximum Player Resistances",
+        "Damage as Extra",
+        "Critical Hit Chance",
+        "additional Projectiles",
+        "Break Armour",
+        "Penetrate",
+        "Cooldown Recovery",
+    };
 }
 
 /// <summary>

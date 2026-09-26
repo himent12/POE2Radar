@@ -21,11 +21,6 @@ public sealed partial class ApiServer
                 WriteHtml(ctx, DashboardHtml.Page);
                 break;
 
-            case "/api/build":
-                try { HandleBuild(ctx); }
-                catch (JsonException) { Write(ctx, 400, JsonSerializer.Serialize(new { error = "Invalid JSON." }, Json)); }
-                break;
-
             case "/health":
                 Write(ctx, 200, JsonSerializer.Serialize(new { ok = true, inGame = s.InGame }, Json));
                 break;
@@ -43,12 +38,7 @@ public sealed partial class ApiServer
                     areaAct = ZoneGuide.Shared.Area(s.AreaCode)?.Act ?? 0,
                     mapVisible = s.MapVisible, zoom = s.Zoom,
                     hpPct = s.HpPct, manaPct = s.ManaPct, esPct = s.EsPct, autoFlask = s.AutoFlask, flask = s.FlaskNote,
-                    combatAssist = s.CombatAssist, combat = s.CombatNote,
-                    questFollow = s.QuestFollow, quest = s.QuestFollowNote,
-                    pathMove = s.PathMove, move = s.PathMoveNote,
-                    bot = s.Bot, botNote = s.BotNote,
-                    mapClear = s.MapClear, clear = s.MapClearNote,
-                    farmLoop = s.FarmLoop, farm = s.FarmNote,
+                    buffKeeper = s.BuffKeeper, buffNote = s.BuffNote, tradeOpen = s.TradeOpen, chat = s.ChatNote,
                     player = new { x = s.Player.X, y = s.Player.Y },
                     entityCount = s.Entities.Count,
                     poiCount = s.Entities.Count(e => e.Poi),
@@ -156,6 +146,30 @@ public sealed partial class ApiServer
                 }
                 break;
             }
+
+            case "/api/buffs":
+                Write(ctx, 200, JsonSerializer.Serialize(BuffsProvider?.Invoke() ?? new { }, Json));
+                break;
+
+            case "/api/trade":
+                if (ctx.Request.HttpMethod == "GET")
+                    Write(ctx, 200, JsonSerializer.Serialize(TradeProvider?.Invoke() ?? new { }, Json));
+                else if (ctx.Request.HttpMethod == "POST")
+                {
+                    if (!IsLoopbackHost(ctx.Request))
+                    {
+                        Write(ctx, 403, JsonSerializer.Serialize(new { error = "forbidden host" }, Json));
+                        break;
+                    }
+                    try
+                    {
+                        using var body = JsonDocument.Parse(ReadBody(ctx) is { Length: > 0 } raw ? raw : "{}");
+                        Write(ctx, 200, JsonSerializer.Serialize(TradeCommand?.Invoke(body.RootElement) ?? new { ok = false }, Json));
+                    }
+                    catch (JsonException) { Write(ctx, 400, JsonSerializer.Serialize(new { error = "Invalid JSON." }, Json)); }
+                }
+                else Write(ctx, 405, JsonSerializer.Serialize(new { error = "method not allowed" }, Json));
+                break;
 
             case "/api/nav":
             {

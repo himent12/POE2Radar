@@ -13,6 +13,13 @@ public sealed partial class OverlayRenderer
 {
     private TerrainBitmap? _terrain;
 
+    // The terrain rasterized through the current zoom, blitted with a pixel offset as the player moves.
+    private readonly TerrainLayerCache _terrainLayer = new();
+
+    internal int TerrainLayerRebuilds => _terrainLayer.Rebuilds;
+
+    internal int TerrainLayerHits => _terrainLayer.Hits;
+
     // Per-icon-name geometry, built lazily from the SVG IconLibrary and cached for the renderer's
     // lifetime. A name that can't be resolved/parsed is mapped to the Circle geometry so something
     // always draws; the cache may therefore point several keys at one instance (deduped on Dispose).
@@ -49,14 +56,16 @@ public sealed partial class OverlayRenderer
         // always (you → next waypoint) and tracks you smoothly between world-rate path updates.
         NumVec2? anchor = ctx.PlayerWorld is { } pw ? Proj(pw.X, pw.Y) : null;
 
-        foreach (var path in ctx.SelectedPaths)
+        for (var i = 0; i < ctx.SelectedPaths.Count; i++)
         {
+            var path = ctx.SelectedPaths[i];
             if (path.Points.Count == 0) continue;
             _bPath!.Color = PathColor(path.ColorSlot);
 
             NumVec2? prev = anchor;
-            foreach (var (gx, gy) in path.Points)
+            for (var j = 0; j < path.Points.Count; j++)
             {
+                var (gx, gy) = path.Points[j];
                 float wx = gx * GridConstants.GridToWorld, wy = gy * GridConstants.GridToWorld;
                 if (Proj(wx, wy) is not { } p) { prev = null; continue; } // waypoint behind camera — break the line
                 if (prev is { } pr) rt.DrawLine(pr, p, _bPath, 3f);
@@ -175,15 +184,22 @@ public sealed partial class OverlayRenderer
             _terrain.EnsureBuiltRaw(t.Walkable, t.Width, t.Height, ctx.AreaHash, inTransition: false, terrainStyle);
             if (_terrain.Bitmap is { } bmp)
             {
+                // Linear part straight from the projection's per-cell axes (NOT (p10-p00)/W, whose float
+                // rounding wobbles with the player position) — so it is bit-stable while only the player moves
+                // and the terrain layer cache can reuse its rasterization with a pixel-offset blit.
                 var p00 = Project(new NumVec2(0, 0), player, center, scale);
-                var p10 = Project(new NumVec2(t.Width, 0), player, center, scale);
-                var p01 = Project(new NumVec2(0, t.Height), player, center, scale);
-                var ex = (p10 - p00) / t.Width;
-                var ey = (p01 - p00) / t.Height;
-                var prev = rt.Transform;
-                rt.Transform = new Matrix3x2(ex.X, ex.Y, ey.X, ey.Y, p00.X, p00.Y);
-                rt.DrawBitmap(bmp, 1f, BitmapInterpolationMode.Linear, new Rect(0, 0, t.Width, t.Height));
-                rt.Transform = prev;
+                var ax = MapProjection.GridDeltaToMapDelta(new GameVec2 { X = 1f, Y = 0f }, scale);
+                var ay = MapProjection.GridDeltaToMapDelta(new GameVec2 { X = 0f, Y = 1f }, scale);
+                var ex = new NumVec2(ax.X, ax.Y);
+                var ey = new NumVec2(ay.X, ay.Y);
+                var m = new Matrix3x2(ex.X, ex.Y, ey.X, ey.Y, p00.X, p00.Y);
+                if (!_terrainLayer.TryDraw(rt, bmp, m, ctx.WindowWidth, ctx.WindowHeight))
+                {
+                    var prev = rt.Transform;
+                    rt.Transform = m;
+                    rt.DrawBitmap(bmp, 1f, BitmapInterpolationMode.Linear, new Rect(0, 0, t.Width, t.Height));
+                    rt.Transform = prev;
+                }
             }
         }
 
@@ -191,8 +207,9 @@ public sealed partial class OverlayRenderer
         // the first enabled rule that matches the entity (top-down, explicit precedence); null or a
         // Hide rule → not drawn; otherwise draw the rule's shape/color/size + optional label. (Junk is
         // still a pre-filter in Phase 1; the API serves every entity regardless for troubleshooting.)
-        foreach (var e in ctx.Entities)
+        for (var i = 0; i < ctx.Entities.Count; i++)
         {
+            var e = ctx.Entities[i];
             if (ctx.HideJunk && JunkFilter.IsJunk(e.Metadata)) continue;
 
             var rule = ctx.Resolve?.Invoke(e);
@@ -214,8 +231,9 @@ public sealed partial class OverlayRenderer
         if (lmStyle.Enabled || ctx.ResolveTile != null)
         {
             var defColor = ParseColor(lmStyle.Color, lmStyle.Opacity);
-            foreach (var lm in ctx.Landmarks)
+            for (var i = 0; i < ctx.Landmarks.Count; i++)
             {
+                var lm = ctx.Landmarks[i];
                 var tr = ctx.ResolveTile?.Invoke(lm.Path);
                 if (tr is { Hide: true }) continue;                 // a tile rule hides this landmark
                 if (tr is null && !lmStyle.Enabled) continue;       // no rule + default layer off → skip
@@ -252,15 +270,17 @@ public sealed partial class OverlayRenderer
     /// </summary>
     private void DrawPaths(DrawTarget rt, RenderContext ctx, NumVec2 player, NumVec2 center, float scale)
     {
-        foreach (var path in ctx.SelectedPaths)
+        for (var i = 0; i < ctx.SelectedPaths.Count; i++)
         {
+            var path = ctx.SelectedPaths[i];
             if (path.Points.Count < 1) continue;
             _bPath!.Color = PathColor(path.ColorSlot);
             // Anchor the line head at the live player marker (center) so the route stays attached to the
             // player every frame, even between world-rate cursor updates / replans.
             NumVec2? prev = center;
-            foreach (var (gx, gy) in path.Points)
+            for (var j = 0; j < path.Points.Count; j++)
             {
+                var (gx, gy) = path.Points[j];
                 var p = Project(new NumVec2(gx, gy), player, center, scale);
                 if (prev is { } pr) rt.DrawLine(pr, p, _bPath, 2.4f);
                 prev = p;

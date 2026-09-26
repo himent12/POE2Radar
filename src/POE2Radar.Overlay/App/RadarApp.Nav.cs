@@ -143,13 +143,9 @@ public sealed partial class RadarApp
     private IReadOnlyList<string> CurrentTilePaths()
         => _areaInstanceForApi != 0 ? _liveApi.TilePaths(_areaInstanceForApi) : Array.Empty<string>();
 
-    /// <summary>F6 (render thread): while quest follow is on, cycle a single pinned quest
-    /// target (last press is the one the bot follows). Otherwise add the nearest unselected
-    /// navigation target.</summary>
+    /// <summary>F6 (render thread): add the nearest unselected navigation target.</summary>
     private void AddNearestPathTarget()
     {
-        if (_questFollow) { CycleQuestTarget(); return; }
-
         var targets = _navTargets;   // one volatile read — work off this fully-built list
         if (targets.Count == 0) return;
         var player = _state.Player;
@@ -168,18 +164,17 @@ public sealed partial class RadarApp
         if (bestId is not null) ToggleSelectionCore(bestId); // shares the cap check + locked mutate + log
     }
 
-    /// <summary>F7: clear the entire path selection and any quest pin. Only edits _selectedIds
+    /// <summary>F7: clear the entire path selection. Only edits _selectedIds
     /// (under the lock); the per-tick reconciliation removes the now-orphaned trackers.</summary>
     private void ClearPathTargets()
     {
         bool wasEmpty;
         lock (_navLock)
         {
-            wasEmpty = _selectedIds.Count == 0 && _questPinId is null;
+            wasEmpty = _selectedIds.Count == 0;
             _selectedIds.Clear();
             _selectionCapWarned = false;
         }
-        _questPinId = null;
         if (!wasEmpty) Console.WriteLine("\nPath targets: cleared");
     }
 
@@ -203,29 +198,7 @@ public sealed partial class RadarApp
         string labels;
         lock (_navLock)
         {
-            if (_questFollow)
-            {
-                // Legend / dashboard click while the bot is on: pin THIS target alone, or
-                // unpin if it was already the pin (auto-pick resumes next world tick).
-                if (_questPinId == id && _selectedIds.Count == 1 && _selectedIds[0] == id)
-                {
-                    _selectedIds.Clear();
-                    _questPinId = null;
-                    _selectionCapWarned = false;
-                    changed = true;
-                    labels = "auto";
-                }
-                else
-                {
-                    _selectedIds.Clear();
-                    _selectedIds.Add(id);
-                    _questPinId = id;
-                    _selectionCapWarned = false;
-                    changed = true;
-                    labels = TargetLabel(id);
-                }
-            }
-            else if (_selectedIds.Remove(id))
+            if (_selectedIds.Remove(id))
             {
                 _selectionCapWarned = false;
                 changed = true;
@@ -317,12 +290,6 @@ public sealed partial class RadarApp
             return false;
         }
 
-        if (MapClear.TryParseCell(id, out var cx, out var cy))
-        {
-            grid = new NumVec2(cx, cy);
-            return true;
-        }
-
         return false;
     }
 
@@ -399,7 +366,6 @@ public sealed partial class RadarApp
     private string TargetLabel(string id)
     {
         foreach (var t in _navTargets) if (t.Id == id) return t.Name;
-        if (MapClear.TryParseCell(id, out var x, out var y)) return $"unexplored ({x},{y})";
         return id;
     }
 
@@ -483,4 +449,76 @@ public sealed partial class RadarApp
 
     /// <summary>API: clear the whole nav selection. Safe to call concurrently with the tick loop.</summary>
     public void ClearNavSelection() => ClearPathTargets();
+
+    /// <summary>Zone change: remember the leaving zone's selection (by its instance hash), then either
+    /// RESTORE the selection we previously had for the zone we're entering (so a town round-trip keeps
+    /// your pathing) or — on a first visit — seed it from the persistent auto-nav patterns. Trackers are
+    /// NOT touched here — the per-tick reconciliation (ReconcileTrackers) syncs them to _selectedIds.</summary>
+    private void OnAreaChanged(uint areaHash)
+    {
+        int count; bool restored;
+        lock (_navLock)
+        {
+            // Save what was selected in the zone we're leaving, keyed by ITS instance hash.
+            if (_selectionAreaHash != 0) RememberZoneSelection(_selectionAreaHash, _selectedIds);
+
+            _selectedIds.Clear();
+            _selectionCapWarned = false;
+            _selectionAreaHash = areaHash;
+
+            // Returning to a remembered instance → restore its selection verbatim (the user's explicit
+            // choices win, including an intentionally-empty one, so a zone they cleared stays cleared).
+            List<string>? remembered = null;
+            restored = areaHash != 0 && _zoneSelections.TryGetValue(areaHash, out remembered);
+            if (restored)
+            {
+                foreach (var id in remembered!)
+                {
+                    if (_selectedIds.Count >= MaxSelectedTargets) break;
+                    if (!_selectedIds.Contains(id)) _selectedIds.Add(id);
+                }
+            }
+            else
+            {
+                // First visit to this instance: auto-select every target whose display rule opted into
+                // auto-pathing (the per-rule "Auto-path" flag), capped so colors/planning stay bounded.
+                foreach (var t in _navTargets)
+                {
+                    if (_selectedIds.Count >= MaxSelectedTargets) break;
+                    if (t.AutoPath && !_selectedIds.Contains(t.Id))
+                        _selectedIds.Add(t.Id);
+                }
+            }
+            count = _selectedIds.Count;
+        }
+        _selectedPaths = new List<SelectedPath>();
+
+        if (count > 0)
+            Console.WriteLine($"\nNav: {(restored ? "restored" : "auto-selected")} {count} target(s) on zone change.");
+    }
+
+    /// <summary>
+    /// Drop selected ENTITY targets the game has marked complete (IconComplete — e.g. a claimed
+    /// expedition / used incursion device). Such an entity is hidden from the map and excluded from
+    /// the nav-target list, but it lingers (faded) in the live entity set, so <see cref="TryResolveTargetGrid"/>
+    /// would still resolve it and the route would keep pathing there. Pruning the id stops the route
+    /// (its tracker is removed by the next ReconcileTrackers) and "sticks" via the per-zone memory.
+    /// <para>Only prunes targets whose entity is PRESENT-and-complete — an entity merely out of network
+    /// range (temporarily absent) is left selected so it resumes when you return to it.</para>
+    /// </summary>
+    private void PruneCompletedTargets()
+    {
+        lock (_navLock)
+        {
+            if (_selectedIds.Count == 0) return;
+            _selectedIds.RemoveAll(id =>
+            {
+                if (!id.StartsWith("e:", StringComparison.Ordinal) || !uint.TryParse(id.AsSpan(2), out var eid))
+                    return false;
+                foreach (var e in _entities)
+                    if (e.Id == eid) return e.IconComplete; // present → prune iff completed; else keep
+                return false; // absent (out of range) → keep; it may return
+            });
+        }
+    }
 }
