@@ -75,6 +75,19 @@ public static class BuffKeeper
     public readonly record struct Decision(int RuleIndex, int Key, string Note);
 
     /// <summary>The single key to press now (highest-priority rule that wants to fire), or null.</summary>
+    /// <summary>A rule's identity for its cooldown: the key it presses, its trigger and its buff. Cooldowns follow the rule
+    /// when rules are reordered or renamed, and a rule edited into a different action starts fresh.</summary>
+    public static string CooldownKey(BuffRule r) => $"{r.Key}|{r.Trigger}|{r.BuffName}";
+
+    /// <summary>Fill <paramref name="lastFired"/> (index-aligned with <paramref name="rules"/>, as <see cref="Snapshot"/>
+    /// wants) from last presses kept by <see cref="CooldownKey"/>, so a rule never inherits another's cooldown.</summary>
+    public static DateTime[] AlignCooldowns(IReadOnlyList<BuffRule> rules, IReadOnlyDictionary<string, DateTime> firedByRule, DateTime[] lastFired)
+    {
+        if (lastFired.Length != rules.Count) lastFired = new DateTime[rules.Count];
+        for (var i = 0; i < rules.Count; i++) lastFired[i] = firedByRule.GetValueOrDefault(CooldownKey(rules[i]));
+        return lastFired;
+    }
+
     public static Decision? Decide(Snapshot s)
     {
         if (GlobalBlock(s) is not null) return null;

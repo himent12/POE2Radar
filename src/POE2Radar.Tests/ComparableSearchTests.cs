@@ -136,6 +136,21 @@ public sealed class ComparableSearchTests
     }
 
     [Fact]
+    public void Movement_speed_stays_in_every_boot_search_even_when_es_and_resistance_outrank_it()
+    {
+        // Pure-ES boots whose defences and resistances outrank their 25% speed: no rung may drop speed.
+        var boots = Rare(A("MovementVelocity4", 25), A("LocalIncreasedEnergyShieldPercent7_", 98), A("LocalIncreasedEnergyShield7", 58),
+            A("FireResist8", 44), A("ColdResist8", 43), A("LightningResist8", 45));
+        var appraisal = ItemAppraiser.Appraise(boots, EsBoots)!;
+        Assert.NotEqual("ms", appraisal.Drivers[0].Key);
+        var steps = Steps(PriceCheck.For(boots, null, EsBoots).Plan(Stats));
+        Assert.True(steps.Count >= 3);
+        foreach (var step in steps.Where(p => p.Comparable))
+            Assert.Contains(Query(step).GetProperty("stats")[0].GetProperty("filters").EnumerateArray(),
+                f => f.GetProperty("id").GetString() == "pseudo.pseudo_increased_movement_speed");
+    }
+
+    [Fact]
     public void Weapons_are_searched_on_trade_dps_plus_their_valuable_affixes()
     {
         var plan = PriceCheck.For(TopBow, null, Bow).Plan(Stats);

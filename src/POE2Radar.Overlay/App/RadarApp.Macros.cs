@@ -11,6 +11,9 @@ public sealed partial class RadarApp
     //    armed only by its hotkey or the INSERT menu (never HTTP). Same gates as auto-flask. ──
     private bool _buffKeeperArmed;
 
+    // Last press per rule, keyed by BuffKeeper.CooldownKey so editing or reordering rules never moves a cooldown to
+    // another rule; _buffFiredAt is the per-tick index-aligned view BuffKeeper.Decide reads.
+    private readonly Dictionary<string, DateTime> _buffFiredByRule = new();
     private DateTime[] _buffFiredAt = Array.Empty<DateTime>();
 
     private DateTime _buffAnyFiredAt;
@@ -73,7 +76,7 @@ public sealed partial class RadarApp
     {
         var cfg = _settings.BuffKeeper;
         var rules = cfg.Rules;
-        if (_buffFiredAt.Length != rules.Count) _buffFiredAt = new DateTime[rules.Count];
+        _buffFiredAt = BuffKeeper.AlignCooldowns(rules, _buffFiredByRule, _buffFiredAt);
 
         // Read buffs whenever in game (cached ~100 ms inside Poe2Live) so the dashboard's "current buffs"
         // list works even before a rule is armed.
@@ -107,6 +110,8 @@ public sealed partial class RadarApp
         {
             GameHost.TapKey((ushort)d.Key);
             _buffFiredAt[d.RuleIndex] = now;
+            if (_buffFiredByRule.Count > 64) _buffFiredByRule.Clear();   // rules edited many times over a long session
+            _buffFiredByRule[BuffKeeper.CooldownKey(rules[d.RuleIndex])] = now;
             _buffAnyFiredAt = now;
             _buffNote = d.Note;
         }

@@ -209,6 +209,21 @@ public sealed class ItemAppraisalTests
     }
 
     [Fact]
+    public void A_hybrid_with_two_valuable_stats_is_searched_on_both()
+    {
+        // Desecrated wand prefix: minion damage (useful) + spell damage (key) — two drivers, one per line.
+        var wand = Appraise(ColdWand, Rare(A("AbyssModWandAmanamuPrefixHybridSpellAndMinionDamage", 60, 62), A("GlobalSpellGemsLevelWeapon4", 4)));
+        var hybrid = wand.Drivers.Where(d => d.Affix?.ModId == "AbyssModWandAmanamuPrefixHybridSpellAndMinionDamage").ToList();
+        Assert.Equal(2, hybrid.Count);
+        Assert.Contains(hybrid, d => d.Line!.Contains("Spell Damage"));
+        Assert.Contains(hybrid, d => d.Line!.Contains("Minion"));
+
+        // A minor half adds to the grade but isn't searched: spell damage + mana is one driver.
+        var mana = Appraise(ColdWand, Rare(A("SpellDamageAndManaOnWeapon6", 42, 40)));
+        Assert.Single(mana.Drivers, d => d.Key == "mod");
+    }
+
+    [Fact]
     public void Magic_items_have_one_prefix_and_one_suffix()
     {
         var a = Appraise(EsEvBoots, Item(Poe2Live.Rarity.Magic, A("MovementVelocity6", 35)));

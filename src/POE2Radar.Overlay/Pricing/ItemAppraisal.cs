@@ -40,11 +40,12 @@ public sealed record Defences(int Armour, int Evasion, int EnergyShield, double 
 /// <summary>What a price hinges on: an aggregate buyers filter on (weapon DPS, total life, total resistance, movement
 /// speed, local defences) or one valuable affix. <see cref="Key"/>: "pdps", "edps", "dps", "ar", "ev", "es" (trade-site
 /// figures at Q20), "life" (incl. 2 per Strength, as the trade site's pseudo total counts it), "ele_res", "chaos_res",
-/// "ms", or "mod" for <see cref="Affix"/>'s strongest line <see cref="Line"/> (<see cref="Local"/>: that line is a local
-/// stat, listed as "… (Local)" on the trade site). <see cref="Value"/> is what the trade site filters on; <see cref="Label"/>
-/// what the player reads. <see cref="Importance"/> is its share of the score.</summary>
+/// "ms", or "mod" for one valuable line <see cref="Line"/> of <see cref="Affix"/> (<see cref="Local"/>: that line is a
+/// local stat, listed as "… (Local)" on the trade site). <see cref="Value"/> is what the trade site filters on;
+/// <see cref="Label"/> what the player reads. <see cref="Importance"/> is its share of the score. <see cref="Required"/>:
+/// the slot doesn't sell without it (boots' movement speed, a weapon's DPS), so every search keeps it.</summary>
 public sealed record ValueDriver(string Key, string Label, double Value, double Importance, AppraisedAffix? Affix = null,
-    string? Line = null, bool Local = false);
+    string? Line = null, bool Local = false, bool Required = false);
 
 /// <summary>A rare/magic item judged on what its slot's buyers pay for.</summary>
 public sealed record ItemAppraisal(ItemSlot Slot, string SlotName, AppraisalGrade Grade, double Score,
@@ -143,8 +144,9 @@ public static class ItemAppraiser
             var (affix, groups) = ScoreAffix(a, info, itemBase, slot, attack, armour, data, implicitSpeed);
             scored.Add(affix);
 
-            // Life, resistances and movement speed are bought as totals; everything else on its own line.
-            var own = 0.0; var bestGroup = -1.0; string? line = null; var lineIsLocal = false;
+            // Life, resistances and movement speed are bought as totals; every other valuable stat is its own driver on the
+            // line that shows it, so a hybrid with two valuable stats is searched on both (its minor half only adds score).
+            var lines = new Dictionary<string, (double Importance, bool Local)>(StringComparer.Ordinal);
             foreach (var g in groups)
             {
                 switch (Bucket(g.Stat))
@@ -155,14 +157,15 @@ public static class ItemAppraiser
                         break;
                     case { } bucket: buckets[bucket] = buckets.GetValueOrDefault(bucket) + g.Score; break;
                     default:
-                        own += g.Score;
-                        if (g.Score > bestGroup) { bestGroup = g.Score; line = LineFor(g.Stat, a); lineIsLocal = g.Stat.StartsWith("local_", StringComparison.Ordinal); }
+                        if (g.Role < AffixRole.Useful || g.Score <= 0 || LineFor(g.Stat, a) is not { } line) break;
+                        var isLocal = g.Stat.StartsWith("local_", StringComparison.Ordinal);
+                        lines[line] = lines.TryGetValue(line, out var l) ? (l.Importance + g.Score, l.Local || isLocal) : (g.Score, isLocal);
                         break;
                 }
             }
-            if (own > 0 && affix.Role >= AffixRole.Useful && line is not null)
+            foreach (var (line, (importance, lineIsLocal)) in lines)
                 drivers.Add(new ValueDriver("mod", affix.Tier is { } t ? $"{Shorten(line)} (T{t})" : Shorten(line),
-                    FirstNumber(line), Math.Round(own, 3), affix, line, lineIsLocal));
+                    FirstNumber(line), Math.Round(importance, 3), affix, line, lineIsLocal));
         }
 
         var dps = attack ? Dps(itemBase, local, data) : null;
@@ -173,9 +176,9 @@ public static class ItemAppraiser
             var importance = DpsWeight * Square(Math.Min(dps.Quality, 1.0));
             score += importance;
             var trade = dps.TradeTotal;
-            drivers.Add(dps.PhysicalQ20 >= trade * 0.67 ? new ValueDriver("pdps", $"{dps.PhysicalQ20:0} pDPS", dps.PhysicalQ20, importance)
-                : dps.Elemental >= trade * 0.67 ? new ValueDriver("edps", $"{dps.Elemental:0} eDPS", dps.Elemental, importance)
-                : new ValueDriver("dps", $"{trade:0} DPS", trade, importance));
+            drivers.Add(dps.PhysicalQ20 >= trade * 0.67 ? new ValueDriver("pdps", $"{dps.PhysicalQ20:0} pDPS", dps.PhysicalQ20, importance, Required: true)
+                : dps.Elemental >= trade * 0.67 ? new ValueDriver("edps", $"{dps.Elemental:0} eDPS", dps.Elemental, importance, Required: true)
+                : new ValueDriver("dps", $"{trade:0} DPS", trade, importance, Required: true));
         }
         if (defence is not null)
         {
@@ -190,7 +193,7 @@ public static class ItemAppraiser
                 drivers.Add(new ValueDriver(key, $"{Defences.TradeValue(value):0} {name} (Q20)", Defences.TradeValue(value), importance / kinds.Count));
         }
         if (buckets.GetValueOrDefault("ms") is > 0 and var ms)
-            drivers.Add(new ValueDriver("ms", $"{totals.MoveSpeed}% move speed", totals.MoveSpeed, ms));
+            drivers.Add(new ValueDriver("ms", $"{totals.MoveSpeed}% move speed", totals.MoveSpeed, ms, Required: slot == ItemSlot.Boots));
         if (buckets.GetValueOrDefault("life") is > 0 and var life)
             drivers.Add(new ValueDriver("life", $"+{totals.Life} life", totals.Life + 2 * totals.Strength, life));
         if (buckets.GetValueOrDefault("ele_res") is > 0 and var res)

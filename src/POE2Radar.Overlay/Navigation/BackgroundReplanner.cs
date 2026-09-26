@@ -25,9 +25,10 @@ public sealed class BackgroundReplanner : IDisposable
         string TargetId, Poe2Live.TerrainData Terrain, (int x, int y) Start, (int x, int y) Goal);
 
     /// <summary>A finished route: the smoothed waypoints for <paramref name="TargetId"/> toward
-    /// <paramref name="Goal"/>.</summary>
+    /// <paramref name="Goal"/>, planned on <paramref name="Terrain"/> — the caller drops a result whose terrain is no
+    /// longer the current area's (target ids like "waypoint" repeat across zones).</summary>
     public readonly record struct Result(
-        string TargetId, (float x, float y) Goal, IReadOnlyList<(int x, int y)> Waypoints);
+        string TargetId, (float x, float y) Goal, IReadOnlyList<(int x, int y)> Waypoints, Poe2Live.TerrainData Terrain);
 
     // Only the worker thread ever touches this planner → its A* buffers are never used concurrently.
     private readonly PathPlanner _planner = new();
@@ -99,7 +100,7 @@ public sealed class BackgroundReplanner : IDisposable
                 try
                 {
                     var waypoints = _planner.Plan(req.Terrain, req.Start, req.Goal);
-                    _results.Enqueue(new Result(req.TargetId, (req.Goal.x, req.Goal.y), waypoints));
+                    _results.Enqueue(new Result(req.TargetId, (req.Goal.x, req.Goal.y), waypoints, req.Terrain));
                 }
                 catch (Exception ex)
                 {
@@ -107,7 +108,7 @@ public sealed class BackgroundReplanner : IDisposable
                     // tracker clears its in-flight flag.
                     Console.Error.WriteLine($"Replan failed for {req.TargetId}: {ex.Message}");
                     _results.Enqueue(new Result(req.TargetId, (req.Goal.x, req.Goal.y),
-                        Array.Empty<(int, int)>()));
+                        Array.Empty<(int, int)>(), req.Terrain));
                 }
             }
         }

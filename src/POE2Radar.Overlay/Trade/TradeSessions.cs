@@ -270,9 +270,15 @@ public sealed class TradeSessions
     {
         var target = _tradingId is int id ? Find(id) : null;
         if (target is not { IsOpen: true })
-            target = _sessions.Where(s => s.IsOpen && s.PlayerInArea).MaxBy(s => s.UpdatedUtc);
+        {
+            // Unmarked trade: only a lone open session in the area is an unambiguous counterpart. With two buyers here,
+            // or a trade with someone we aren't tracking, recording a guess would put the wrong item and price in the
+            // earnings history.
+            var here = _sessions.Where(s => s.IsOpen && s.PlayerInArea).Take(2).ToList();
+            target = here.Count == 1 ? here[0] : null;
+        }
         _tradingId = null;
-        // No plausible counterpart (e.g. a trade with a party member we weren't tracking): ignore.
+        // No unambiguous counterpart (e.g. a trade with a party member we weren't tracking): ignore.
         if (target == null) return null;
         target.State = TradeState.Completed;
         target.CompletedUtc = now;

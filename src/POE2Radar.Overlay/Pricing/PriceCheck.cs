@@ -45,8 +45,10 @@ public static class PriceCheck
     }
 
     /// <summary>One trade filter an appraisal driver turns into: a stat filter (<see cref="StatId"/>, trade-site id) or an
-    /// equipment filter (<see cref="Equipment"/>: pdps, edps, dps, ar, ev, es), with the item's own value.</summary>
-    public sealed record TradeCriterion(string Label, double Importance, string? StatId, string? Equipment, double? Value);
+    /// equipment filter (<see cref="Equipment"/>: pdps, edps, dps, ar, ev, es), with the item's own value.
+    /// <see cref="Required"/> criteria stay in every step of the ladder.</summary>
+    public sealed record TradeCriterion(string Label, double Importance, string? StatId, string? Equipment, double? Value,
+        bool Required = false);
 
     /// <summary>Drivers too small to matter to a buyer aren't searched; six filters keep the query under the trade
     /// site's logged-out complexity cap (six stats + an equipment filter measured 21, accepted).</summary>
@@ -76,7 +78,7 @@ public static class PriceCheck
                     => new(d.Label, d.Importance, m.Id, null, m.Value),
                 _ => null,
             };
-            if (c is not null && !list.Any(x => x.StatId is not null && x.StatId == c.StatId)) list.Add(c);
+            if (c is not null && !list.Any(x => x.StatId is not null && x.StatId == c.StatId)) list.Add(c with { Required = d.Required });
         }
         return list;
     }
@@ -85,7 +87,9 @@ public static class PriceCheck
     /// Rare/magic ladder built on what the item is bought for, each step "at least about this good" (minimums 10% under
     /// the item's own values, no maximums — a better item is still a comparable), any base of its slot: (1) every
     /// criterion; (2) the most important ~60%; (3) the top two at 80% of your values; (4) all items of that base and
-    /// rarity (flagged as not comparable). The first step with enough listings wins.
+    /// rarity (flagged as not comparable). Required criteria (boots' movement speed, a weapon's DPS) are in every step
+    /// before it: a boot without speed is no comparable, however well it matches the rest. The first step with enough
+    /// listings wins.
     /// </summary>
     public static QueryPlan DriverLadder(ItemTradeProfile item, ItemAppraisal appraisal, IReadOnlyList<TradeComparison.TradeStat>? stats,
         (string Id, string Name)? category)
@@ -101,17 +105,23 @@ public static class PriceCheck
         var slot = category?.Name.ToLowerInvariant() ?? appraisal.SlotName;
         var type = category is null ? baseType : null;
         string Names(IEnumerable<TradeCriterion> cs) => string.Join(", ", cs.Select(c => c.Label));
+        // The k most important criteria, always including the required ones (kept in importance order).
+        List<TradeCriterion> Top(int k)
+        {
+            var keep = criteria.Where(c => c.Required).Concat(criteria.Where(c => !c.Required)).Take(Math.Max(k, criteria.Count(c => c.Required))).ToHashSet();
+            return criteria.Where(keep.Contains).ToList();
+        }
         var n = criteria.Count;
         QueryPlan next = baseOnly;
         if (n >= 2)
         {
-            var core = criteria.Take(2).ToList();
+            var core = Top(2);
             next = new QueryPlan(CriteriaQuery(type, category?.Id, core, 0.8), $"any {slot} with about your {Names(core)}", next);
         }
         var most = (int)Math.Ceiling(n * 0.6);
         if (most > 2 && most < n)
         {
-            var top = criteria.Take(most).ToList();
+            var top = Top(most);
             next = new QueryPlan(CriteriaQuery(type, category?.Id, top, 0.9), $"any {slot} with at least your {Names(top)}", next);
         }
         return new QueryPlan(CriteriaQuery(type, category?.Id, criteria, 0.9), $"any {slot} with at least your {Names(criteria)}", next);

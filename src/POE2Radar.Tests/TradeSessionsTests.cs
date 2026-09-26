@@ -132,6 +132,21 @@ public sealed class TradeSessionsTests
     }
 
     [Fact]
+    public void Unmarked_trade_accepted_with_two_buyers_in_the_area_records_nothing()
+    {
+        var s = New();
+        var fired = false;
+        s.Completed += _ => fired = true;
+        s.Consume(new WhisperReceived(T, "Bob", null, Buy));
+        s.Consume(new WhisperReceived(T, "Amy", null, BuyBar));
+        s.Consume(new PlayerJoined(T, "Bob"));
+        s.Consume(new PlayerJoined(T, "Amy"));
+        s.Consume(new TradeAccepted(T));   // with whom? not knowable — don't guess into the earnings history
+        Assert.False(fired);
+        Assert.All(s.Snapshot(), x => Assert.Equal(TradeState.InArea, x.State));
+    }
+
+    [Fact]
     public void Trade_accepted_with_no_plausible_session_is_ignored()
     {
         var s = New();

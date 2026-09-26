@@ -255,4 +255,27 @@ public sealed class BuffKeeperTests
         Assert.Equal("a|b", back.Rules[1].BuffName);
         Assert.Equal(s.ToggleHotkey, back.ToggleHotkey);
     }
+
+    [Fact]
+    public void Cooldowns_follow_the_rule_when_rules_are_reordered_or_edited()
+    {
+        var a = new BuffRule { Key = 0x51, Trigger = BuffKeeper.TriggerMissing, BuffName = "Blood Rage" };
+        var b = new BuffRule { Key = 0x57, Trigger = BuffKeeper.TriggerInterval, BuffName = "" };
+        var fired = new Dictionary<string, DateTime> { [BuffKeeper.CooldownKey(a)] = new DateTime(2026, 9, 26, 10, 0, 0, DateTimeKind.Utc) };
+
+        var aligned = BuffKeeper.AlignCooldowns([a, b], fired, []);
+        Assert.Equal(fired[BuffKeeper.CooldownKey(a)], aligned[0]);
+        Assert.Equal(default, aligned[1]);
+
+        // Same count, swapped order: the cooldown moves with rule a instead of staying at index 0.
+        aligned = BuffKeeper.AlignCooldowns([b, a], fired, aligned);
+        Assert.Equal(default, aligned[0]);
+        Assert.Equal(fired[BuffKeeper.CooldownKey(a)], aligned[1]);
+
+        // Renaming keeps it; pressing a different key makes it a new action.
+        a.Name = "renamed";
+        Assert.Equal(fired[BuffKeeper.CooldownKey(a)], BuffKeeper.AlignCooldowns([a], fired, [])[0]);
+        a.Key = 0x45;
+        Assert.Equal(default, BuffKeeper.AlignCooldowns([a], fired, [])[0]);
+    }
 }

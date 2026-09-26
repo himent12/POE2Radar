@@ -316,6 +316,9 @@ public sealed partial class RadarApp
             foreach (var r in results)
             {
                 if (!_trackers.TryGetValue(r.TargetId, out var tracker)) continue; // deselected → ignore
+                // Planned in the zone we just left (the same id re-selected here): drop it and let the tracker
+                // replan on this area's terrain instead of drawing the old zone's waypoints.
+                if (!ReferenceEquals(r.Terrain, _terrain)) { tracker.ReplanInFlight = false; continue; }
                 tracker.ApplyResult(r.Waypoints, new NumVec2(r.Goal.x, r.Goal.y));
             }
         }
