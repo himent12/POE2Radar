@@ -32,6 +32,9 @@
     <EmbeddedResource Include="Web\default_watched.json" />
     <!-- Atlas content icons (#5): in-game content art drawn above fogged/tracked map nodes. -->
     <EmbeddedResource Include="Assets\AtlasIcons\*.png" />
+    <!-- UI typefaces (Manrope + Cinzel + Noto Sans Runic, SIL OFL 1.1); the licences are copied next to the exe as the OFL requires. -->
+    <EmbeddedResource Include="Assets\Fonts\*.ttf" />
+    <Content Include="Assets\Fonts\*-OFL.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

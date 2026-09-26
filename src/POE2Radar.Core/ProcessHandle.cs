@@ -201,6 +201,15 @@ public sealed class ProcessHandle : IDisposable
         return new ProcessHandle(processId, name, modulePath, baseAddr, size, (nint)processId);
     }
 
+    /// <summary>TEST-ONLY: a reader handle on the CURRENT process (no module lookup / PoE checks), so unit
+    /// tests can lay out fake game structures in their own memory and read them through the real
+    /// <see cref="MemoryReader"/>. Linux uses the pid as the handle; Windows the current-process pseudo-handle.</summary>
+    internal static ProcessHandle ForCurrentProcess()
+    {
+        var pid = Environment.ProcessId;
+        return new ProcessHandle(pid, "self", "", 0, 0, OperatingSystem.IsLinux() ? (nint)pid : (nint)(-1));
+    }
+
     private static (string ModulePath, nint BaseAddress, uint Size) ResolveMainModule(nint handle, string? expectedName)
     {
         // First call to size the buffer.

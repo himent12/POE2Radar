@@ -43,21 +43,53 @@ public static partial class GameHost
     /// <summary>True iff the given hwnd is the OS-level foreground window.</summary>
     public static bool IsForeground(nint hwnd) => hwnd != 0 && GetForegroundWindow() == hwnd;
 
+    /// <summary>
+    /// Is the game in front? Matches the focused window by handle OR by owning process (a recreated window keeps
+    /// the pid), and on Hyprland asks the compositor (XWayland's _NET_ACTIVE_WINDOW isn't maintained there).
+    /// Thread-safe and cheap (compositor answer cached ~100 ms) — use this for every input/draw gate.
+    /// </summary>
+    public static bool IsGameForeground(nint hwnd, int pid)
+    {
+        if (OperatingSystem.IsLinux()) return LinuxX11.IsGameForeground(hwnd, pid);
+        var fg = GetForegroundWindow();
+        return fg != 0 && (fg == hwnd || (pid != 0 && Win32.WindowProcessId(fg) == pid));
+    }
+
     public static short GetAsyncKeyState(int vKey)
         => OperatingSystem.IsLinux() ? LinuxX11.GetAsyncKeyState(vKey) : Win32.GetAsyncKeyState(vKey);
 
     public static bool IsKeyDown(int vKey) => (GetAsyncKeyState(vKey) & 0x8000) != 0;
 
+    /// <summary>Mouse button state polled from the OS (vk 1=LMB 2=RMB 4=MMB) — independent of which window
+    /// gets the click event, so it works under fullscreen pointer grabs.</summary>
+    public static bool IsMouseButtonDown(int vk)
+        => OperatingSystem.IsLinux() ? LinuxX11.IsMouseButtonDown(vk) : (Win32.GetAsyncKeyState(vk) & 0x8000) != 0;
+
+    /// <summary>Synthesized press+release (SendInput / XTest) — goes to whatever window is focused, so
+    /// every caller gates on PoE2 being the foreground window first.</summary>
     public static void TapKey(ushort vk)
     {
         if (OperatingSystem.IsLinux()) LinuxX11.TapKey(vk);
         else Win32.TapKey(vk);
     }
 
-    public static void SetCursorPos(int x, int y)
+    /// <summary>Press and HOLD a key until <see cref="KeyUp"/> — modifier chords (Ctrl/Shift/Alt + key).</summary>
+    public static void KeyDown(ushort vk)
     {
-        if (OperatingSystem.IsLinux()) LinuxX11.SetCursorPos(x, y);
-        else Win32.SetCursorPos(x, y);
+        if (OperatingSystem.IsLinux()) LinuxX11.SetKey(vk, true);
+        else Win32.SetKey(vk, true);
+    }
+
+    public static void KeyUp(ushort vk)
+    {
+        if (OperatingSystem.IsLinux()) LinuxX11.SetKey(vk, false);
+        else Win32.SetKey(vk, false);
+    }
+
+    /// <summary>Undo any input-side state we changed (Linux: keyboard autorepeat). Call on shutdown.</summary>
+    public static void RestoreInputState()
+    {
+        if (OperatingSystem.IsLinux()) LinuxX11.RestoreAutoRepeat();
     }
 
     public static void BeginHighResTimer()
@@ -119,6 +151,12 @@ public static partial class GameHost
         [DllImport("user32.dll")] private static extern nint MonitorFromWindow(nint hwnd, uint dwFlags);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern bool GetMonitorInfoW(nint hMonitor, ref MonitorInfoEx lpmi);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern bool EnumDisplaySettingsW(string? lpszDeviceName, int iModeNum, ref DevMode lpDevMode);
+
+        public static int WindowProcessId(nint hwnd)
+        {
+            GetWindowThreadProcessId(hwnd, out var pid);
+            return (int)pid;
+        }
 
         public static nint FindWindowForProcess(int processId)
         {
@@ -203,6 +241,24 @@ public static partial class GameHost
             inputsK[1].type = INPUT_KEYBOARD;
             inputsK[1].U.ki = new KEYBDINPUT { wScan = scan, dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP };
             SendInput(2, inputsK, Marshal.SizeOf<INPUT>());
+        }
+
+        public static void SetKey(ushort vk, bool down)
+        {
+            if (TryMouseFlags(vk, out var dflag, out var uflag, out var data))
+            {
+                var m = new INPUT[1];
+                m[0].type = INPUT_MOUSE;
+                m[0].U.mi = new MOUSEINPUT { dwFlags = down ? dflag : uflag, mouseData = data };
+                SendInput(1, m, Marshal.SizeOf<INPUT>());
+                return;
+            }
+            var scan = (ushort)MapVirtualKey(vk, MAPVK_VK_TO_VSC);
+            if (scan == 0) return;
+            var k = new INPUT[1];
+            k[0].type = INPUT_KEYBOARD;
+            k[0].U.ki = new KEYBDINPUT { wScan = scan, dwFlags = KEYEVENTF_SCANCODE | (down ? 0u : KEYEVENTF_KEYUP) };
+            SendInput(1, k, Marshal.SizeOf<INPUT>());
         }
 
         private static bool TryMouseFlags(ushort vk, out uint down, out uint up, out uint data)

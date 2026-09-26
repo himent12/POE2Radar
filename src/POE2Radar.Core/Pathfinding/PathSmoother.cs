@@ -1,39 +1,54 @@
 namespace POE2Radar.Core.Pathfinding;
 
 /// <summary>
-/// Line-of-sight path simplification. Walks the cell-by-cell A* output and replaces runs of
-/// cells that have a clear line through walkable terrain with their endpoints. Result: a
-/// short list of waypoints suitable for drawing a guidance line, instead of one waypoint per
-/// grid cell.
-///
-/// "Walkable" here means cell value ≥ <paramref name="minWalkable"/>. For POE2Radar's binary
-/// grid (0 = blocked, 1 = walkable) the caller passes <c>minWalkable = 1</c>. Segment length
-/// is capped to avoid long shortcuts past wall corners.
+/// Turns a cell-by-cell A* path into a short, clean polyline of waypoints in three passes:
+/// <list type="number">
+/// <item><b>String pulling</b> — greedy farthest-visible over a THICK line-of-sight (every cell the segment
+/// crosses must have ≥ <c>preferredRaw</c> clearance). A shortcut that would graze a corner is rejected, so
+/// waypoints only sit where the character actually fits. Where the thick test cannot advance at all (a
+/// corridor narrower than the preferred clearance) a relaxed pass at <c>minRaw</c> keeps it simplified.</item>
+/// <item><b>Relaxation</b> — each interior waypoint is nudged (≤ <see cref="RelaxRadius"/> cells) to the
+/// neighbouring cell with the greatest clearance whose two adjacent segments still pass the same thick test,
+/// provided the detour is tiny. Corner waypoints move off the apex; the line rounds the corner instead of
+/// kissing it.</item>
+/// <item><b>Re-pull</b> — a final string pull removes waypoints made redundant by the nudges.</item>
+/// </list>
 /// </summary>
 public static class PathSmoother
 {
-    private const float MaxSegmentLengthGrid = 100f;
+    /// <summary>Hard cap on one straight segment (cells). Thick LOS already guarantees the segment is safe;
+    /// the cap only keeps a route's waypoints dense enough for off-path/progress tracking.</summary>
+    public const float MaxSegmentCells = 220f;
+    public const int RelaxRadius = 2;
+    private const float RelaxMaxExtraCells = 1.5f;
+    private const float RelaxMaxExtraFraction = 0.03f;
 
-    /// <summary>Smooth a cell-by-cell path into a short list of LOS waypoints.</summary>
-    public static IReadOnlyList<PathCell> Smooth(ICellReader pf, IReadOnlyList<PathCell> path, int minWalkable = 1)
+    public static IReadOnlyList<PathCell> Smooth(NavGrid g, IReadOnlyList<PathCell> path, int preferredRaw, int minRaw)
     {
         if (path.Count <= 2) return path;
+        var pulled = StringPull(g, path, preferredRaw, minRaw);
+        if (pulled.Count <= 2) return pulled;
+        var relaxed = Relax(g, pulled, preferredRaw, minRaw);
+        return relaxed ? StringPull(g, pulled, preferredRaw, minRaw) : pulled;
+    }
 
-        var result = new List<PathCell>(path.Count / 4) { path[0] };
+    private static List<PathCell> StringPull(NavGrid g, IReadOnlyList<PathCell> path, int preferredRaw, int minRaw)
+    {
+        var result = new List<PathCell>(Math.Max(4, path.Count / 6)) { path[0] };
         var current = 0;
         while (current < path.Count - 1)
         {
-            var farthest = current + 1;
-            for (var i = path.Count - 1; i > current + 1; i--)
+            var farthest = Farthest(g, path, current, path.Count - 1, preferredRaw, minRaw);
+            if (farthest == current + 1 && minRaw < preferredRaw)
             {
-                var dx = path[i].X - path[current].X;
-                var dy = path[i].Y - path[current].Y;
-                if (MathF.Sqrt(dx * dx + dy * dy) > MaxSegmentLengthGrid) continue;
-                if (HasLineOfSight(pf, path[current], path[i], minWalkable))
-                {
-                    farthest = i;
-                    break;
-                }
+                // Preferred clearance cannot advance: we are inside a section narrower than it (a door, a
+                // one-wide corridor). The relaxed pull is BOUNDED to that section — it may reach at most the
+                // first path cell that regains preferred clearance — so it bridges the squeeze and then hands
+                // straight back to the thick pass. It can never replace a long clearance-weighted A* detour
+                // with one wall-hugging chord.
+                var limit = current + 1;
+                while (limit < path.Count - 1 && g.ClearanceRaw(path[limit].X, path[limit].Y) < preferredRaw) limit++;
+                farthest = Farthest(g, path, current, limit, minRaw, minRaw);
             }
             result.Add(path[farthest]);
             current = farthest;
@@ -41,27 +56,64 @@ public static class PathSmoother
         return result;
     }
 
-    /// <summary>
-    /// Public LOS check — Bresenham line between two cells against any cell reader. Every cell
-    /// on the segment must have value ≥ <paramref name="minValue"/>.
-    /// </summary>
-    public static bool HasLineOfSight(ICellReader cells, int ax, int ay, int bx, int by, int minValue = 1)
-        => HasLineOfSight(cells, new PathCell(ax, ay), new PathCell(bx, by), minValue);
-
-    /// <summary>Bresenham line — every cell on the segment must satisfy walkability.</summary>
-    private static bool HasLineOfSight(ICellReader pf, PathCell a, PathCell b, int minWalkable)
+    /// <summary>Farthest index in (current, last] with a clear thick line from <c>path[current]</c>; interior cells
+    /// need <paramref name="minRaw"/>, the two endpoints only <paramref name="endpointRaw"/>.</summary>
+    private static int Farthest(NavGrid g, IReadOnlyList<PathCell> path, int current, int last, int minRaw, int endpointRaw)
     {
-        int x = a.X, y = a.Y;
-        int dx = Math.Abs(b.X - a.X), sx = a.X < b.X ? 1 : -1;
-        int dy = -Math.Abs(b.Y - a.Y), sy = a.Y < b.Y ? 1 : -1;
-        int err = dx + dy;
-        while (true)
+        var a = path[current];
+        for (var i = last; i > current + 1; i--)
         {
-            if (pf.Read(x, y) < minWalkable) return false;
-            if (x == b.X && y == b.Y) return true;
-            int e2 = 2 * err;
-            if (e2 >= dy) { err += dy; x += sx; }
-            if (e2 <= dx) { err += dx; y += sy; }
+            var dx = path[i].X - a.X;
+            var dy = path[i].Y - a.Y;
+            if (dx * dx + dy * dy > MaxSegmentCells * MaxSegmentCells) continue;
+            if (g.HasClearLine(a.X, a.Y, path[i].X, path[i].Y, minRaw, endpointRaw)) return i;
         }
+        return current + 1;
+    }
+
+    /// <summary>Nudge interior waypoints toward higher clearance. Returns true when anything moved.</summary>
+    private static bool Relax(NavGrid g, List<PathCell> pts, int preferredRaw, int minRaw)
+    {
+        var moved = false;
+        for (var i = 1; i < pts.Count - 1; i++)
+        {
+            var prev = pts[i - 1];
+            var next = pts[i + 1];
+            var cur  = pts[i];
+            // The clearance level the existing segments actually satisfy (preferred, else min). Endpoints of the
+            // pair (prev/next) may sit against a wall; only the segment interiors are graded.
+            var level = g.HasClearLine(prev.X, prev.Y, cur.X, cur.Y, preferredRaw, minRaw)
+                     && g.HasClearLine(cur.X, cur.Y, next.X, next.Y, preferredRaw, minRaw) ? preferredRaw : minRaw;
+            var baseLen = Dist(prev, cur) + Dist(cur, next);
+            var budget = baseLen * RelaxMaxExtraFraction + RelaxMaxExtraCells;
+            var bestClear = g.ClearanceRaw(cur.X, cur.Y);
+            var bestLen = baseLen;
+            var best = cur;
+            for (var dy = -RelaxRadius; dy <= RelaxRadius; dy++)
+            {
+                for (var dx = -RelaxRadius; dx <= RelaxRadius; dx++)
+                {
+                    if (dx == 0 && dy == 0) continue;
+                    var cx = cur.X + dx;
+                    var cy = cur.Y + dy;
+                    var c = g.ClearanceRaw(cx, cy);
+                    if (c < bestClear) continue;
+                    var cand = new PathCell(cx, cy);
+                    var len = Dist(prev, cand) + Dist(cand, next);
+                    if (len > baseLen + budget) continue;
+                    if (c == bestClear && len >= bestLen) continue;
+                    if (!g.HasClearLine(prev.X, prev.Y, cx, cy, level, minRaw) || !g.HasClearLine(cx, cy, next.X, next.Y, level, minRaw)) continue;
+                    bestClear = c; bestLen = len; best = cand;
+                }
+            }
+            if (best != cur) { pts[i] = best; moved = true; }
+        }
+        return moved;
+    }
+
+    private static float Dist(PathCell a, PathCell b)
+    {
+        float dx = a.X - b.X, dy = a.Y - b.Y;
+        return MathF.Sqrt(dx * dx + dy * dy);
     }
 }

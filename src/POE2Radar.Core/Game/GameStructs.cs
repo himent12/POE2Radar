@@ -43,8 +43,9 @@ public struct VitalStruct
     [FieldOffset(0x2C)] public int Max;
     [FieldOffset(0x30)] public int Current;
 
-    public readonly bool LooksValid()
+    public readonly bool LooksValid(bool allowEmpty = false)
     {
+        if (Max == 0) return allowEmpty && Current == 0 && ReservedFlat == 0 && ReservedFraction is >= 0 and <= 10000;
         if (Max <= 0 || Max > 10_000_000) return false;
         if (Current < -Max || Current > Max + 1) return false;
         return ReservedFlat >= 0 && ReservedFlat <= Max;

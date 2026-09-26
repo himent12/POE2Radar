@@ -27,14 +27,14 @@ public static class Poe2
     /// </summary>
     public static class GameState
     {
-        public const int CurrentStatePtr = 0x08;  // (GH2) StdVector — current state
-        public const int States          = 0x48;  // (GH2) inline array of 12 × StdTuple2D<IntPtr> (16 bytes each)
-        public const int StateSlotStride = 0x10;   // each slot is StdTuple2D<IntPtr> (ptr + extra)
-        public const int StateSlotCount  = 12;
+        public const int CurrentStatePtr = 0x10; // ✓ live: active-state vector after updated root header.
+        public const int States = 0x50; // ✓ inline array of 12 shared-pointer pairs.
+        public const int StateSlotStride = 0x10;
+        public const int StateSlotCount = 12;
     }
 
     /// <summary>
-    /// InGameState. Resolve it from <c>GameState.CurrentStatePtr</c> (StdVector @ +0x08): the
+    /// InGameState. Resolve it from <c>GameState.CurrentStatePtr</c> (StdVector @ +0x10): the
     /// vector's first element is the active state pointer when in-game. ✓ (matches States[] slot).
     /// </summary>
     public static class InGameState
@@ -60,14 +60,14 @@ public static class Poe2
     /// </summary>
     public static class AreaInstance
     {
-        public const int AreaInfoPtr      = 0x0A0;  // ✓ → AreaInfo; +0x00 → UTF-16 "Code\0Name\0" (Code validated 'G1_town')
-        public const int LocalPlayer      = 0x5C0;  // ✓ → player Entity (value-scanned player matched here). 2026-07-16 patch shifted +0x08 (was 0x5B8); 2026-06-25 shifted +0x18 (was 0x5A0).
-        public const int ServerDataPtr    = 0x5A0;  // ✓ → ServerData (gateway to player inventories; +0x20 here = LocalPlayer @ 0x5C0). 2026-07-16 patch shifted +0x08 (was 0x598); 2026-06-25 shifted +0x18 (was 0x580).
-        public const int AwakeEntities    = 0x6E0;  // ✓ StdMap of live entities (id→EntityPtr). 2026-07-16 patch shifted +0x08 (was 0x6D8); 2026-06-25 shifted +0x18 (was 0x6C0).
-        public const int SleepingEntities = 0x6F0;  // ✓ StdMap. 2026-07-16 patch shifted +0x08 (was 0x6E8); 2026-06-25 shifted +0x18 (was 0x6D0).
-        public const int TerrainMetadata  = 0x8C0;  // ✓ TerrainStruct base. 2026-07-16 patch shifted +0x08 (was 0x8B8); 2026-06-25 shifted +0x18 (was 0x8A0).
-        public const int CurrentAreaLevel = 0x0C4;  // ✓ int — per-area, validated 27/32 (GH2's 0xBC drifted)
-        public const int CurrentAreaHash  = 0x11C;  // ✓ uint — per-area random hash (GH2's 0xFC drifted; +0x120 paired seed)
+        public const int AreaInfoPtr = 0x098; // ✓ G2_10_1.
+        public const int LocalPlayer = 0x5D0; // ✓ player metadata; previous build 0x5C0.
+        public const int ServerDataPtr = 0x5B0; // ✓ 117 inventory entries with valid shared-pointer pairs.
+        public const int AwakeEntities = 0x6F0; // ✓ 227 entities including the local player.
+        public const int SleepingEntities = 0x700; // ✓ 5070 entities with valid metadata.
+        public const int TerrainMetadata = 0x8D0; // ✓ 103×103 tiles; 2807265 grid bytes at stride 1185.
+        public const int CurrentAreaLevel = 0x0BC; // ✓ area level 17.
+        public const int CurrentAreaHash = 0x114; // Header shifted -0x08; paired seed at +0x118.
     }
 
     /// <summary>Entity StdMap conventions. Maps live at AreaInstance+0x6C0 (Awake) / +0x6D0 (Sleeping).</summary>
@@ -282,7 +282,7 @@ public static class Poe2
     /// +0x08 ptr InventoryStruct, +0x10 ptr (= +0x08 − 0x10, the fingerprint invariant).</summary>
     public static class ServerData
     {
-        public const int League = 0x21E0;  // ✓ live 2026-06-22 (--league) — std::wstring current league name, EXACTLY poe.ninja/poe2scout's Value (e.g. "HC Runes of Aldur", "Standard", "Hardcore"). The HC/SC prefix lets us auto-detect the price league.
+        public const int League = 0x2160;  // ✓ live 2026-06-22 (--league) — std::wstring current league name, EXACTLY poe.ninja/poe2scout's Value (e.g. "HC Runes of Aldur", "Standard", "Hardcore"). The HC/SC prefix lets us auto-detect the price league.
         public const int PlayerServerDataVec = 0x48;  // ✓ StdVector<IntPtr>; [0] → ServerDataStructure
         public const int PlayerInventoriesVec = 0x320; // ✓ (on ServerDataStructure) StdVector<InventoryArrayStruct>
         public const int InvArrayStride = 0x18;        // ✓ sizeof(InventoryArrayStruct)
@@ -457,32 +457,51 @@ public static class Poe2
     /// </summary>
     public static class MapUiElement
     {
-        public const int Shift        = 0x368; // ✓ StdTuple2D<float>
-        public const int DefaultShift = 0x370; // ✓ StdTuple2D<float> (0,-20)
-        public const int Zoom         = 0x3A8; // ✓ float (0.5 live)
+        public const int Shift = 0x350; // ✓ (0,0).
+        public const int DefaultShift = 0x358; // ✓ (0,-20), two map elements.
+        public const int Zoom = 0x390; // ✓ 0.5 with large map open.
     }
 
-    /// <summary>UiElement base — ✓ validated live (GH2's offsets drifted: Self 0x30→0x8, Flags 0x1B8→0x180).
-    /// Parent/Position/Size from the 2026-06-07 community offset dump (resources/additional offsets.txt);
-    /// Position + Size confirmed live on the atlas-node class (size = 40×40 icons, positions vary per node).</summary>
+    /// <summary>✓ 2026-09-07, standalone: named HUD/HUDRight/skills_bar; children 0..12 are bindings.</summary>
+    public static class SkillBar
+    {
+        public const int SlotCount = 13;
+        public const int ButtonSkill = 0x2D8; // shared_ptr to Actor active skill
+        public const int ButtonSkillId = 0x2E8; // uint; must equal SkillInstance.Id
+    }
+
+    public static class SkillInstance
+    {
+        public const int Id = 0x40;
+        public const int ActionRow = 0x48; // row -> UTF-16 action ID (Move, LightningArrow, ...)
+        public const int GrantedPerLevel = 0x58; // row -> GrantedEffects row -> UTF-16 effect ID
+    }
+
+    /// <summary>UiElement base — ✓ validated live. Parent/Position/Size from the 2026-06-07
+    /// community offset dump (resources/additional offsets.txt); Position + Size confirmed on
+    /// atlas nodes. Individual fields below record subsequent validation.</summary>
     public static class UiElement
     {
+        public const int Identifier = 0x98; // ✓ 2026-09-07: std::wstring HUD / HUDRight / skills_bar
         public const int Self           = 0x08;  // ✓ self pointer
         public const int Children       = 0x10;  // ✓ StdVector begin (child UiElement ptrs); End @ +0x18
         public const int ChildrenEnd    = 0x18;  // ✓ StdVector end
         public const int PositionModifier = 0xF0; // StdTuple2D<float>; added to parent pos when Flags bit 0x0A set (GH2 UiElementBase)
         public const int Parent         = 0xB8;  // (community) parent UiElement; true UI root = *(UiRoot+0xB8)
-        public const int RelativePos    = 0x118; // ✓ StdTuple2D<float> position relative to parent (varies per atlas node)
-        public const int LocalScaleMul  = 0x130; // float local scale multiplier (also the atlas zoom on node elements)
-        public const int Flags          = 0x180; // ✓ uint; IsVisibleLocal = bit 0x0B (toggle-diff: 0x2EF1↔0x26F1)
+        // ✓ live 2026-09-24 (Research --invui --floats): the position/scale/size block moved −0x18 in the current patch
+        // (UI root size 2560×1600 now at +0x270; flask-bar slots RelativePos (0,0),(64,0),(128,0)… at +0x100).
+        // Flags (+0x168), ScaleIndex (+0x172), Parent (+0xB8) and PositionModifier (+0xF0) did NOT move.
+        public const int RelativePos    = 0x100; // ✓ StdTuple2D<float> position relative to parent (was 0x118)
+        public const int LocalScaleMul  = 0x118; // ✓ float local scale multiplier, 1.0 on HUD slots (was 0x130; also the atlas zoom)
+        public const int Flags          = 0x168; // ✓ Tab toggle: 0x5026F1 → 0x502EF1.
         public const int FlagVisibleBit = 0x0B;  // ✓ visible bit (set when shown)
         public const int FlagModifyPosBit = 0x0A; // when set, PositionModifier (+0xF0) is added to the parent pos
-        public const int ScaleIndex     = 0x18A; // byte; selects which axis scale(s) apply (1=v1,2=v2,3=v1×v2). root=3
-        public const int Text           = 0x390; // std::wstring of the element's displayed text (font name @ +0xC8).
+        public const int ScaleIndex     = 0x172; // byte; selects which axis scale(s) apply (1=v1,2=v2,3=v1×v2). root=3
+        public const int Text           = 0x360; // ✓ live 2026-09-24: std::wstring displayed text (was 0x390, which now holds the font name).
                                                   // Validated live 2026-06-14: every text element (loot tags, skill
                                                   // rows, runeforge rows) holds its UTF-16 string here.
-        public const int SizeW          = 0x288; // ✓ float unscaled width  (atlas node = 40)
-        public const int SizeH          = 0x28C; // ✓ float unscaled height (atlas node = 40)
+        public const int SizeW          = 0x270; // ✓ live 2026-09-24 float unscaled width (was 0x288; UI root = 2560)
+        public const int SizeH          = 0x274; // ✓ live 2026-09-24 float unscaled height (was 0x28C; UI root = 1600)
         // Full visibility is hierarchical: an element is shown iff its own bit 0x0B AND every
         // ancestor's bit are set. Walk Parent (+0xB8) up to the root.
         // Screen geometry (GH2 UiElementBaseFuncs): v1 = winW/2560, v2 = winH/1600 (BaseResolution
@@ -569,7 +588,7 @@ public static class Poe2
     /// <c>--tooltip-capture</c>): all 5 offered rewards read as full item entities with no hover needed.</summary>
     public static class Ritual
     {
-        public const int TileSlotItem = 0x4F8; // ✓ item-slot UiElement → reward item Entity (also the flask-bar slot field)
+        public const int TileSlotItem = 0x4E0; // ✓ live 2026-09-24 (was 0x4F8, moved −0x18 with the UiElement block): item-slot UiElement → item Entity — flask bar, inventory, stash, ritual tiles (Research --invui)
     }
 
     /// <summary>Atlas map-node UiElement (a subclass with its own vtable; ~1200+ instances live in the
@@ -666,5 +685,33 @@ public static class Poe2
         public const int FromUiRoot   = 0x7D8; // *(UiRoot + 0x7D8) → tracker container
         public const int WorldTracker = 0x630; // + 0x630 → world hover tracker
         public const int HoveredEntity = 0x18; // + 0x18 → hovered entity/element
+    }
+
+    // ── Buffs (status effects) — GameHelper2-sourced, NOT yet validated live (no ✓) ──────────────
+    // Validate / re-discover with `POE2Radar.Research --buffs`. Poe2Live.PlayerBuffs self-heals a
+    // drifted StatusEffectPtr offset (scans the component for a vector whose entries resolve to
+    // plausible BuffDefinitions ids) and logs loudly when it does; the per-effect fields are not healed.
+
+    /// <summary>Buffs component (GH2): a StdVector of pointers to <see cref="StatusEffect"/>. (GH2, unvalidated)</summary>
+    public static class Buffs
+    {
+        public const int StatusEffectPtr = 0x160; // (GH2) StdVector<StatusEffect*> — 8-byte stride
+    }
+
+    /// <summary>One active status effect (buff/debuff/charge) on an entity. (GH2, unvalidated)</summary>
+    public static class StatusEffect
+    {
+        public const int BuffDefinitionPtr = 0x08; // (GH2) → BuffDefinitions.dat row
+        public const int TotalTime         = 0x18; // (GH2) float seconds; infinite-duration buffs read inf/huge
+        public const int TimeLeft          = 0x1C; // (GH2) float seconds remaining
+        public const int SourceEntityId    = 0x28; // (GH2) uint id of the entity that applied it
+        public const int Charges           = 0x42; // (GH2, UNCERTAIN) ushort stack/charge count
+        public const int ReadSize          = 0x48; // bytes read per effect (covers every field above)
+    }
+
+    /// <summary>BuffDefinitions.dat row. (GH2, unvalidated)</summary>
+    public static class BuffDefinition
+    {
+        public const int IdPtr = 0x00; // (GH2) → UTF-16 internal id, e.g. "flask_effect_life", "arcane_surge"
     }
 }

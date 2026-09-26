@@ -48,18 +48,27 @@ public sealed class ItemModTranslator
     /// (multi-stat mods like "Adds # to # Damage" collapse to a single line). Unknown mods / stats
     /// fall back to a readable <c>id = value</c> so nothing is silently dropped.
     /// </summary>
-    public List<string> RenderMod(string modId, IReadOnlyList<int> values)
+    public List<string> RenderMod(string modId, IReadOnlyList<int> values) => RenderModLines(modId, values).Select(l => l.Text).ToList();
+
+    /// <summary>One rendered line and the stat ids it was rendered from.</summary>
+    public readonly record struct ModLine(string Text, IReadOnlyList<string> Stats);
+
+    /// <summary>
+    /// <see cref="RenderMod"/> with each line's source stats, so a caller can tell which half of a hybrid a line is
+    /// (e.g. "+50 to maximum Life" from base_maximum_life vs "30% increased Armour" from a local_ stat).
+    /// </summary>
+    public List<ModLine> RenderModLines(string modId, IReadOnlyList<int> values)
     {
         var statIds = _modStats.GetValueOrDefault(modId);
         if (statIds == null || statIds.Length == 0)
-            return new List<string> { $"{modId} ({string.Join(",", values)})" };
+            return new List<ModLine> { new($"{modId} ({string.Join(",", values)})", Array.Empty<string>()) };
 
         // Pair each stat id with its value (positional). Missing values default to 0.
         var pending = new List<(string id, int val)>();
         for (var i = 0; i < statIds.Length; i++)
             pending.Add((statIds[i], i < values.Count ? values[i] : 0));
 
-        var lines = new List<string>();
+        var lines = new List<ModLine>();
         var present = pending.Select(p => p.id).ToHashSet();
         int ValOf(string id) => pending.FirstOrDefault(p => p.id == id).id == id ? pending.First(p => p.id == id).val : 0;
 
@@ -86,14 +95,15 @@ public sealed class ItemModTranslator
             var vals = entry.Ids.Select(id => present.Contains(id) ? ValOf(id) : 0).ToArray();
             var line = RenderEntry(entry, vals);
             if (line == null) continue;          // no condition rule matched these values
-            foreach (var id in entry.Ids.Where(present.Contains)) consumed.Add(id);
-            if (line.Length > 0) lines.Add(line); // empty = fully "ignore"d line
+            var ids = entry.Ids.Where(present.Contains).ToArray();
+            foreach (var id in ids) consumed.Add(id);
+            if (line.Length > 0) lines.Add(new ModLine(line, ids)); // empty = fully "ignore"d line
         }
 
         // Stats with no description rule that matched → raw fallback (so nothing is silently dropped).
         foreach (var (id, val) in pending)
             if (!consumed.Contains(id))
-                lines.Add($"{id} ({val})");
+                lines.Add(new ModLine($"{id} ({val})", new[] { id }));
 
         return lines;
     }

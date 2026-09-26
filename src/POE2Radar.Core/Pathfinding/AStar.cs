@@ -1,8 +1,6 @@
 namespace POE2Radar.Core.Pathfinding;
 
-/// <summary>One cell on a path — just a grid coordinate. This is a draw-only path
-/// (rendered as a guidance line); it never drives movement, and PoE2 has no gap
-/// closers, so there is no per-step action.</summary>
+/// <summary>One cell on a path — a grid coordinate.</summary>
 public readonly record struct PathCell(int X, int Y);
 
 public readonly record struct Path(bool Found, float Cost, IReadOnlyList<PathCell> Cells)
@@ -11,160 +9,196 @@ public readonly record struct Path(bool Found, float Cost, IReadOnlyList<PathCel
 }
 
 /// <summary>
-/// Walk-only A* pathfinder over a grid exposed via <see cref="ICellReader"/>. Per-instance
-/// buffers are kept and reused via a generation stamp — no per-call buffer alloc.
+/// 8-connected A* over a <see cref="NavGrid"/>. Hot loop works on raw arrays (no interface reads), a
+/// custom array-backed binary heap (no per-call allocation — all buffers are sized once to the grid and
+/// reused via a generation stamp), and precomputed neighbour index offsets.
 ///
-/// <para>Cost model: walking onto a cell with value v costs <c>(6 - v) × stepDistance</c>
-/// when <c>flatCost</c> is false (weighted terrain), or just <c>stepDistance</c> when
-/// <c>flatCost</c> is true (binary grids where every walkable cell is equal). Diagonal
-/// steps cost √2 × the cardinal cost.</para>
+/// <para>Cost model: stepping INTO a cell costs <c>stepLength × NavGrid.StepMultiplier[clearance]</c> —
+/// 1.0 in the open, rising smoothly toward walls — so routes are optimal for "shortest while staying off the
+/// walls". Diagonal steps cost √2 and are refused when either orthogonal neighbour is blocked (no corner
+/// cutting). The octile heuristic is admissible against this cost (multiplier ≥ 1), so the result is optimal
+/// when heuristicWeight is 1.</para>
 /// </summary>
 public sealed class AStar
 {
-    // 8-neighbor offsets: (dx, dy, baseStepCost). Stack-friendly fixed-size data.
-    private static readonly (int dx, int dy, float cost)[] Neighbors =
-    {
-        ( 1,  0, 1f),
-        (-1,  0, 1f),
-        ( 0,  1, 1f),
-        ( 0, -1, 1f),
-        ( 1,  1, 1.4142136f),
-        ( 1, -1, 1.4142136f),
-        (-1,  1, 1.4142136f),
-        (-1, -1, 1.4142136f),
-    };
+    private const float Sqrt2 = 1.4142136f;
 
     private readonly int _width;
     private readonly int _height;
     private readonly float[] _gScore;
-    private readonly int[]   _cameFrom;
-    private readonly int[]   _generation;
+    private readonly int[] _cameFrom;
+    private readonly int[] _openGen;    // generation stamp: cell has a g-score this search
+    private readonly int[] _closedGen;  // generation stamp: cell has been expanded this search
     private int _currentGen;
 
-    public int Width  => _width;
+    // Binary min-heap (lazy deletion: stale entries are skipped when popped).
+    private int[] _heapNode;
+    private float[] _heapKey;
+    private int _heapCount;
+
+    public int Width => _width;
     public int Height => _height;
+    /// <summary>Nodes expanded by the last search (diagnostics).</summary>
+    public int LastExpanded { get; private set; }
 
     public AStar(int width, int height)
     {
-        _width  = width;
+        _width = width;
         _height = height;
         var n = width * height;
-        _gScore     = new float[n];
-        _cameFrom   = new int[n];
-        _generation = new int[n];
+        _gScore = new float[n];
+        _cameFrom = new int[n];
+        _openGen = new int[n];
+        _closedGen = new int[n];
+        var heapCap = Math.Clamp(n / 8, 1024, 1 << 20);
+        _heapNode = new int[heapCap];
+        _heapKey = new float[heapCap];
     }
 
     /// <summary>
-    /// Pathfind from <paramref name="start"/> to <paramref name="goal"/>. Snaps either end
-    /// to the nearest walkable cell within ~8 cells if needed. Returns <see cref="Path.NoPath"/>
-    /// after <paramref name="maxNodes"/> dequeues.
+    /// Pathfind between two WALKABLE cells (the planner snaps beforehand). Returns <see cref="Path.NoPath"/>
+    /// when the goal is unreachable or the node budget (<paramref name="maxNodes"/> expansions) is exhausted.
+    /// <paramref name="heuristicWeight"/> &gt; 1 trades optimality for speed (weighted A*); 1 = optimal.
     /// </summary>
-    public Path FindPath(
-        ICellReader pf, PathCell start, PathCell goal,
-        int maxNodes = 200_000, bool flatCost = false)
+    public Path FindPath(NavGrid g, PathCell start, PathCell goal, int maxNodes = int.MaxValue, float heuristicWeight = 1f)
     {
-        if (pf.Width != _width || pf.Height != _height)
-            throw new ArgumentException($"Reader dims {pf.Width}x{pf.Height} != A* dims {_width}x{_height}");
-
-        var (sx, sy) = (Math.Clamp(start.X, 0, _width - 1), Math.Clamp(start.Y, 0, _height - 1));
-        var (gx, gy) = (Math.Clamp(goal .X, 0, _width - 1), Math.Clamp(goal .Y, 0, _height - 1));
-
-        if (pf.Read(sx, sy) == 0) (sx, sy) = SnapToWalkable(pf, sx, sy);
-        if (pf.Read(gx, gy) == 0) (gx, gy) = SnapToWalkable(pf, gx, gy);
-        if (pf.Read(sx, sy) == 0 || pf.Read(gx, gy) == 0) return Path.NoPath;
+        LastExpanded = 0;
+        if (g.Width != _width || g.Height != _height) throw new ArgumentException($"Grid dims {g.Width}x{g.Height} != A* dims {_width}x{_height}");
+        if (!g.IsWalkable(start.X, start.Y) || !g.IsWalkable(goal.X, goal.Y)) return Path.NoPath;
+        if (!g.SameRegion(start.X, start.Y, goal.X, goal.Y)) return Path.NoPath;
 
         unchecked { _currentGen++; }
-        if (_currentGen == 0) { Array.Clear(_generation); _currentGen = 1; }
+        if (_currentGen == 0) { Array.Clear(_openGen); Array.Clear(_closedGen); _currentGen = 1; }
+        _heapCount = 0;
+        LastExpanded = 0;
 
-        var open = new PriorityQueue<int, float>();
-        var startIdx = sy * _width + sx;
-        var goalIdx  = gy * _width + gx;
+        var w = _width;
+        var h = _height;
+        var walk = g.Walkable;
+        var clear = g.Clearance;
+        var mult = NavGrid.StepMultiplier;
+        var hw = heuristicWeight;
 
-        _gScore    [startIdx] = 0f;
-        _cameFrom  [startIdx] = -1;
-        _generation[startIdx] = _currentGen;
-        open.Enqueue(startIdx, Heuristic(sx, sy, gx, gy));
+        var startIdx = start.Y * w + start.X;
+        var goalIdx = goal.Y * w + goal.X;
+        var gx = goal.X;
+        var gy = goal.Y;
 
-        var dequeued = 0;
-        while (open.TryDequeue(out var currentIdx, out _) && dequeued++ < maxNodes)
+        _gScore[startIdx] = 0f;
+        _cameFrom[startIdx] = -1;
+        _openGen[startIdx] = _currentGen;
+        Push(startIdx, Octile(start.X, start.Y, gx, gy) * hw);
+
+        var expanded = 0;
+        while (_heapCount > 0)
         {
-            if (currentIdx == goalIdx)
-                return ReconstructPath(currentIdx, _gScore[currentIdx]);
+            var cur = Pop();
+            if (_closedGen[cur] == _currentGen) continue; // stale heap entry
+            _closedGen[cur] = _currentGen;
 
-            var cx = currentIdx % _width;
-            var cy = currentIdx / _width;
-            var currentG = _gScore[currentIdx];
-
-            foreach (var (dx, dy, baseCost) in Neighbors)
+            if (cur == goalIdx)
             {
-                var nx = cx + dx;
-                var ny = cy + dy;
-                if ((uint)nx >= (uint)_width || (uint)ny >= (uint)_height) continue;
+                LastExpanded = expanded;
+                return Reconstruct(cur, _gScore[cur]);
+            }
+            if (expanded >= maxNodes) break;
+            expanded++;
 
-                var cellValue = pf.Read(nx, ny);
-                if (cellValue == 0) continue;
+            var cx = cur % w;
+            var cy = cur / w;
+            var curG = _gScore[cur];
 
-                var stepCost  = flatCost ? baseCost : baseCost * (6 - cellValue);
-                var tentative = currentG + stepCost;
-                var nIdx = ny * _width + nx;
+            // Orthogonal openness, reused by the diagonal corner-cut checks.
+            var canL = cx > 0 && walk[cur - 1] != 0;
+            var canR = cx < w - 1 && walk[cur + 1] != 0;
+            var canU = cy > 0 && walk[cur - w] != 0;
+            var canD = cy < h - 1 && walk[cur + w] != 0;
 
-                var seen = _generation[nIdx] == _currentGen;
-                if (seen && tentative >= _gScore[nIdx]) continue;
+            if (canL) Relax(cur - 1, cx - 1, cy, 1f, curG);
+            if (canR) Relax(cur + 1, cx + 1, cy, 1f, curG);
+            if (canU) Relax(cur - w, cx, cy - 1, 1f, curG);
+            if (canD) Relax(cur + w, cx, cy + 1, 1f, curG);
+            if (canL && canU) Relax(cur - w - 1, cx - 1, cy - 1, Sqrt2, curG);
+            if (canR && canU) Relax(cur - w + 1, cx + 1, cy - 1, Sqrt2, curG);
+            if (canL && canD) Relax(cur + w - 1, cx - 1, cy + 1, Sqrt2, curG);
+            if (canR && canD) Relax(cur + w + 1, cx + 1, cy + 1, Sqrt2, curG);
 
-                _gScore    [nIdx] = tentative;
-                _cameFrom  [nIdx] = currentIdx;
-                _generation[nIdx] = _currentGen;
-                open.Enqueue(nIdx, tentative + Heuristic(nx, ny, gx, gy));
+            void Relax(int nIdx, int nx, int ny, float step, float fromG)
+            {
+                if (walk[nIdx] == 0 || _closedGen[nIdx] == _currentGen) return;
+                var tentative = fromG + step * mult[clear[nIdx]];
+                if (_openGen[nIdx] == _currentGen && tentative >= _gScore[nIdx]) return;
+                _gScore[nIdx] = tentative;
+                _cameFrom[nIdx] = cur;
+                _openGen[nIdx] = _currentGen;
+                Push(nIdx, tentative + Octile(nx, ny, gx, gy) * hw);
             }
         }
 
+        LastExpanded = expanded;
         return Path.NoPath;
     }
 
-    /// <summary>
-    /// Octile distance with a tiny inflation. The pure octile heuristic is admissible (never
-    /// overestimates) but produces enormous fans of equal-cost cells in open terrain — A*
-    /// expands all of them. Multiplying by ~1.001 breaks the ties without meaningfully
-    /// affecting path optimality (worst case 0.1 % longer than optimal) and dramatically cuts
-    /// node count in long-distance searches. Standard "weighted A*" trick.
-    /// </summary>
-    private static float Heuristic(int x, int y, int gx, int gy)
+    private static float Octile(int x, int y, int gx, int gy)
     {
         var dx = Math.Abs(x - gx);
         var dy = Math.Abs(y - gy);
-        var octile = (dx + dy) + (1.4142136f - 2f) * Math.Min(dx, dy);
-        return octile * 1.001f;
+        return (dx + dy) + (Sqrt2 - 2f) * Math.Min(dx, dy);
     }
 
-    private Path ReconstructPath(int goalIdx, float cost)
+    private Path Reconstruct(int goalIdx, float cost)
     {
-        var cells = new List<PathCell>();
-        var idx = goalIdx;
-        while (idx != -1)
-        {
-            cells.Add(new PathCell(idx % _width, idx / _width));
-            idx = _cameFrom[idx];
-        }
-        cells.Reverse();
+        var count = 0;
+        for (var i = goalIdx; i != -1; i = _cameFrom[i]) count++;
+        var cells = new PathCell[count];
+        var k = count;
+        for (var i = goalIdx; i != -1; i = _cameFrom[i])
+            cells[--k] = new PathCell(i % _width, i / _width);
         return new Path(true, cost, cells);
     }
 
-    private (int x, int y) SnapToWalkable(ICellReader pf, int x, int y, int maxRadius = 32)
+    // ── Heap ────────────────────────────────────────────────────────────────────────────────
+
+    private void Push(int node, float key)
     {
-        for (var r = 1; r <= maxRadius; r++)
+        if (_heapCount == _heapNode.Length)
         {
-            for (var dy = -r; dy <= r; dy++)
-            {
-                for (var dx = -r; dx <= r; dx++)
-                {
-                    if (Math.Abs(dx) != r && Math.Abs(dy) != r) continue;
-                    var nx = x + dx;
-                    var ny = y + dy;
-                    if ((uint)nx >= (uint)_width || (uint)ny >= (uint)_height) continue;
-                    if (pf.Read(nx, ny) > 0) return (nx, ny);
-                }
-            }
+            Array.Resize(ref _heapNode, _heapNode.Length * 2);
+            Array.Resize(ref _heapKey, _heapKey.Length * 2);
         }
-        return (x, y);
+        var i = _heapCount++;
+        while (i > 0)
+        {
+            var parent = (i - 1) >> 1;
+            if (_heapKey[parent] <= key) break;
+            _heapNode[i] = _heapNode[parent];
+            _heapKey[i] = _heapKey[parent];
+            i = parent;
+        }
+        _heapNode[i] = node;
+        _heapKey[i] = key;
+    }
+
+    private int Pop()
+    {
+        var top = _heapNode[0];
+        var last = --_heapCount;
+        if (last == 0) return top;
+        var node = _heapNode[last];
+        var key = _heapKey[last];
+        var i = 0;
+        while (true)
+        {
+            var child = 2 * i + 1;
+            if (child >= last) break;
+            if (child + 1 < last && _heapKey[child + 1] < _heapKey[child]) child++;
+            if (_heapKey[child] >= key) break;
+            _heapNode[i] = _heapNode[child];
+            _heapKey[i] = _heapKey[child];
+            i = child;
+        }
+        _heapNode[i] = node;
+        _heapKey[i] = key;
+        return top;
     }
 }

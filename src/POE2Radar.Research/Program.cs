@@ -28,6 +28,50 @@ Console.WriteLine($"Attached to {process.ProcessName} (PID {process.ProcessId})"
 Console.WriteLine($"Main module base: 0x{process.MainModuleBase:X16}  size: 0x{process.MainModuleSize:X}");
 var reader = new MemoryReader(process);
 
+// --diag [--seconds N]: what the overlay itself sees, through the same Poe2Live read path — chain, vitals,
+// buffs, the game window vs the OS foreground window, and the item under the mouse cursor. Read-only.
+if (HasFlag(args, "--diag"))
+{
+    var slots = AobPatterns.GameStateRefs.SelectMany(p => AobScanner.ScanForResolvedAddresses(process, reader, p)).Distinct().ToArray();
+    if (slots.Length == 0) { Console.Error.WriteLine("GameState slot not found."); return 1; }
+    var live = new Poe2Live(reader, slots[0]);
+    var until = DateTime.UtcNow.AddSeconds(Math.Clamp(TryGetIntArg(args, "--seconds") ?? 20, 1, 300));
+    var hwnd = POE2Radar.Core.Native.GameHost.FindWindowForProcess(process.ProcessId);
+    Console.WriteLine($"game window 0x{hwnd:X}");
+    while (DateTime.UtcNow < until)
+    {
+        var fg = POE2Radar.Core.Native.GameHost.GetForegroundWindow();
+        var line = $"{DateTime.Now:HH:mm:ss} x-fg=0x{fg:X} game=0x{hwnd:X}"
+            + (POE2Radar.Core.Native.LinuxX11.IsHyprland ? $" hypr-active-pid={POE2Radar.Core.Native.LinuxX11.HyprlandActivePid()}" : "")
+            + $" game-pid={process.ProcessId} focused={POE2Radar.Core.Native.GameHost.IsGameForeground(hwnd, process.ProcessId)}";
+        if (live.TryResolve(out var igs, out var area, out var player))
+        {
+            var v = live.PlayerVitals(player);
+            var buffs = live.PlayerBuffs(player);
+            line += $" area={live.AreaCode(area)} hp={v?.HpPct:0}% buffs={(buffs is null ? "unreadable" : buffs.Count + " [" + string.Join(", ", buffs.Take(6).Select(b => b.Name)) + "]")}";
+            if (hwnd != 0 && POE2Radar.Core.Native.GameHost.TryGetWindowRect(hwnd, out var r)
+                && POE2Radar.Core.Native.GameHost.GetCursorPos(out var pt))
+            {
+                var hov = live.ReadHoveredItem(igs, r.Width, r.Height, pt.X - r.Left, pt.Y - r.Top);
+                line += $" cursor=({pt.X - r.Left},{pt.Y - r.Top}) hover={(hov is { } h ? $"{h.Rarity} \"{h.Name}\" art={h.Art} box=({h.BoxX:0},{h.BoxY:0},{h.BoxW:0}x{h.BoxH:0})" : "none")}";
+            }
+        }
+        else line += " chain=unresolved";
+        Console.WriteLine(line);
+        Thread.Sleep(1000);
+    }
+    return 0;
+}
+
+// --invui: which UI elements hold the player's inventory items, and at what offset. Reads the item list from
+// server data, then walks the WHOLE UI tree (hidden panels too) looking for pointers to those items (direct
+// entity, or an InventoryItem descriptor whose +0 is the entity). Read-only; the inventory need not be open.
+if (HasFlag(args, "--invui"))
+    return RunInventoryUi(process, reader);
+
+if (HasFlag(args, "--patch-check"))
+    return PatchCheck.Run(process, reader);
+
 if (HasFlag(args, "--aob"))
     return RunAobScan(process, reader);
 
@@ -39,6 +83,9 @@ if (HasFlag(args, "--chaindbg"))
 
 if (HasFlag(args, "--vitals"))
     return RunVitals(process, reader);
+
+if (HasFlag(args, "--buffs"))
+    return RunBuffs(process, reader, Math.Clamp(TryGetIntArg(args, "--seconds") ?? 10, 1, 600));
 
 if (HasFlag(args, "--find-entities"))
     return RunFindEntities(process, reader, TryGetIntArg(args, "--window") ?? 0x4000);
@@ -8438,6 +8485,162 @@ static int RunVitals(ProcessHandle process, MemoryReader reader)
     return 0;
 }
 
+// ── Buffs: validate the Buffs component / StatusEffect / BuffDefinition offsets (buff keeper) ──
+// Resolves the local player's Buffs component, validates Poe2.Buffs.StatusEffectPtr (PASS / ⚠DRIFT),
+// brute-scans the component for every StdVector whose entries resolve to BuffDefinitions ids, probes the
+// first effect for the BuffDefinitionPtr + time fields (two samples 1 s apart: TimeLeft is the float that
+// falls ~1/s), then prints every buff once a second for --seconds N (default 10) next to what the overlay's
+// Poe2Live.PlayerBuffs returns. Run it with a few timed buffs up (flask + a self-buff skill) — an empty
+// buff list can't confirm anything.
+static int RunBuffs(ProcessHandle process, MemoryReader reader, int seconds)
+{
+    var (_, _, _, lp) = ResolveChain(process, reader);
+    if (lp == 0) { Console.Error.WriteLine("Could not resolve LocalPlayer (in game?)."); return 1; }
+    var comps = WalkComponents(reader, lp);
+    Console.WriteLine($"LocalPlayer 0x{lp:X}  ({ReadEntityMetadata(reader, lp)})");
+    Console.WriteLine($"Components ({comps.Count}): {string.Join(", ", comps.Select(c => $"{c.name}@0x{c.addr:X}"))}");
+    var buffs = comps.FirstOrDefault(c => c.name == "Buffs").addr;
+    if (buffs == 0) { Console.Error.WriteLine("No 'Buffs' component on the local player (component name drifted?)."); return 1; }
+    Console.WriteLine($"Buffs component 0x{buffs:X}");
+
+    string BuffId(nint def)
+    {
+        var s = reader.ReadStringUtf16(SafePtr(reader, def + Poe2.BuffDefinition.IdPtr), Poe2Live.MaxBuffIdLength + 1);
+        return Poe2Live.IsPlausibleBuffId(s) ? s : "";
+    }
+    // (count, named, effect ptrs) for a candidate vector; count -1 = not a plausible vector.
+    (int count, int named, nint[] effects) Vec(int off, int defOff)
+    {
+        if (!reader.TryReadStruct<StdVector>(buffs + off, out var v)
+            || !Poe2Live.IsPlausibleBuffVector(v.First, v.Last, v.End, out var n)) return (-1, 0, []);
+        if (n == 0) return (0, 0, []);
+        var ptrs = new nint[n];
+        var named = 0;
+        for (var i = 0; i < n; i++)
+        {
+            ptrs[i] = SafePtr(reader, v.First + i * 8);
+            if (ptrs[i] != 0 && BuffId(SafePtr(reader, ptrs[i] + defOff)).Length > 0) named++;
+        }
+        return (n, named, ptrs);
+    }
+
+    // 1. Configured offset.
+    Console.WriteLine("\n[1] Configured Poe2.Buffs.StatusEffectPtr:");
+    var cfg = Vec(Poe2.Buffs.StatusEffectPtr, Poe2.StatusEffect.BuffDefinitionPtr);
+    var verdict = cfg.count < 0 ? "⚠DRIFT (not a plausible StdVector)"
+        : cfg.count == 0 ? "EMPTY (plausible, but can't confirm — put a buff up and rerun)"
+        : cfg.named > 0 ? $"PASS ({cfg.named}/{cfg.count} entries resolve to buff ids)"
+        : $"⚠DRIFT ({cfg.count} entries, none resolve — vector or StatusEffect.BuffDefinitionPtr moved)";
+    Console.WriteLine($"  +0x{Poe2.Buffs.StatusEffectPtr:X3}  {verdict}");
+
+    // 2. Brute-scan the component for status-effect vectors (the self-heal's search, reported in full).
+    Console.WriteLine($"\n[2] Scan Buffs+0x80..+0x400 for vectors whose entries → +0x{Poe2.StatusEffect.BuffDefinitionPtr:X} → id:");
+    var vecOff = cfg.named > 0 ? Poe2.Buffs.StatusEffectPtr : -1;
+    for (var off = 0x80; off <= 0x400; off += 8)
+    {
+        var c = Vec(off, Poe2.StatusEffect.BuffDefinitionPtr);
+        if (c.named == 0) continue;
+        Console.WriteLine($"  +0x{off:X3}  {c.named}/{c.count} named{(off == Poe2.Buffs.StatusEffectPtr ? "  <- configured" : "")}");
+        if (vecOff < 0 && c.named * 2 >= c.count) vecOff = off;
+    }
+    if (vecOff < 0 && cfg.count > 0)
+    {
+        // Vector plausible but no names: the effect's BuffDefinitionPtr may have moved instead. Try each slot.
+        Console.WriteLine("  none via the configured BuffDefinitionPtr; probing StatusEffect +0x00..+0x40 on the configured vector:");
+        for (var d = 0; d <= 0x40; d += 8)
+        {
+            var c = Vec(Poe2.Buffs.StatusEffectPtr, d);
+            if (c.named > 0) Console.WriteLine($"    BuffDefinitionPtr candidate +0x{d:X2}: {c.named}/{c.count} named");
+        }
+    }
+    if (vecOff < 0)
+    {
+        Console.WriteLine("\nNo populated status-effect vector found. Put up a timed buff (use a flask / cast a self-buff) and rerun.");
+        return cfg.count == 0 ? 0 : 1;
+    }
+
+    // 3. Probe the first effect's layout: definition pointer slot + time fields.
+    var effects = Vec(vecOff, Poe2.StatusEffect.BuffDefinitionPtr).effects.Where(p => p != 0).ToArray();
+    Console.WriteLine($"\n[3] StatusEffect layout on vector +0x{vecOff:X3} ({effects.Length} effects):");
+    int defOff = Poe2.StatusEffect.BuffDefinitionPtr, defHits = 0;
+    for (var d = 0; d <= 0x40; d += 8)
+    {
+        var hits = effects.Count(e => BuffId(SafePtr(reader, e + d)).Length > 0);
+        if (hits > defHits) { defHits = hits; defOff = d; }
+        if (hits > 0)
+            Console.WriteLine($"  BuffDefinitionPtr +0x{d:X2}: {hits}/{effects.Length} resolve{(d == Poe2.StatusEffect.BuffDefinitionPtr ? "  PASS (configured)" : "  <- candidate")}");
+    }
+    const int span = 0x60;
+    var before = effects.Select(e => { var b = new byte[span]; reader.TryReadBytes(e, b); return b; }).ToArray();
+    Thread.Sleep(1000);
+    var after = effects.Select(e => { var b = new byte[span]; reader.TryReadBytes(e, b); return b; }).ToArray();
+    var leftVotes = new Dictionary<int, int>();
+    for (var i = 0; i < effects.Length; i++)
+        for (var o = 0; o + 4 <= span; o += 4)
+        {
+            var f0 = BitConverter.ToSingle(before[i], o);
+            var f1 = BitConverter.ToSingle(after[i], o);
+            var dt = f0 - f1;
+            if (float.IsFinite(f0) && float.IsFinite(f1) && f1 >= 0 && dt is > 0.6f and < 1.6f)
+                leftVotes[o] = leftVotes.GetValueOrDefault(o) + 1;
+        }
+    foreach (var (o, n) in leftVotes.OrderByDescending(kv => kv.Value))
+        Console.WriteLine($"  TimeLeft candidate +0x{o:X2}: fell ~1/s on {n} effect(s){(o == Poe2.StatusEffect.TimeLeft ? "  PASS (configured)" : "  <- candidate")}");
+    if (leftVotes.Count == 0)
+        Console.WriteLine("  no float fell ~1/s — no TIMED buff active? (auras/infinite buffs don't tick) Use a flask and rerun.");
+    else if (!leftVotes.ContainsKey(Poe2.StatusEffect.TimeLeft))
+        Console.WriteLine($"  ⚠DRIFT: configured TimeLeft +0x{Poe2.StatusEffect.TimeLeft:X2} never ticked.");
+    Console.WriteLine("  (TotalTime should be a constant float ≥ TimeLeft just before it; Charges ushort is UNCERTAIN —");
+    Console.WriteLine("   stack a charge-based buff and watch the 'charges' column below change.)");
+
+    // 4. Live table, raw configured offsets vs the overlay reader (self-heal included).
+    var slots = AobPatterns.GameStateRefs.SelectMany(p => AobScanner.ScanForResolvedAddresses(process, reader, p)).Distinct().ToArray();
+    var live = slots.Length == 1 ? new Poe2Live(reader, slots[0]) { BuffsRefreshMs = 0 } : null;
+    Console.WriteLine($"\n[4] Live buffs every second for {seconds}s (raw @ +0x{vecOff:X3}; 'overlay' = Poe2Live.PlayerBuffs):");
+    for (var t = 0; t < seconds; t++)
+    {
+        var player = lp;
+        if (live is not null && live.TryResolve(out _, out _, out var p)) player = p;
+        var comp = player == lp ? buffs : ResolveComponentAddr(reader, player, "Buffs");
+        Console.WriteLine($"-- t={t}s");
+        if (comp == 0) { Console.WriteLine("   (Buffs component not resolvable — loading?)"); Thread.Sleep(1000); continue; }
+        if (reader.TryReadStruct<StdVector>(comp + vecOff, out var v)
+            && Poe2Live.IsPlausibleBuffVector(v.First, v.Last, v.End, out var n))
+        {
+            for (var i = 0; i < n; i++)
+            {
+                var e = SafePtr(reader, v.First + i * 8);
+                if (e == 0) continue;
+                var name = BuffId(SafePtr(reader, e + Poe2.StatusEffect.BuffDefinitionPtr));
+                reader.TryReadStruct<float>(e + Poe2.StatusEffect.TotalTime, out var total);
+                reader.TryReadStruct<float>(e + Poe2.StatusEffect.TimeLeft, out var left);
+                reader.TryReadStruct<uint>(e + Poe2.StatusEffect.SourceEntityId, out var src);
+                reader.TryReadStruct<ushort>(e + Poe2.StatusEffect.Charges, out var charges);
+                Console.WriteLine($"   {(name.Length > 0 ? name : "<unnamed>"),-40} left {left,10:0.00} / total {total,10:0.00}  " +
+                    $"charges {charges,-5} src {src,-10} @0x{e:X}");
+            }
+            if (n == 0) Console.WriteLine("   (no buffs)");
+        }
+        else Console.WriteLine("   (vector unreadable)");
+        if (live is not null && player != 0)
+        {
+            var list = live.PlayerBuffs(player);
+            Console.WriteLine(list is null
+                ? $"   overlay: null (UNKNOWN) — offset 0x{live.BuffVectorOffset:X}"
+                : $"   overlay: {list.Count} buff(s) @0x{live.BuffVectorOffset:X}{(live.BuffOffsetConfirmed ? " confirmed" : " unconfirmed")}: " +
+                  string.Join(", ", list.Select(b => $"{b.Name}({(b.IsInfinite ? "∞" : b.TimeLeft.ToString("0.0"))})")));
+        }
+        Thread.Sleep(1000);
+    }
+
+    Console.WriteLine("\nPaste-ready (Poe2Offsets.cs — add ✓ + date once the numbers above look right):");
+    Console.WriteLine($"    public static class Buffs {{ public const int StatusEffectPtr = 0x{vecOff:X}; }}");
+    var leftOff = leftVotes.Count > 0 ? leftVotes.MaxBy(kv => kv.Value).Key : Poe2.StatusEffect.TimeLeft;
+    Console.WriteLine($"    StatusEffect: BuffDefinitionPtr = 0x{defOff:X2}; TotalTime = 0x{leftOff - 4:X2} (assumed just before TimeLeft); " +
+        $"TimeLeft = 0x{leftOff:X2}; SourceEntityId = 0x{Poe2.StatusEffect.SourceEntityId:X2}; Charges = 0x{Poe2.StatusEffect.Charges:X2} (verify)");
+    return 0;
+}
+
 // ── Discovery: entity-list StdMap offset within AreaInstance ────────────────
 // Scans [AreaInstance, +scan) for {ptr Head, int Size} pairs that validate as a std::map of
 // entities: Head is a heap ptr whose Parent (root) leads to a node whose value is an Entity
@@ -8671,6 +8874,178 @@ static nint? TryGetHexArg(string[] args, string flag)
     var s = args[idx + 1];
     if (s.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) s = s[2..];
     return long.TryParse(s, System.Globalization.NumberStyles.HexNumber, null, out var v) ? (nint)v : null;
+}
+
+
+static int RunInventoryUi(ProcessHandle process, MemoryReader reader)
+{
+    var (_, igs, ai, _) = ResolveChain(process, reader);
+    if (ai == 0 || igs == 0) { Console.Error.WriteLine("Could not resolve chain (in game?)."); return 1; }
+    var serverData = SafePtr(reader, ai + Poe2.AreaInstance.ServerDataPtr);
+    var sd = serverData == 0 ? 0 : ResolveServerDataStruct(reader, serverData);
+    if (sd == 0) { Console.Error.WriteLine("No ServerDataStructure."); return 1; }
+    var (_, invVec, invCount) = FindPlayerInventoriesVec(reader, sd, 0x320);
+    var entities = new Dictionary<nint, string>();
+    var descriptors = new Dictionary<nint, nint>();
+    for (long i = 0; i < invCount; i++)
+    {
+        var rec = invVec.First + (nint)(i * 0x18);
+        reader.TryReadStruct<int>(rec, out var invId);
+        var inv = SafePtr(reader, rec + 0x08);
+        if (inv == 0) continue;
+        var (_, _, _, items, count) = ProbeInventoryStruct(reader, inv);
+        for (long k = 0; k < count && k < 400; k++)
+        {
+            var desc = SafePtr(reader, items.First + (nint)(k * 8));
+            var ent = desc == 0 ? 0 : SafePtr(reader, desc);
+            if (ent == 0) continue;
+            descriptors[desc] = ent;
+            entities[ent] = $"inv{invId}";
+        }
+    }
+    Console.WriteLine($"{entities.Count} items across {invCount} inventories.");
+    var uiRoot = SafePtr(reader, igs + Poe2.InGameState.UiRoot);
+    var queue = new Queue<nint>(); queue.Enqueue(uiRoot);
+    var seen = new HashSet<nint>();
+    var hits = new Dictionary<(int Off, string Kind), int>();
+    var samples = new List<string>();
+    var buf = new byte[0x1000];
+    while (queue.Count > 0 && seen.Count < 300000)
+    {
+        var el = queue.Dequeue();
+        if (el == 0 || !seen.Add(el)) continue;
+        if (reader.TryReadStruct<POE2Radar.Core.Game.StdVector>(el + Poe2.UiElement.Children, out var ch))
+        {
+            var n = ((long)ch.Last - (long)ch.First) / 8;
+            if (ch.First != 0 && n is > 0 and < 5000)
+                for (long k = 0; k < n; k++) { var c = SafePtr(reader, ch.First + (nint)(k * 8)); if (c != 0) queue.Enqueue(c); }
+        }
+        var got = reader.TryReadBytes(el, buf);
+        for (var off = 0; off + 8 <= got; off += 8)
+        {
+            var q = (nint)BitConverter.ToInt64(buf, off);
+            string? kind = entities.ContainsKey(q) ? "entity" : descriptors.ContainsKey(q) ? "descriptor" : null;
+            if (kind is null) continue;
+            hits[(off, kind)] = hits.GetValueOrDefault((off, kind)) + 1;
+            if (samples.Count < 12)
+            {
+                reader.TryReadStruct<uint>(el + Poe2.UiElement.Flags, out var flags);
+                var vis = (flags & (1u << Poe2.UiElement.FlagVisibleBit)) != 0;
+                var ent = kind == "entity" ? q : descriptors[q];
+                samples.Add($"  el=0x{el:X} vtbl=0x{SafePtr(reader, el):X} +0x{off:X} {kind} ({entities[ent]}) visible={vis} meta={ReadEntityMetadata(reader, ent)}");
+            }
+        }
+    }
+    Console.WriteLine($"Walked {seen.Count} UI elements.");
+    if (HasFlag(Environment.GetCommandLineArgs(), "--floats"))
+    {
+        // Side-by-side plausible floats of the flask/charm bar slots (inv12, always on screen).
+        var bar = seen.Where(e => entities.TryGetValue(SafePtr(reader, e + 0x4E0), out var iv) && iv == "inv12").Take(6).ToList();
+        Console.WriteLine("off    " + string.Join(" ", bar.Select(e => ReadEntityMetadata(reader, SafePtr(reader, e + 0x4E0)).Split('/').Last().PadLeft(14)[..14])));
+        for (var off = 0x60; off < 0x500; off += 4)
+        {
+            var vals = bar.Select(e => reader.TryReadStruct<float>(e + off, out var v) ? v : float.NaN).ToList();
+            if (!vals.Any(v => float.IsFinite(v) && Math.Abs(v) >= 0.5f && Math.Abs(v) < 5000f)) continue;
+            Console.WriteLine($"+0x{off:X3} " + string.Join(" ", vals.Select(v => float.IsFinite(v) && Math.Abs(v) < 1e6 ? v.ToString("0.###").PadLeft(14) : "        -     ")));
+        }
+        foreach (var off in new[] { 0xA0, 0xB8, 0x150, 0x154, 0x158, 0x15A, 0x15C, 0x168, 0x16C, 0x170, 0x172 })
+            Console.WriteLine($"int +0x{off:X3} " + string.Join(" ", bar.Select(e => reader.TryReadStruct<long>(e + off, out var v) ? $"0x{v:X}".PadLeft(16) : "-")));
+        void Sz(string label, nint e)
+        {
+            reader.TryReadStruct<System.Numerics.Vector2>(e + 0x288, out var a1); reader.TryReadStruct<System.Numerics.Vector2>(e + 0x270, out var a2);
+            reader.TryReadStruct<System.Numerics.Vector2>(e + 0x118, out var r1); reader.TryReadStruct<System.Numerics.Vector2>(e + 0x100, out var r2);
+            Console.WriteLine($"{label,-12} size@288={a1} size@270={a2} rel@118={r1} rel@100={r2}");
+        }
+        Sz("uiRoot", uiRoot);
+        var trueRoot = SafePtr(reader, uiRoot + Poe2.UiElement.Parent);
+        Sz("root.parent", trueRoot);
+        if (reader.TryReadStruct<POE2Radar.Core.Game.StdVector>(uiRoot + 0x10, out var rc))
+            for (long k = 0; k < Math.Min(8, ((long)rc.Last - (long)rc.First) / 8); k++) Sz($"root.child{k}", SafePtr(reader, rc.First + (nint)(k * 8)));
+        // Which offset holds element text now? Count visible elements with readable text at each candidate.
+        foreach (var off in new[] { 0x378, 0x390, 0x360, 0x3A8 })
+        {
+            var n = 0; var ex = new List<string>();
+            foreach (var e in seen.Take(60000))
+            {
+                var t = ReadStdWString(reader, e + off);
+                if (t.Length is >= 3 and < 80 && t.All(ch => ch >= 32 && ch < 0x3000)) { n++; if (ex.Count < 4) ex.Add(t); }
+            }
+            Console.WriteLine($"text@0x{off:X}: {n} elements  e.g. {string.Join(" | ", ex)}");
+        }
+        // PositionModifier candidates: first-bar-slot floats around 0xD8/0xF0.
+        foreach (var off in new[] { 0xD8, 0xF0 })
+            Console.WriteLine($"posmod@0x{off:X}: " + string.Join(" ", bar.Select(e => reader.TryReadStruct<System.Numerics.Vector2>(e + off, out var v) ? v.ToString() : "-")));
+        var parent = bar.Count > 0 ? SafePtr(reader, bar[0] + Poe2.UiElement.Parent) : 0;
+        Console.WriteLine($"parent 0x{parent:X}");
+    }
+    // Screen rects (as the overlay computes them) of every element holding an item at +0x4E0 / +0x460.
+    var slots = AobPatterns.GameStateRefs.SelectMany(p => AobScanner.ScanForResolvedAddresses(process, reader, p)).Distinct().ToArray();
+    var live = new Poe2Live(reader, slots[0]);
+    var hwnd = POE2Radar.Core.Native.GameHost.FindWindowForProcess(process.ProcessId);
+    POE2Radar.Core.Native.GameHost.TryGetWindowRect(hwnd, out var wr);
+    Console.WriteLine($"game window {wr.Width}x{wr.Height}");
+    var shown = 0;
+    foreach (var el in seen)
+    {
+        foreach (var off in new[] { 0x4E0, 0x460 })
+        {
+            var q = SafePtr(reader, el + off);
+            if (!entities.TryGetValue(q, out var inv)) continue;
+            var ok = live.TryUiElementRect(el, wr.Width, wr.Height, out var rx, out var ry, out var rw, out var rh);
+            reader.TryReadStruct<uint>(el + Poe2.UiElement.Flags, out var fl);
+            if (shown < 6)
+            {
+                reader.TryReadStruct<byte>(el + Poe2.UiElement.ScaleIndex, out var sidx);
+                reader.TryReadStruct<float>(el + Poe2.UiElement.LocalScaleMul, out var smul);
+                reader.TryReadStruct<System.Numerics.Vector2>(el + Poe2.UiElement.SizeW, out var ssz);
+                reader.TryReadStruct<System.Numerics.Vector2>(el + Poe2.UiElement.RelativePos, out var srel);
+                var par = SafePtr(reader, el + Poe2.UiElement.Parent);
+                var chain = "";
+                for (var p = el; p != 0 && chain.Length < 400; p = SafePtr(reader, p + Poe2.UiElement.Parent))
+                {
+                    reader.TryReadStruct<uint>(p + Poe2.UiElement.Flags, out var pf);
+                    chain += ((pf >> Poe2.UiElement.FlagVisibleBit) & 1) == 1 ? "V" : "h";
+                    if (SafePtr(reader, p + Poe2.UiElement.Parent) == p) break;
+                }
+                Console.WriteLine($"    raw flags=0x{fl:X} idx={sidx} mul={smul} size={ssz} rel={srel} self=0x{SafePtr(reader, el + 8):X}==0x{el:X} parentVisChain={chain}");
+            }
+            if (shown++ < 70)
+                Console.WriteLine($"  +0x{off:X} {inv,-6} rect={(ok ? $"({rx:0},{ry:0} {rw:0}x{rh:0})" : "n/a")} vis={(fl & (1u << Poe2.UiElement.FlagVisibleBit)) != 0} {ReadEntityMetadata(reader, q).Split('/').Last()}");
+        }
+    }
+    // With the table's offsets: each slot's screen rect, and what the overlay's hover reader returns when the
+    // cursor sits at that rect's centre (no real mouse needed).
+    foreach (var e in seen.Where(e => entities.ContainsKey(SafePtr(reader, e + 0x4E0))).Take(24))
+    {
+        if (!live.TryUiElementRect(e, wr.Width, wr.Height, out var qx, out var qy, out var qw, out var qh)) continue;
+        var hv = live.ReadHoveredItem(igs, wr.Width, wr.Height, qx + qw / 2, qy + qh / 2);
+        Console.WriteLine($"slot {entities[SafePtr(reader, e + 0x4E0)],-6} rect=({qx:0},{qy:0} {qw:0}x{qh:0}) hover→ {(hv is { } hh ? $"{hh.Rarity} {hh.Name}" : "none")}");
+        if (hv is { } hp)
+        {
+            var prof = live.ReadItemTradeProfile(hp);
+            Console.WriteLine($"     identified={prof.Identified} complete={prof.Complete} mods: {string.Join(" | ", prof.Mods.Select(m => m.Text))}");
+        }
+    }
+    {
+        var slotEl = seen.FirstOrDefault(e => entities.ContainsKey(SafePtr(reader, e + 0x4E0))
+            && live.TryUiElementRect(e, wr.Width, wr.Height, out var gx, out _, out _, out _) && Math.Abs(gx) > 100000);
+        var depthN = 0;
+        for (var p = slotEl; p != 0 && depthN++ < 20; p = SafePtr(reader, p + Poe2.UiElement.Parent))
+        {
+            reader.TryReadStruct<uint>(p + Poe2.UiElement.Flags, out var pf);
+            reader.TryReadStruct<System.Numerics.Vector2>(p + 0x100, out var r100);
+            reader.TryReadStruct<System.Numerics.Vector2>(p + 0xF0, out var m0f0);
+            reader.TryReadStruct<System.Numerics.Vector2>(p + 0xD8, out var m0d8);
+            reader.TryReadStruct<System.Numerics.Vector2>(p + 0xE8, out var m0e8);
+            reader.TryReadStruct<System.Numerics.Vector2>(p + 0x270, out var sz);
+            Console.WriteLine($"chain 0x{p:X} modbit={(pf >> 10) & 1} rel@100={r100} mod@F0={m0f0} @D8={m0d8} @E8={m0e8} size={sz} txt={ReadStdWString(reader, p + 0x378)}");
+            if (SafePtr(reader, p + Poe2.UiElement.Parent) == p) break;
+        }
+    }
+    foreach (var ((off, kind), n) in hits.OrderByDescending(h => h.Value))
+        Console.WriteLine($"  +0x{off:X3} {kind,-10} x{n}");
+    foreach (var line in samples) Console.WriteLine(line);
+    return 0;
 }
 
 static class Win
