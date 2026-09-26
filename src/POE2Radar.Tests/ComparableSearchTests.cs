@@ -31,31 +31,39 @@ public sealed class ComparableSearchTests
         Assert.Equal("explicit.stat_681332047", TradeComparison.MatchLine("explicit", "7% increased Attack Speed", Stats, local: false)!.Id);
         Assert.Equal("explicit.stat_4052037485", TradeComparison.MatchLine("explicit", "+60 to maximum Energy Shield", Stats, local: true)!.Id);
         Assert.Equal("explicit.stat_3489782002", TradeComparison.MatchLine("explicit", "+60 to maximum Energy Shield", Stats)!.Id);
-        Assert.True(TradeComparison.IsLocalLine("LocalIncreasedAttackSpeed5", "18% increased Attack Speed"));
-        Assert.False(TradeComparison.IsLocalLine("IncreasedLife9", "+142 to maximum Life"));
+        Assert.True(TradeComparison.IsLocalLine(A("LocalIncreasedAttackSpeed5", 18), "18% increased Attack Speed"));
+        Assert.False(TradeComparison.IsLocalLine(A("IncreasedLife9", 142), "+142 to maximum Life"));
     }
 
     [Fact]
     public void Locality_is_decided_per_line_so_a_hybrids_global_half_stays_global()
     {
-        // Alloy hybrid: global accuracy + local attack speed on a weapon.
-        const string hybrid = "AlloyAccuracyAttackSpeedHybrid1";
+        // Alloy hybrid: global accuracy + local attack speed on a weapon. The translator knows which stat made each line.
+        var hybrid = A("AlloyAccuracyAttackSpeedHybrid1", 400, 7);
+        Assert.Equal(["+400 to Accuracy Rating", "7% increased Attack Speed"], hybrid.Lines);
         Assert.False(TradeComparison.IsLocalLine(hybrid, "+400 to Accuracy Rating"));
         Assert.True(TradeComparison.IsLocalLine(hybrid, "7% increased Attack Speed"));
         TradeComparison.TradeStat[] stats =
             [new("explicit.stat_803737631", "# to Accuracy Rating"), new("explicit.stat_691932474", "# to Accuracy Rating (Local)")];
         Assert.Equal("explicit.stat_803737631",
             TradeComparison.MatchLine("explicit", "+400 to Accuracy Rating", stats, TradeComparison.IsLocalLine(hybrid, "+400 to Accuracy Rating"))!.Id);
+
+        // A hybrid whose local line shares no words with its stat id ("increased Armour" ← local_physical_damage_reduction_rating_+%).
+        var armourLife = A("LocalIncreasedArmourAndLife1", 30, 20);
+        var armourLine = armourLife.Lines.Single(l => l.Contains("Armour"));
+        Assert.True(TradeComparison.IsLocalLine(armourLife, armourLine));
+        Assert.False(TradeComparison.IsLocalLine(armourLife, armourLife.Lines.Single(l => l.Contains("Life"))));
     }
 
     [Theory]
-    [InlineData(3, 0.9, 3)]       // +3 levels stays +3 — flooring 2.7 would let +2 items in
-    [InlineData(1, 0.8, 1)]
-    [InlineData(35, 0.9, 32)]     // only the 35% movement speed tier
-    [InlineData(100, 0.8, 80)]    // 80.000000001 in floating point, still 80
-    [InlineData(4.41, 0.9, 3.96)] // fractional values keep two decimals
-    public void Search_minimums_never_drop_a_whole_step_on_small_stats(double value, double factor, double expected)
-        => Assert.Equal(expected, PriceCheck.MinFor(value, factor), 6);
+    [InlineData(3, 0.9, true, 3)]         // +3 levels stays +3 — flooring 2.7 would let +2 items in
+    [InlineData(1, 0.8, true, 1)]
+    [InlineData(35, 0.9, true, 32)]       // only the 35% movement speed tier
+    [InlineData(100, 0.8, true, 80)]      // 80.000000001 in floating point, still 80
+    [InlineData(4.41, 0.9, true, 3.96)]   // fractional rolls keep two decimals
+    [InlineData(102, 0.9, false, 91.8)]   // computed figures (DPS, Q20 defences) never round to steps, even when whole
+    public void Search_minimums_never_drop_a_whole_step_on_small_stats(double value, double factor, bool wholeSteps, double expected)
+        => Assert.Equal(expected, PriceCheck.MinFor(value, factor, wholeSteps), 6);
 
     [Fact]
     public void Lines_the_trade_site_words_differently_are_aliased()
@@ -190,7 +198,7 @@ public sealed class ComparableSearchTests
             // Full criteria: 2, top 60%: 1, top two: 0 — the base-only step (400) must not win.
             var handler = new CountingHandler(2, 1, 0, 400);
             using var http = new HttpClient(handler);
-            var service = new TradeComparison(http);
+            var service = new TradeComparison(http) { MinRequestGap = TimeSpan.Zero };
             var (key, _, plan) = PriceCheck.For(TopBoots, null, EsEvBoots);
             service.GetOrQueueSearch(key, _ => plan(Stats), needsStats: false, prices);
             await service.Pending;

@@ -71,8 +71,8 @@ public static class PriceCheck
                 "life" => new(d.Label, d.Importance, "pseudo.pseudo_total_life", null, d.Value),
                 "ele_res" => new(d.Label, d.Importance, "pseudo.pseudo_total_elemental_resistance", null, d.Value),
                 "chaos_res" => new(d.Label, d.Importance, "pseudo.pseudo_total_chaos_resistance", null, d.Value),
-                "mod" when stats is not null && d.Line is { } line && d.Affix is { } a
-                    && TradeComparison.MatchLine("explicit", line, stats, TradeComparison.IsLocalLine(a.ModId, line)) is { } m
+                "mod" when stats is not null && d.Line is { } line
+                    && TradeComparison.MatchLine("explicit", line, stats, d.Local) is { } m
                     => new(d.Label, d.Importance, m.Id, null, m.Value),
                 _ => null,
             };
@@ -117,13 +117,14 @@ public static class PriceCheck
         return new QueryPlan(CriteriaQuery(type, category?.Id, criteria, 0.9), $"any {slot} with at least your {Names(criteria)}", next);
     }
 
-    /// <summary>A search minimum <paramref name="factor"/> × <paramref name="value"/> below the item's own value. Whole-number
-    /// stats round up, so the slack never costs a whole step on a small stat (+3 levels × 0.9 stays +3; flooring would let
-    /// +2 items in as "comparable"); fractional values keep two decimals.</summary>
-    internal static double MinFor(double value, double factor)
+    /// <summary>A search minimum at <paramref name="factor"/> × the item's own <paramref name="value"/>. Stat filters
+    /// (<paramref name="wholeSteps"/>) on a whole-number roll round up, so the slack never costs a whole step on a small
+    /// stat (+3 levels × 0.9 stays +3; flooring would let +2 items in as "comparable"). Computed figures — DPS, defences,
+    /// fractional rolls — keep two decimals.</summary>
+    internal static double MinFor(double value, double factor, bool wholeSteps)
     {
         var scaled = value * factor;
-        return Math.Abs(value - Math.Round(value)) < 1e-9 ? Math.Min(value, Math.Ceiling(scaled - 1e-9)) : Math.Floor(scaled * 100) / 100;
+        return wholeSteps && Math.Abs(value - Math.Round(value)) < 1e-9 ? Math.Ceiling(scaled - 1e-9) : Math.Floor(scaled * 100) / 100;
     }
 
     /// <summary>Trade query JSON: rarity non-unique, not mirrored/sanctified, one listing per seller, cheapest first; stat
@@ -131,7 +132,7 @@ public static class PriceCheck
     /// <paramref name="factor"/> × the item's value.</summary>
     private static string CriteriaQuery(string? baseType, string? category, IReadOnlyList<TradeCriterion> criteria, double factor)
     {
-        object Min(TradeCriterion c) => new { min = MinFor(c.Value!.Value, factor) };
+        object Min(TradeCriterion c) => new { min = MinFor(c.Value!.Value, factor, wholeSteps: c.StatId is not null) };
         var statFilters = criteria.Where(c => c.StatId is not null)
             .Select(c => c.Value is > 0 ? (object)new { id = c.StatId, value = Min(c) } : new { id = c.StatId }).ToList();
         var equipment = criteria.Where(c => c.Equipment is not null && c.Value is > 0).ToDictionary(c => c.Equipment!, Min);
@@ -183,7 +184,7 @@ public static class PriceCheck
         string group, int min, double lo, double? hi)
     {
         var filters = matched.Select(m => m.Value is { } v
-            ? (object)new { id = m.Id, value = hi is { } h ? new { min = MinFor(v, lo), max = (double?)Math.Ceiling(v * h) } : new { min = MinFor(v, lo), max = (double?)null } }
+            ? (object)new { id = m.Id, value = hi is { } h ? new { min = MinFor(v, lo, true), max = (double?)Math.Ceiling(v * h) } : new { min = MinFor(v, lo, true), max = (double?)null } }
             : new { id = m.Id }).ToList();
         var query = new Dictionary<string, object> { ["status"] = new { option = Status } };
         if (baseType is not null) query["type"] = baseType;
@@ -209,51 +210,39 @@ public static class PriceCheck
     }
 
     /// <summary>The trade site's item category for an item's metadata path (e.g. Metadata/Items/Rings/… →
-    /// accessory.ring), or null when unknown. Ids from the official /api/trade2/data/filters list. Equipment is mapped by
-    /// its base's item class — paths can't tell a quarterstaff (…/Staves/FourQuarterstaff1) from a staff, or a buckler
-    /// (…/Shields/FourShieldDex1) from a shield; anything outside the base table falls back to the path.</summary>
+    /// accessory.ring), or null when unknown. Ids from the official /api/trade2/data/filters list. Equipment goes by its
+    /// base's item class — paths can't tell a quarterstaff (…/Staves/FourQuarterstaff1) from a staff, or a buckler
+    /// (…/Shields/FourShieldDex1) from a shield; a base missing from the table (a new patch) falls back to its path.</summary>
     public static (string Id, string Name)? Category(string? metadata)
     {
         if (string.IsNullOrEmpty(metadata)) return null;
-        if (ItemAffixData.Shared.BaseFor(metadata) is { } b && ClassCategory(b.Class) is { } byClass) return byClass;
+        if (ClassCategory(ItemAffixData.Shared.BaseFor(metadata)?.Class ?? PathClass(metadata)) is { } equipment) return equipment;
         var m = metadata;
-        (string, string)? C(string id, string name) => (id, name);
-        if (m.Contains("/Rings/")) return C("accessory.ring", "Ring");
-        if (m.Contains("/Amulets/")) return C("accessory.amulet", "Amulet");
-        if (m.Contains("/Belts/")) return C("accessory.belt", "Belt");
-        if (m.Contains("/Helmets/")) return C("armour.helmet", "Helmet");
-        if (m.Contains("/BodyArmours/")) return C("armour.chest", "Body armour");
-        if (m.Contains("/Gloves/")) return C("armour.gloves", "Gloves");
-        if (m.Contains("/Boots/")) return C("armour.boots", "Boots");
-        if (m.Contains("/Quivers/")) return C("armour.quiver", "Quiver");
-        if (m.Contains("/Bucklers/") || m.Contains("/FourShieldDex")) return C("armour.buckler", "Buckler");
-        if (m.Contains("/Shields/")) return C("armour.shield", "Shield");
-        if (m.Contains("/Focii/") || m.Contains("/Focus")) return C("armour.focus", "Focus");
-        if (m.Contains("/Jewels/")) return C("jewel", "Jewel");
-        if (m.Contains("/Charms/") || m.Contains("Charm")) return C("flask.charm", "Charm");
-        if (m.Contains("/Flasks/")) return m.Contains("Mana") ? C("flask.mana", "Mana flask") : C("flask.life", "Life flask");
-        if (m.Contains("/Crossbows/")) return C("weapon.crossbow", "Crossbow");
-        if (m.Contains("/Bows/")) return C("weapon.bow", "Bow");
-        if (m.Contains("/Wands/")) return C("weapon.wand", "Wand");
-        if (m.Contains("/Sceptres/")) return C("weapon.sceptre", "Sceptre");
-        if (m.Contains("/Warstaves/") || m.Contains("/Quarterstaves/") || m.Contains("Quarterstaff")) return C("weapon.warstaff", "Quarterstaff");
-        if (m.Contains("/Staves/")) return C("weapon.staff", "Staff");
-        if (m.Contains("Spears/")) return C("weapon.spear", "Spear");
-        if (m.Contains("/Flails/")) return C("weapon.flail", "Flail");
-        if (m.Contains("/Claws/")) return C("weapon.claw", "Claw");
-        if (m.Contains("/Daggers/")) return C("weapon.dagger", "Dagger");
-        if (m.Contains("/Talismans/")) return C("weapon.talisman", "Talisman");
-        if (m.Contains("/TwoHandSwords/")) return C("weapon.twosword", "Two-handed sword");
-        if (m.Contains("/OneHandSwords/")) return C("weapon.onesword", "One-handed sword");
-        if (m.Contains("/TwoHandAxes/")) return C("weapon.twoaxe", "Two-handed axe");
-        if (m.Contains("/OneHandAxes/")) return C("weapon.oneaxe", "One-handed axe");
-        if (m.Contains("/TwoHandMaces/")) return C("weapon.twomace", "Two-handed mace");
-        if (m.Contains("/OneHandMaces/")) return C("weapon.onemace", "One-handed mace");
-        if (m.Contains("/Maps/") || m.Contains("MapKey")) return C("map.waystone", "Waystone");
+        if (m.Contains("/Charms/") || m.Contains("Charm")) return ("flask.charm", "Charm");
+        if (m.Contains("/Flasks/")) return m.Contains("Mana") ? ("flask.mana", "Mana flask") : ("flask.life", "Life flask");
+        if (m.Contains("/Maps/") || m.Contains("MapKey")) return ("map.waystone", "Waystone");
         return null;
     }
 
-    private static (string Id, string Name)? ClassCategory(string itemClass) => itemClass switch
+    /// <summary>Best guess at an equipment item class from its metadata folder, for bases the table doesn't know.</summary>
+    private static string? PathClass(string m)
+    {
+        (string Folder, string Class)[] folders =
+        [
+            ("/Rings/", "Ring"), ("/Amulets/", "Amulet"), ("/Belts/", "Belt"), ("/Helmets/", "Helmet"), ("/BodyArmours/", "Body Armour"),
+            ("/Gloves/", "Gloves"), ("/Boots/", "Boots"), ("/Quivers/", "Quiver"), ("/Bucklers/", "Buckler"), ("/Shields/", "Shield"),
+            ("/Focii/", "Focus"), ("/Jewels/", "Jewel"), ("/Crossbows/", "Crossbow"), ("/Bows/", "Bow"), ("/Wands/", "Wand"),
+            ("/Sceptres/", "Sceptre"), ("Quarterstaff", "Warstaff"), ("/Staves/", "Staff"), ("Spears/", "Spear"), ("/Flails/", "Flail"),
+            ("/Claws/", "Claw"), ("/Daggers/", "Dagger"), ("/Talismans/", "Talisman"), ("/TwoHandSwords/", "Two Hand Sword"),
+            ("/OneHandSwords/", "One Hand Sword"), ("/TwoHandAxes/", "Two Hand Axe"), ("/OneHandAxes/", "One Hand Axe"),
+            ("/TwoHandMaces/", "Two Hand Mace"), ("/OneHandMaces/", "One Hand Mace"),
+        ];
+        foreach (var (folder, itemClass) in folders)
+            if (m.Contains(folder, StringComparison.Ordinal)) return itemClass;
+        return null;
+    }
+
+    private static (string Id, string Name)? ClassCategory(string? itemClass) => itemClass switch
     {
         "Ring" => ("accessory.ring", "Ring"), "Amulet" => ("accessory.amulet", "Amulet"), "Belt" => ("accessory.belt", "Belt"),
         "Helmet" => ("armour.helmet", "Helmet"), "Body Armour" => ("armour.chest", "Body armour"), "Gloves" => ("armour.gloves", "Gloves"),

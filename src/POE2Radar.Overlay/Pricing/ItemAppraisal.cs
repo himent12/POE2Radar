@@ -31,17 +31,20 @@ public sealed record WeaponDps(double Physical, double Elemental, double Chaos, 
 /// <summary>Local defences at the item's rolls (quality not included) and how they compare with a top-tier roll.</summary>
 public sealed record Defences(int Armour, int Evasion, int EnergyShield, double Quality)
 {
-    /// <summary>The trade site shows armour, evasion and ES at 20% quality, a ×1.2 on the unqualitied value (checked live
-    /// 2026-09-26: helmets showing 139 / 198 ES are indexed as 167 / 237).</summary>
+    /// <summary>The trade site shows armour, evasion and ES at 20% quality, a ×1.2 on the unqualitied value — quality
+    /// multiplies, it doesn't add to the local % (checked live 2026-09-26 on ten ES helmets with 62–95% increased ES: a
+    /// 90-ES base at 93% shows 174 and is indexed as 208 = 90 × 1.93 × 1.2; the additive reading would give 192).</summary>
     public static double TradeValue(int value) => value * 1.2;
 }
 
 /// <summary>What a price hinges on: an aggregate buyers filter on (weapon DPS, total life, total resistance, movement
 /// speed, local defences) or one valuable affix. <see cref="Key"/>: "pdps", "edps", "dps", "ar", "ev", "es" (trade-site
 /// figures at Q20), "life" (incl. 2 per Strength, as the trade site's pseudo total counts it), "ele_res", "chaos_res",
-/// "ms", or "mod" for <see cref="Affix"/>'s strongest line <see cref="Line"/>. <see cref="Value"/> is what the trade
-/// site filters on; <see cref="Label"/> what the player reads. <see cref="Importance"/> is its share of the score.</summary>
-public sealed record ValueDriver(string Key, string Label, double Value, double Importance, AppraisedAffix? Affix = null, string? Line = null);
+/// "ms", or "mod" for <see cref="Affix"/>'s strongest line <see cref="Line"/> (<see cref="Local"/>: that line is a local
+/// stat, listed as "… (Local)" on the trade site). <see cref="Value"/> is what the trade site filters on; <see cref="Label"/>
+/// what the player reads. <see cref="Importance"/> is its share of the score.</summary>
+public sealed record ValueDriver(string Key, string Label, double Value, double Importance, AppraisedAffix? Affix = null,
+    string? Line = null, bool Local = false);
 
 /// <summary>A rare/magic item judged on what its slot's buyers pay for.</summary>
 public sealed record ItemAppraisal(ItemSlot Slot, string SlotName, AppraisalGrade Grade, double Score,
@@ -141,7 +144,7 @@ public static class ItemAppraiser
             scored.Add(affix);
 
             // Life, resistances and movement speed are bought as totals; everything else on its own line.
-            var own = 0.0; var bestGroup = -1.0; string? line = null;
+            var own = 0.0; var bestGroup = -1.0; string? line = null; var lineIsLocal = false;
             foreach (var g in groups)
             {
                 switch (Bucket(g.Stat))
@@ -153,13 +156,13 @@ public static class ItemAppraiser
                     case { } bucket: buckets[bucket] = buckets.GetValueOrDefault(bucket) + g.Score; break;
                     default:
                         own += g.Score;
-                        if (g.Score > bestGroup) { bestGroup = g.Score; line = LineFor(g.Stat, a.Lines); }
+                        if (g.Score > bestGroup) { bestGroup = g.Score; line = LineFor(g.Stat, a); lineIsLocal = g.Stat.StartsWith("local_", StringComparison.Ordinal); }
                         break;
                 }
             }
             if (own > 0 && affix.Role >= AffixRole.Useful && line is not null)
                 drivers.Add(new ValueDriver("mod", affix.Tier is { } t ? $"{Shorten(line)} (T{t})" : Shorten(line),
-                    FirstNumber(line), Math.Round(own, 3), affix, line));
+                    FirstNumber(line), Math.Round(own, 3), affix, line, lineIsLocal));
         }
 
         var dps = attack ? Dps(itemBase, local, data) : null;
@@ -182,8 +185,9 @@ public static class ItemAppraiser
             if (itemBase.EnergyShield > 0) kinds.Add(("es", defence.EnergyShield, "ES"));
             if (itemBase.Armour > 0) kinds.Add(("ar", defence.Armour, "armour"));
             if (itemBase.Evasion > 0) kinds.Add(("ev", defence.Evasion, "evasion"));
+            // Labelled with the trade site's Q20 figure, the number the search and the trade page use.
             foreach (var (key, value, name) in kinds)
-                drivers.Add(new ValueDriver(key, $"{value} {name}", Defences.TradeValue(value), importance / kinds.Count));
+                drivers.Add(new ValueDriver(key, $"{Defences.TradeValue(value):0} {name} (Q20)", Defences.TradeValue(value), importance / kinds.Count));
         }
         if (buckets.GetValueOrDefault("ms") is > 0 and var ms)
             drivers.Add(new ValueDriver("ms", $"{totals.MoveSpeed}% move speed", totals.MoveSpeed, ms));
@@ -206,9 +210,10 @@ public static class ItemAppraiser
         if (dps is not null && dps.Quality < 0.6 && !scored.Any(s => s.CountedIn is null && s.Role == AffixRole.Premium && s.Quality >= 0.5))
             cap = Cap(ref grade, AppraisalGrade.Low, "low damage for its base") ?? cap;
 
-        // An affix missing from the table fills a slot of unknown kind: claim no open slots rather than a false one.
+        // An affix missing from the table fills a slot of unknown kind: count it against both sides, so no open slot is
+        // claimed that it might be sitting in.
         var (maxPrefix, maxSuffix) = item.Rarity == Poe2Live.Rarity.Magic ? (1, 1) : (3, 3);
-        var (openPrefixes, openSuffixes) = unknown > 0 ? (0, 0) : (Math.Max(0, maxPrefix - prefixes), Math.Max(0, maxSuffix - suffixes));
+        var (openPrefixes, openSuffixes) = (Math.Max(0, maxPrefix - prefixes - unknown), Math.Max(0, maxSuffix - suffixes - unknown));
         return new ItemAppraisal(slot, SlotName(itemBase.Class), grade, Math.Round(score, 2), scored, dps, defence,
             totals.Life, totals.EleRes, totals.ChaosRes, totals.MoveSpeed, openPrefixes, openSuffixes, drivers, cap);
     }
@@ -312,16 +317,11 @@ public static class ItemAppraiser
         }
     }
 
-    /// <summary>The rendered line of a multi-line affix that carries <paramref name="stat"/>: the one sharing the most
-    /// words with the stat id ("spell_damage_+%" → "…increased Spell Damage", not "+30 to maximum Mana").</summary>
-    private static string? LineFor(string stat, IReadOnlyList<string> lines) =>
-        lines.Count <= 1 ? lines.FirstOrDefault() : lines.MaxBy(l => WordOverlap(stat, l));
-
-    /// <summary>How many words of a stat id ("local_attack_speed_+%") appear in a rendered line ("…Attack Speed"),
-    /// ignoring the id's scaffolding words.</summary>
-    internal static int WordOverlap(string stat, string line) =>
-        stat.Split('_', StringSplitOptions.RemoveEmptyEntries)
-            .Count(w => w.Length > 2 && w is not ("base" or "local" or "minimum" or "maximum") && line.Contains(w, StringComparison.OrdinalIgnoreCase));
+    /// <summary>The rendered line of affix <paramref name="a"/> that carries <paramref name="stat"/> ("spell_damage_+%" →
+    /// "…increased Spell Damage", not "+30 to maximum Mana"), from the translator's own line → stats mapping.</summary>
+    private static string? LineFor(string stat, ItemAffix a) =>
+        ItemModTranslator.Shared.RenderModLines(a.Id, a.Values).Where(l => l.Stats.Contains(stat)).Select(l => l.Text).FirstOrDefault()
+            ?? a.Lines.FirstOrDefault();
 
     private static double FirstNumber(string line)
     {

@@ -268,7 +268,7 @@ public sealed partial class OverlayRenderer
         var (unitWord, unitCol) = unit switch
         {
             "div" => ("DIVINE", UDivine), "ex" => ("EXALTED", Hex(0xB9B9B9)), "chaos" => ("CHAOS", Hex(0xB9B9B9)),
-            "" => (pc.Loading ? "READING" : "UNREAD", UGrey), _ => (unit.ToUpperInvariant(), ULabel),
+            "" => (pc.Loading ? "READING" : pc.WorthSource is not null ? "NO MATCH" : "UNREAD", UGrey), _ => (unit.ToUpperInvariant(), ULabel),
         };
         TTC(rt, unitWord, _tfPcUnit!, c.X, c.Y + 46f * sk, unitCol, 0.3f);
         var sub = pc.WorthSource ?? (pc.Estimate is not null ? "poe.ninja reference" : pc.MedianText is not null ? "median live ask" : pc.Loading ? "searching…" : "too few listings");

@@ -38,6 +38,9 @@ public sealed class TradeComparison
     private readonly Dictionary<string, (MarketSearch Value, DateTime Until)> _searches = new();
     private DateTime _nextExplicit;
     private DateTime _blockedUntil;
+
+    /// <summary>Shortest gap between two trade requests (tests shorten it; the site's rate-limit headers can only lengthen it).</summary>
+    internal TimeSpan MinRequestGap { get; init; } = TimeSpan.FromSeconds(1);
     public Task Pending { get { lock (_gate) return _pending ?? Task.CompletedTask; } }
     public TradeComparison(HttpClient? http = null)
     {
@@ -237,17 +240,12 @@ public sealed class TradeComparison
         return candidates.Count == 1 ? new MatchedStat(candidates[0].Id, value, line) : null;
     }
 
-    /// <summary>Whether a rendered line of affix <paramref name="modId"/> acts on the item itself: the affix stat the line
-    /// shares the most words with decides, so the global half of a hybrid ("+400 to Accuracy Rating" beside local attack
-    /// speed) keeps its global trade stat.</summary>
-    public static bool IsLocalLine(string modId, string line)
-    {
-        var stats = ItemModTranslator.Shared.StatIdsFor(modId);
-        if (stats is not { Length: > 0 }) return false;
-        var locals = stats.Count(s => s.StartsWith("local_", StringComparison.Ordinal));
-        if (locals == 0 || locals == stats.Length) return locals > 0;
-        return stats.MaxBy(s => ItemAppraiser.WordOverlap(s, line))!.StartsWith("local_", StringComparison.Ordinal);
-    }
+    /// <summary>Whether <paramref name="line"/> of <paramref name="affix"/> acts on the item itself: the stats the translator
+    /// rendered that line from decide, so the global half of a hybrid ("+400 to Accuracy Rating" beside local attack speed)
+    /// keeps its global trade stat.</summary>
+    public static bool IsLocalLine(ItemAffix affix, string line) =>
+        ItemModTranslator.Shared.RenderModLines(affix.Id, affix.Values)
+            .Any(l => l.Text == line && l.Stats.Any(s => s.StartsWith("local_", StringComparison.Ordinal)));
 
     /// <summary>
     /// Match each mod line to exactly one trade stat (see <see cref="MatchLine"/>). Lines with no match, or with
@@ -258,7 +256,7 @@ public sealed class TradeComparison
         var localLines = new HashSet<string>(StringComparer.Ordinal);
         foreach (var a in item.Affixes ?? [])
             foreach (var line in a.Lines)
-                if (IsLocalLine(a.Id, line)) localLines.Add(line);
+                if (IsLocalLine(a, line)) localLines.Add(line);
         var result = new List<MatchedStat>(); var used = new HashSet<string>();
         ignored = 0;
         foreach (var mod in item.Mods)
@@ -276,7 +274,7 @@ public sealed class TradeComparison
             var delay = _nextRequest - DateTime.UtcNow;
             if (delay > TimeSpan.Zero) await Task.Delay(delay);
             using var response = await _http.SendAsync(request);
-            var wait = TimeSpan.FromSeconds(1);
+            var wait = MinRequestGap;
             if (response.Headers.RetryAfter is { } retry)
                 wait = retry.Delta ?? (retry.Date - DateTimeOffset.UtcNow) ?? wait;
             // Honor each dynamic rate-limit window before another request is sent.
@@ -297,7 +295,7 @@ public sealed class TradeComparison
                 }
             }
             if (response.StatusCode == HttpStatusCode.TooManyRequests && wait < TimeSpan.FromSeconds(60)) wait = TimeSpan.FromSeconds(60);
-            if (wait < TimeSpan.FromSeconds(1)) wait = TimeSpan.FromSeconds(1);
+            if (wait < MinRequestGap) wait = MinRequestGap;
             _nextRequest = DateTime.UtcNow.Add(wait);
             if (!response.IsSuccessStatusCode)
             {

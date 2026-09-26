@@ -75,7 +75,7 @@ public sealed class ItemAppraisalTests
         Assert.Equal(274, a.Defence!.Evasion);
         Assert.Equal(84, a.Defence.EnergyShield);
         var es = a.Drivers.Single(d => d.Key == "es");
-        Assert.Equal("84 ES", es.Label);
+        Assert.Equal("101 ES (Q20)", es.Label);
         Assert.Equal(100.8, es.Value, 6);
     }
 
@@ -221,9 +221,10 @@ public sealed class ItemAppraisalTests
     {
         var withUnknown = Rare(A("MovementVelocity6", 35), A("IncreasedLife9", 142), A("FireResist8", 43),
             new ItemAffix("explicit", "SomeNewPatchMod", [5], ["5% increased Something New"]));
+        // Two prefixes and a suffix are known; the unknown affix could be either, so it counts against both sides.
         var a = Appraise(EsEvBoots, withUnknown);
         Assert.Equal(0, a.OpenPrefixes);
-        Assert.Equal(0, a.OpenSuffixes);
+        Assert.Equal(1, a.OpenSuffixes);
         Assert.Equal(0, a.Affixes.Single(x => x.ModId == "SomeNewPatchMod").Score);
     }
 

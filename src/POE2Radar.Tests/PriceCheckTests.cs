@@ -176,7 +176,7 @@ public sealed class PriceCheckTests
             var prices = new PriceBook(path, "Test");
             var handler = new Handler();
             using var http = new HttpClient(handler);
-            var service = new TradeComparison(http);
+            var service = new TradeComparison(http) { MinRequestGap = TimeSpan.Zero };
             var (key, needs, plan) = PriceCheck.For(new ItemTradeProfile("Heavy Belt", Poe2Live.Rarity.Unique, true, [], true), "Doomsday");
             var first = service.GetOrQueueSearch(key, plan, needs, prices);
             Assert.True(first.Pending);
@@ -292,7 +292,7 @@ public sealed class PriceCheckTests
             var prices = new PriceBook(path, "Test");
             var handler = new LadderHandler();
             using var http = new HttpClient(handler);
-            var service = new TradeComparison(http);
+            var service = new TradeComparison(http) { MinRequestGap = TimeSpan.Zero };
             var (key, needs, plan) = PriceCheck.For(Rare("+70 to maximum Life", "+25% to Fire Resistance"), null, "Metadata/Items/Rings/FourRing3");
             service.GetOrQueueSearch(key, _ => plan(Stats), false, prices);
             await service.Pending;

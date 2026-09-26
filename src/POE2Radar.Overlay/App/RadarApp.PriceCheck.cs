@@ -111,15 +111,17 @@ public sealed partial class RadarApp
         double? worthEx = est?.Exalted ?? summary.Suggested ?? summary.Median;
         string? worth = null, worthSource = null;
         var points = summary.Points;
+        IReadOnlyList<MarketListing> listings = search.Listings;
         string? minText = summary.Min is { } mn ? Fmt(mn) : null, medianText = summary.Median is { } md ? Fmt(md) : null;
         if (rare && !search.Pending && search.Error is null)
         {
             if (!search.Comparable)
             {
-                // The only listings found are "every item of this base": they don't price this item, so the circle, ring
-                // and spread strip stay empty (the rows still show what the base lists at).
+                // The only listings found are "every item of this base": they don't price this item, so the circle, ring,
+                // spread strip and listing rows stay empty (the trade link still opens that search).
                 worthEx = null;
                 points = [];
+                listings = [];
                 minText = medianText = null;
                 worthSource = "no comparable listing";
                 verdict = pc.Appraisal is { } ap
@@ -133,8 +135,8 @@ public sealed partial class RadarApp
             }
         }
         var now = DateTime.UtcNow;
-        var rows = new List<PriceCheckRow>(search.Listings.Count);
-        foreach (var l in search.Listings.Take(8))
+        var rows = new List<PriceCheckRow>(listings.Count);
+        foreach (var l in listings.Take(8))
         {
             var cur = l.Currency switch { "exalted" => "ex", "divine" => "div", _ => l.Currency };
             var price = $"{l.Amount:0.##} {cur}" + (l.Stack > 1 ? " each" : "");
