@@ -24,6 +24,7 @@ public sealed partial class RadarApp
         public required bool NeedsStats;
         public required Func<IReadOnlyList<TradeComparison.TradeStat>?, QueryPlan> Plan;
         public required string? UniqueName;
+        public required ItemAppraisal? Appraisal;
         public MarketSearch? Last;
         public bool Refresh;
     }
@@ -72,11 +73,13 @@ public sealed partial class RadarApp
         if (_pc is { } open && open.Item == h.Item) { _pcRefresh = true; return; }   // same item again = refresh
         var profile = _live.ReadItemTradeProfile(h);
         var unique = h.Rarity == Poe2Live.Rarity.Unique && PriceCheck.Estimate(h, _priceBook.Current) is { } u ? u.Name : null;
-        var (key, needsStats, plan) = PriceCheck.For(profile, unique, _live.ItemMetadata(h.Item));
+        var metadata = _live.ItemMetadata(h.Item);
+        var appraisal = ItemAppraiser.Appraise(profile, metadata);
+        var (key, needsStats, plan) = PriceCheck.For(profile, unique, metadata, appraisal);
         _pc = new PriceCheckState
         {
             Item = h.Item, Area = areaHash, Hover = h, Profile = profile, Key = key, NeedsStats = needsStats, Plan = plan,
-            UniqueName = unique,
+            UniqueName = unique, Appraisal = appraisal,
         };
     }
 
@@ -90,7 +93,7 @@ public sealed partial class RadarApp
         var est = PriceCheck.Estimate(h, snap);
         string? estimate = null;
         var estimateSub = h.Rarity is Poe2Live.Rarity.Rare or Poe2Live.Rarity.Magic
-            ? "No reference price — rares are priced by their rolls"
+            ? "No reference price — rares are priced against comparable listings"
             : snap.ByName.Count == 0 ? "poe.ninja prices not loaded yet" : "Not listed on poe.ninja";
         if (est is { } e)
         {
@@ -102,8 +105,27 @@ public sealed partial class RadarApp
             estimateSub = "poe.ninja · " + string.Join(" · ", parts);
         }
 
-        var summary = PriceCheck.Summarize(search.Listings, est?.Exalted, Fmt,
-            similar: h.Rarity is Poe2Live.Rarity.Rare or Poe2Live.Rarity.Magic);
+        var rare = h.Rarity is Poe2Live.Rarity.Rare or Poe2Live.Rarity.Magic;
+        var summary = PriceCheck.Summarize(search.Listings, est?.Exalted, Fmt, similar: rare);
+        var verdict = summary.Verdict;
+        double? worthEx = est?.Exalted ?? summary.Suggested ?? summary.Median;
+        string? worth = null, worthSource = null;
+        if (rare && !search.Pending && search.Error is null)
+        {
+            if (!search.Comparable)
+            {
+                // The only listings found are "every item of this base": they don't price this item.
+                worthEx = null;
+                verdict = pc.Appraisal is { } ap
+                    ? $"No comparable listings · {ap.GradeName}{(ap.Grade <= AppraisalGrade.Low ? " — not worth listing" : " — price it by hand")}"
+                    : "No comparable listings — price it by hand";
+            }
+            else if (summary.Suggested is { } s)
+            {
+                worth = Fmt(s);
+                worthSource = "cheapest comparable";
+            }
+        }
         var now = DateTime.UtcNow;
         var rows = new List<PriceCheckRow>(search.Listings.Count);
         foreach (var l in search.Listings.Take(8))
@@ -118,15 +140,43 @@ public sealed partial class RadarApp
         var name = pc.UniqueName ?? h.Name ?? "Unknown item";
         var baseLine = pc.UniqueName is not null && h.Name is { } b ? b : RarityName(h.Rarity);
         if (stack > 1) baseLine += $" · stack of {stack:N0}";
-        var mods = pc.Profile.Mods.Where(m => m.Kind == "explicit").Select(m => m.Text).Take(6).ToList();
+        List<string> mods;
+        List<int>? weights = null;
+        string? appraisalLine = null;
+        if (pc.Appraisal is { } a)
+        {
+            // Each explicit with its tier on this base, dimmed when no buyer filters on it.
+            var shown = a.Affixes.Take(6).ToList();
+            mods = shown.Select(x => (x.Tier is { } t ? $"T{t} · " : "") + x.Text).ToList();
+            weights = shown.Select(ModWeight).ToList();
+            appraisalLine = AppraisalLine(a);
+        }
+        else mods = pc.Profile.Mods.Where(m => m.Kind == "explicit").Select(m => m.Text).Take(6).ToList();
         var url = search.Url ?? HoverValuation.TradeSearch(_priceBook.ComparisonLeague, h.Name, pc.UniqueName, h.Rarity);
 
+        var tier = PriceCheck.Tier(worthEx * stack, snap.ExPerDivine, search.Pending);
+        if (tier == "Unknown" && pc.Appraisal is { Grade: <= AppraisalGrade.Low }) tier = "Vendor";
         return new PriceCheckView(h.BoxX, h.BoxY, h.BoxW, h.BoxH, name, baseLine, RarityRgb(h.Rarity, h.Art), mods,
             estimate, estimateSub, search.Status, search.Note, search.Pending, search.Error,
             rows, summary.Points, est?.Exalted,
             summary.Min is { } mn ? Fmt(mn) : null, summary.Median is { } md ? Fmt(md) : null,
-            summary.Verdict, url, _priceBook.ComparisonLeague,
-            PriceCheck.Tier((est?.Exalted ?? summary.Median) * stack, snap.ExPerDivine, search.Pending));
+            verdict, url, _priceBook.ComparisonLeague, tier, appraisalLine, weights, worth, worthSource);
+    }
+
+    /// <summary>Panel emphasis for an affix: 2 = what the item is bought for, 1 = useful, 0 = filler.</summary>
+    private static int ModWeight(AppraisedAffix x) =>
+        x.Role >= AffixRole.Key && x.Quality >= 0.6 ? 2 : x.Role >= AffixRole.Useful ? 1 : 0;
+
+    /// <summary>"Good · 35% move speed · +142 life · 112% res · 1 open suffix" (plus the reason a grade was capped).</summary>
+    internal static string AppraisalLine(ItemAppraisal a)
+    {
+        var line = a.Summary;
+        var open = new List<string>();
+        if (a.OpenPrefixes > 0) open.Add($"{a.OpenPrefixes} open prefix{(a.OpenPrefixes == 1 ? "" : "es")}");
+        if (a.OpenSuffixes > 0) open.Add($"{a.OpenSuffixes} open suffix{(a.OpenSuffixes == 1 ? "" : "es")}");
+        if (open.Count > 0 && a.Grade >= AppraisalGrade.Decent) line += " · " + string.Join(", ", open);
+        if (a.Cap is { } cap) line += $" (held back: {cap})";
+        return line;
     }
 
     private static string AgeShort(TimeSpan t) => t.TotalMinutes < 60 ? $"{Math.Max(1, (int)t.TotalMinutes)}m"

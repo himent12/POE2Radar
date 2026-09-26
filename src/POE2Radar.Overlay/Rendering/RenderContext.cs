@@ -255,14 +255,18 @@ public sealed record RenderContext(
 
 /// <summary>The price-check panel, fully formatted on the world thread. <see cref="RarityRgb"/> is the PoE
 /// rarity colour for the name; <see cref="Points"/> are listing prices (exalted, per unit) for the spread strip;
-/// <see cref="EstimateEx"/> places the poe.ninja marker on it; <see cref="Tier"/> is <see cref="Pricing.PriceCheck.Tier"/>.</summary>
+/// <see cref="EstimateEx"/> places the poe.ninja marker on it; <see cref="Tier"/> is <see cref="Pricing.PriceCheck.Tier"/>.
+/// Rares add <see cref="Appraisal"/> (grade and selling points), per-mod <see cref="ModWeights"/> (0 filler, drawn dim;
+/// 1 useful; 2 what the item is bought for, drawn bright) and <see cref="Worth"/>/<see cref="WorthSource"/> for the
+/// circle when the value comes from comparable listings rather than poe.ninja.</summary>
 public sealed record PriceCheckView(
     float AnchorX, float AnchorY, float AnchorW, float AnchorH,
     string Name, string BaseLine, uint RarityRgb, IReadOnlyList<string> Mods,
     string? Estimate, string EstimateSub,
     string Status, string Note, bool Loading, string? Error,
     IReadOnlyList<PriceCheckRow> Rows, IReadOnlyList<double> Points, double? EstimateEx,
-    string? MinText, string? MedianText, string Verdict, string? Url, string League, string Tier = "Unknown");
+    string? MinText, string? MedianText, string Verdict, string? Url, string League, string Tier = "Unknown",
+    string? Appraisal = null, IReadOnlyList<int>? ModWeights = null, string? Worth = null, string? WorthSource = null);
 
 public readonly record struct PriceCheckRow(string Price, string Value, string Seller, string Age);
 

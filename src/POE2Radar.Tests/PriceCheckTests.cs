@@ -77,11 +77,24 @@ public sealed class PriceCheckTests
         => Assert.Equal(expected, PriceCheck.Category(metadata)?.Id);
 
     [Fact]
-    public void Similar_rares_are_priced_at_the_median_not_the_cheapest_outlier()
+    public void Comparable_rares_are_priced_at_the_cheapest_genuine_ask()
     {
-        var listings = new[] { 1.0, 3, 3, 10, 11 }.Select(v => new MarketListing(v, "exalted", v, "s" + v, null, 1)).ToArray();
+        // Comparables are "at least about as good": a buyer takes the cheapest, so that's the list price...
+        var listings = new[] { 4.0, 5, 9, 10, 11 }.Select(v => new MarketListing(v, "exalted", v, "s" + v, null, 1)).ToArray();
         var s = PriceCheck.Summarize(listings, null, Fmt, similar: true);
-        Assert.Equal("1 ex–11 ex for similar items · list at ~3 ex", s.Verdict);
+        Assert.Equal(4, s.Suggested);
+        Assert.Equal("Comparable items from 4 ex, typically 9 ex · list at ~4 ex", s.Verdict);
+
+        // ...unless the cheapest is a lone ask under half the next one (typo, bait, a worse item that slipped through).
+        var outlier = new[] { 1.0, 3, 3, 10, 11 }.Select(v => new MarketListing(v, "exalted", v, "s" + v, null, 1)).ToArray();
+        s = PriceCheck.Summarize(outlier, null, Fmt, similar: true);
+        Assert.Equal(3, s.Suggested);
+        Assert.Contains("one ask at 1 ex looks like a mistake", s.Verdict);
+        Assert.Null(PriceCheck.Summarize(outlier, 20, Fmt).Suggested);   // poe.ninja-priced items keep the undercut verdict
+
+        var fixers = new[] { "aug", "transmute", "aug", "exalted", "regal" }.Select((c, i) => new MarketListing(1, c, 1 + i, "s" + i, null, 1)).ToArray();
+        Assert.Contains("possible price-fixing", PriceCheck.Summarize(fixers, null, Fmt, similar: true).Verdict);
+        Assert.DoesNotContain("price-fixing", s.Verdict);
     }
 
     [Fact]
@@ -236,7 +249,27 @@ public sealed class PriceCheckTests
                 EstimateSub = "No reference price — rares are priced by their rolls", EstimateEx = null, Tier = "Reading",
             } });
             File.WriteAllBytes(Path.Combine(dir, "price-check-loading.png"), window.SnapshotPng());
+            renderer.RenderPriceCheckPreview(InsMenuRenderTests.Ctx(0) with { InsMenu = null, PriceCheck = RareView(view) });
+            File.WriteAllBytes(Path.Combine(dir, "price-check-rare.png"), window.SnapshotPng());
         }
+        renderer.RenderPriceCheckPreview(InsMenuRenderTests.Ctx(0) with { InsMenu = null, PriceCheck = RareView(view) });
+        Assert.Contains("pc:trade", renderer.LegendRowRects.Select(r => r.Action));
+    }
+
+    /// <summary>A rare boots appraisal as <c>RadarApp.BuildPriceCheckView</c> formats it.</summary>
+    private static PriceCheckView RareView(PriceCheckView unique)
+    {
+        var a = ItemAppraiser.Appraise(ItemAppraisalTests.TopBoots, ItemAppraisalTests.EsEvBoots)!;
+        return unique with
+        {
+            Name = "Doom Stride", BaseLine = "Rare", RarityRgb = 0xE8D36A, Estimate = null, EstimateEx = null,
+            EstimateSub = "No reference price — rares are priced against comparable listings",
+            Mods = a.Affixes.Select(x => $"T{x.Tier} · {x.Text}").ToList(),
+            ModWeights = a.Affixes.Select(x => x.Role >= AffixRole.Key && x.Quality >= 0.6 ? 2 : x.Role >= AffixRole.Useful ? 1 : 0).ToList(),
+            Appraisal = RadarApp.AppraisalLine(a), Worth = "2.4 div", WorthSource = "cheapest comparable",
+            Status = "302 listed online", Note = "any boots with at least your 35% move speed, 125% res, +142 life",
+            Verdict = "Comparable items from 2.4 div, typically 4 div · list at ~2.4 div", Tier = "List it",
+        };
     }
 
     [Fact]

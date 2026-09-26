@@ -423,6 +423,9 @@ POE2Radar-*-win-x64.zip
 
 # local-only scratch + reference material (community notes, third-party dumps)
 resources/*
+!resources/poe2-data/
+resources/poe2-data/*
+!resources/poe2-data/generate_item_data.py
 !resources/auto-build/
 resources/auto-build/*
 !resources/auto-build/generate_catalog.py

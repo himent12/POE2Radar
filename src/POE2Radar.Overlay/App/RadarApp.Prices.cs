@@ -39,6 +39,8 @@ public sealed partial class RadarApp
     private nint _tradeHoverItem;
     private DateTime _tradeHoverSince, _tradeProfileAt;
     private ItemTradeProfile? _tradeProfile;
+    private Pricing.ItemAppraisal? _tradeAppraisal;
+    private string _tradeMetadata = "";
     private volatile object? _hoverDiagnostic;
 
     // Waystone check cache: one mod read per hovered waystone (the item address changes when another is hovered).
@@ -368,7 +370,7 @@ public sealed partial class RadarApp
             _settings.GroundItems.MinQuantity, cfg.HighlightMinEx);
         if (h.Item != _tradeHoverItem)
         {
-            _tradeHoverItem = h.Item; _tradeHoverSince = now; _tradeProfile = null;
+            _tradeHoverItem = h.Item; _tradeHoverSince = now; _tradeProfile = null; _tradeAppraisal = null;
         }
         var danger = false;
         if (_settings.MapCheck.Enabled && MapCheckFor(h) is { } mc)
@@ -383,27 +385,43 @@ public sealed partial class RadarApp
         }
         else if (h.Rarity is Poe2Live.Rarity.Rare or Poe2Live.Rarity.Magic)
         {
-            // Same closest-match search as the price-check hotkey, so the two always agree (cached per item).
-            string text = "Hold to compare with similar listings", detail = "Reading the item's mods…";
+            // Appraise the mods first (no network): trash is called out at once and never costs a trade request; items
+            // worth something get the same comparable-listings search as the price-check hotkey (cached per item).
+            string text = "Hold to appraise", detail = "Reading the item's mods…";
             string? url = null;
             if ((now - _tradeHoverSince).TotalMilliseconds >= 500)
             {
                 if (_tradeProfile == null || (now - _tradeProfileAt).TotalMilliseconds >= 750)
                 {
+                    _tradeMetadata = _live.ItemMetadata(h.Item);
                     _tradeProfile = _live.ReadItemTradeProfile(h); _tradeProfileAt = now;
+                    _tradeAppraisal = Pricing.ItemAppraiser.Appraise(_tradeProfile, _tradeMetadata);
                 }
-                var (key, needsStats, plan) = Pricing.PriceCheck.For(_tradeProfile, null, _live.ItemMetadata(h.Item));
-                var search = _tradeComparison.GetOrQueueSearch(key, plan, needsStats, _priceBook);
-                url = search.Url;
-                if (search.Pending) { text = "Checking similar listings…"; detail = search.Status; }
-                else if (search.Error is { } err) { text = "Trade lookup unavailable"; detail = err; }
+                var appraisal = _tradeAppraisal;
+                if (appraisal is { Grade: <= Pricing.AppraisalGrade.Low })
+                {
+                    text = appraisal.Summary;
+                    detail = (appraisal.Cap is { } cap ? $"Held back by {cap}" : "Nothing on it that buyers search for")
+                        + " — not worth a trade lookup";
+                }
                 else
                 {
-                    var sum = Pricing.PriceCheck.Summarize(search.Listings, null, _priceBook.Format, similar: true);
-                    text = sum.Median is { } median ? $"Similar items: ~{_priceBook.Format(median)}" : search.Status;
-                    detail = search.Note + (sum.Min is { } lo && sum.Max is { } hi
-                        ? $"\n{_priceBook.Format(lo)}–{_priceBook.Format(hi)} across {search.Listings.Count} sellers · {search.Total:N0} listed"
-                        : "");
+                    var (key, needsStats, plan) = Pricing.PriceCheck.For(_tradeProfile, null, _tradeMetadata, appraisal);
+                    var search = _tradeComparison.GetOrQueueSearch(key, plan, needsStats, _priceBook);
+                    url = search.Url;
+                    var head = appraisal?.Summary;
+                    if (search.Pending) { text = head ?? "Checking comparable listings…"; detail = search.Status; }
+                    else if (search.Error is { } err) { text = head ?? "Trade lookup unavailable"; detail = err; }
+                    else
+                    {
+                        var sum = Pricing.PriceCheck.Summarize(search.Listings, null, _priceBook.Format, similar: true);
+                        var price = search.Comparable ? sum.Suggested ?? sum.Min : null;
+                        text = price is { } p ? $"Comparable: ~{_priceBook.Format(p)}" : head ?? search.Status;
+                        detail = (head is not null && price is not null ? head + "\n" : "") + search.Note
+                            + (search.Comparable && sum.Min is { } lo && sum.Max is { } hi
+                                ? $"\n{_priceBook.Format(lo)}–{_priceBook.Format(hi)} across {search.Listings.Count} sellers · {search.Total:N0} listed"
+                                : "");
+                    }
                 }
             }
             valuation = valuation with

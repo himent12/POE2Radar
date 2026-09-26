@@ -1,8 +1,14 @@
 namespace POE2Radar.Core.Game;
 
 public sealed record ItemTradeMod(string Kind, string Text);
+
+/// <summary>One affix as read: internal mod id (e.g. "IncreasedLife9"), rolled values in stat order, rendered lines.</summary>
+public sealed record ItemAffix(string Kind, string Id, IReadOnlyList<int> Values, IReadOnlyList<string> Lines);
+
+/// <summary>An item's trade-relevant identity. <see cref="Mods"/> is one entry per rendered line;
+/// <see cref="Affixes"/> keeps each affix whole (id + raw rolls) for tiering and appraisal.</summary>
 public sealed record ItemTradeProfile(string Name, Poe2Live.Rarity Rarity, bool Identified,
-    IReadOnlyList<ItemTradeMod> Mods, bool Complete);
+    IReadOnlyList<ItemTradeMod> Mods, bool Complete, IReadOnlyList<ItemAffix>? Affixes = null);
 
 public sealed partial class Poe2Live
 {
@@ -10,6 +16,7 @@ public sealed partial class Poe2Live
     public ItemTradeProfile ReadItemTradeProfile(HoveredItem item)
     {
         var result = new List<ItemTradeMod>();
+        var affixes = new List<ItemAffix>();
         var component = ResolveComponent(item.Item, "Mods");
         var complete = component != 0 && item.Identified;
         if (complete)
@@ -36,10 +43,12 @@ public sealed partial class Poe2Live
                     else complete = false;
                 if (values.Count == 0 && _reader.TryReadStruct<int>(entry + 0x18, out var first)) values.Add(first);
                 if (values.Count == 0) { complete = false; continue; }
-                foreach (var line in ItemModTranslator.Shared.RenderMod(id, values)) result.Add(new(kind, line));
+                var lines = ItemModTranslator.Shared.RenderMod(id, values);
+                foreach (var line in lines) result.Add(new(kind, line));
+                affixes.Add(new ItemAffix(kind, id, values, lines));
             }
         }
-        return new(item.Name ?? "", item.Rarity, item.Identified, result, complete);
+        return new(item.Name ?? "", item.Rarity, item.Identified, result, complete, affixes);
     }
 
     /// <summary>Describe any item entity (rarity / art / identified / base name / stack) as a <see cref="HoveredItem"/>

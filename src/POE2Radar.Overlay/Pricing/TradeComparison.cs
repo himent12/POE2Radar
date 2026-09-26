@@ -11,16 +11,18 @@ public sealed record MarketListing(double Amount, string Currency, double? Exalt
 
 /// <summary>A trade query built once the stat catalogue is known: the JSON to POST (null = nothing searchable), a
 /// human note on what was matched, and an optional looser <see cref="Next"/> tried when this one finds nothing —
-/// so a rare with no exact twin on the market still gets priced against its closest matches.</summary>
-public sealed record QueryPlan(string? Query, string Note, QueryPlan? Next = null);
+/// so a rare with no exact twin on the market still gets priced against its closest matches. <see cref="Comparable"/>
+/// is false for the last-resort "every item of this base" step: its listings say nothing about this item's price.</summary>
+public sealed record QueryPlan(string? Query, string Note, QueryPlan? Next = null, bool Comparable = true);
 
 /// <summary>One of an item's mod lines matched to a trade-site stat id; <see cref="Value"/> is the roll (the average
 /// for "# to #" ranges), null for mods without a number.</summary>
 public sealed record MatchedStat(string Id, double? Value, string Text);
 
-/// <summary>Result of an explicit price-check search (cheapest listings first, one per seller).</summary>
+/// <summary>Result of an explicit price-check search (cheapest listings first, one per seller). <see cref="Comparable"/>:
+/// the listings came from a step that compared the item's stats (see <see cref="QueryPlan.Comparable"/>).</summary>
 public sealed record MarketSearch(string Status, IReadOnlyList<MarketListing> Listings, int Total, string? Url, string Note,
-    bool Pending = false, string? Error = null);
+    bool Pending = false, string? Error = null, bool Comparable = true);
 
 /// <summary>Online trade-site lookups for the price check: one request at a time, rate-limit headers honoured, results
 /// cached per item. Rares are matched on their actual modifiers, stepping down to the closest similar items.</summary>
@@ -120,7 +122,7 @@ public sealed class TradeComparison
         }
         if (best is not { } b) return new("Nothing to search for", [], 0, null, plan.Note);
         var note = b.Step == 1 ? b.Plan.Note : "Closest match — " + b.Plan.Note;
-        return await FetchListingsAsync(b.Id, b.Ids, b.Total, league, market, note);
+        return await FetchListingsAsync(b.Id, b.Ids, b.Total, league, market, note) with { Comparable = b.Plan.Comparable };
     }
 
     private async Task<(string Id, string[] Ids, int Total)> SearchIdsAsync(string query, string league)
@@ -187,25 +189,69 @@ public sealed class TradeComparison
     public sealed record TradeStat(string Id, string Text);
     private static readonly Regex Numbers = new(@"[+-]?\d+(?:\.\d+)?", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static string Normalize(string text) => Regex.Replace(Numbers.Replace(text, "#").Replace("+#", "#").Replace("-#", "#"), @"\s+", " ").Trim();
+    private const string LocalSuffix = " (Local)";
+
+    // Two trade stats with the same wording: the one ordinary item affixes are listed under (checked live 2026-09-26 by
+    // searching amulets, rings and sceptres with each id).
+    private static readonly Dictionary<string, string> Preferred = new(StringComparer.Ordinal)
+    {
+        ["explicit.# to Spirit"] = "explicit.stat_3981240776",
+        ["explicit.# to all Attributes"] = "explicit.stat_1379411836",
+        ["explicit.#% increased Spirit"] = "explicit.stat_3984865854",   // sceptres
+    };
+
+    // Lines the trade site words differently from the item: the crossbow bolt count is one stat whose value is the count.
+    private static readonly Dictionary<string, string> Aliases = new(StringComparer.Ordinal)
+    {
+        ["explicit.Loads # additional bolts"] = "explicit.stat_1967051901",
+    };
 
     /// <summary>
-    /// Match each mod line to exactly one trade stat by its text with numbers masked. Lines with no match, or with
-    /// several equally-worded stats, are counted in <paramref name="ignored"/>. Two-number lines ("Adds 5 to 12 …")
-    /// match with their average, the way the trade site filters them.
+    /// Match one mod line to its trade stat by the text with numbers masked. Weapon and armour mods that act on the item
+    /// itself (<paramref name="local"/>: attack speed, flat/% armour, evasion, ES, accuracy) are listed as "… (Local)"
+    /// stats — matching them to the global wording would search for a stat no weapon or armour piece has. Null when the
+    /// line has no stat, more than two numbers, or stays ambiguous. Two-number lines ("Adds 5 to 12 …") match with their
+    /// average, the way the trade site filters them.
+    /// </summary>
+    public static MatchedStat? MatchLine(string kind, string line, IReadOnlyList<TradeStat> stats, bool local = false)
+    {
+        var numbers = Numbers.Matches(line);
+        if (numbers.Count > 2) return null;
+        var text = Normalize(line);
+        double? value = numbers.Count == 0 ? null
+            : numbers.Select(n => Math.Abs(double.Parse(n.Value, CultureInfo.InvariantCulture))).Average();
+        if (Aliases.TryGetValue(kind + "." + text, out var alias))
+            return stats.Any(s => s.Id == alias) ? new MatchedStat(alias, value, line) : null;
+        var candidates = stats.Where(s => s.Id.StartsWith(kind + ".", StringComparison.Ordinal)
+            && Normalize(s.Text.EndsWith(LocalSuffix, StringComparison.Ordinal) ? s.Text[..^LocalSuffix.Length] : s.Text) == text).ToList();
+        if (candidates.Count > 1)
+        {
+            var sameScope = candidates.Where(s => s.Text.EndsWith(LocalSuffix, StringComparison.Ordinal) == local).ToList();
+            if (sameScope.Count > 0) candidates = sameScope;
+        }
+        if (candidates.Count > 1 && Preferred.TryGetValue(kind + "." + text, out var preferred))
+            candidates = candidates.Where(c => c.Id == preferred).ToList();
+        return candidates.Count == 1 ? new MatchedStat(candidates[0].Id, value, line) : null;
+    }
+
+    /// <summary>Whether a mod acts on the item itself (any of its stats is a "local_" stat).</summary>
+    public static bool IsLocal(string modId) => ItemModTranslator.Shared.StatIdsFor(modId)?.Any(s => s.StartsWith("local_", StringComparison.Ordinal)) == true;
+
+    /// <summary>
+    /// Match each mod line to exactly one trade stat (see <see cref="MatchLine"/>). Lines with no match, or with
+    /// several equally-worded stats, are counted in <paramref name="ignored"/>.
     /// </summary>
     public static List<MatchedStat> MatchStats(ItemTradeProfile item, IReadOnlyList<TradeStat> stats, out int ignored)
     {
+        var localLines = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var a in item.Affixes ?? [])
+            if (IsLocal(a.Id)) foreach (var line in a.Lines) localLines.Add(line);
         var result = new List<MatchedStat>(); var used = new HashSet<string>();
         ignored = 0;
         foreach (var mod in item.Mods)
         {
-            var numbers = Numbers.Matches(mod.Text);
-            var candidates = stats.Where(s => s.Id.StartsWith(mod.Kind + ".", StringComparison.Ordinal)
-                && Normalize(s.Text) == Normalize(mod.Text)).Take(2).ToArray();
-            if (candidates.Length != 1 || numbers.Count > 2 || !used.Add(candidates[0].Id)) { ignored++; continue; }
-            double? value = numbers.Count == 0 ? null
-                : numbers.Select(n => Math.Abs(double.Parse(n.Value, CultureInfo.InvariantCulture))).Average();
-            result.Add(new MatchedStat(candidates[0].Id, value, mod.Text));
+            if (MatchLine(mod.Kind, mod.Text, stats, localLines.Contains(mod.Text)) is not { } m || !used.Add(m.Id)) { ignored++; continue; }
+            result.Add(m);
         }
         return result;
     }

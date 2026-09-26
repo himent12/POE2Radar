@@ -48,7 +48,7 @@ public sealed partial class OverlayRenderer
 
         var openKey = $"{pc.Name}|{pc.AnchorX}|{pc.AnchorY}";
         if (openKey != _pcOpenKey) { _pcOpenKey = openKey; _pcOpenedAt = Now; _pcValueKey = null; }
-        var worth = pc.Estimate ?? pc.MedianText;
+        var worth = pc.Worth ?? pc.Estimate ?? pc.MedianText;
         var valueKey = openKey + "|" + worth;
         if (valueKey != _pcValueKey) { _pcValueKey = valueKey; _pcValueAt = Now; }
         var tOpen = Since(_pcOpenedAt);
@@ -56,7 +56,8 @@ public sealed partial class OverlayRenderer
 
         var rows = Math.Min(pc.Rows.Count, PcRows);
         var modsH = pc.Mods.Count > 0 ? 8f + pc.Mods.Count * 17f : 0f;
-        var headH = 108f + modsH;
+        var appraisalH = pc.Appraisal is null ? 0f : 24f;
+        var headH = 108f + appraisalH + modsH;
         var listH = rows > 0 ? 18f + rows * 40f : pc.Loading ? 0f : 44f;
         var noteH = pc.Note.Length > 0 ? 26f : 0f;
         var h = PcPad + headH + 18f + PcRing + 18f + listH + noteH + 22f + 34f + PcPad * 0.5f;
@@ -94,9 +95,15 @@ public sealed partial class OverlayRenderer
         T(rt, name, _tfPcName!, x1, PcPad + 46f, rarity);
         T(rt, Fit(rt, pc.BaseLine, _tfBody!, nameMax), _tfBody!, x1, PcPad + 82f, UMuted);
         var my = PcPad + 108f;
-        foreach (var mod in pc.Mods)
+        if (pc.Appraisal is { } appraisal)
         {
-            T(rt, Fit(rt, mod, _tfSmall!, x2 - x1), _tfSmall!, x1, my + 8f, UMagic);
+            T(rt, Fit(rt, appraisal, _tfBody!, x2 - x1), _tfBody!, x1, my + 4f, UText);
+            my += appraisalH;
+        }
+        for (var i = 0; i < pc.Mods.Count; i++)
+        {
+            var weight = pc.ModWeights is { } w && i < w.Count ? w[i] : 1;
+            T(rt, Fit(rt, pc.Mods[i], _tfSmall!, x2 - x1), _tfSmall!, x1, my + 8f, weight >= 2 ? UWhite : weight == 1 ? UMagic : UGrey);
             my += 17f;
         }
         Stamp(rt, pc.Tier, stampRight, PcPad + 46f, tVal);
@@ -264,7 +271,7 @@ public sealed partial class OverlayRenderer
             "" => (pc.Loading ? "READING" : "UNREAD", UGrey), _ => (unit.ToUpperInvariant(), ULabel),
         };
         TTC(rt, unitWord, _tfPcUnit!, c.X, c.Y + 46f * sk, unitCol, 0.3f);
-        var sub = pc.Estimate is not null ? "poe.ninja reference" : pc.MedianText is not null ? "median live ask" : pc.Loading ? "searching…" : "too few listings";
+        var sub = pc.WorthSource ?? (pc.Estimate is not null ? "poe.ninja reference" : pc.MedianText is not null ? "median live ask" : pc.Loading ? "searching…" : "too few listings");
         TC(rt, sub, _tfSmall!, c.X, c.Y + 68f * sk, UMuted);
     }
 

@@ -81,7 +81,7 @@ public sealed class BookmarkAndItemLinkTests
         var unique = ItemLinks.TradeSearch("HC Runes of Aldur", "Leather Belt", "Headhunter", Poe2Live.Rarity.Unique)!;
         Assert.StartsWith("https://www.pathofexile.com/trade2/search/poe2/HC%20Runes%20of%20Aldur?q=", unique);
         var q = Query(unique);
-        Assert.Equal("online", q.GetProperty("status").GetProperty("option").GetString());
+        Assert.Equal("securable", q.GetProperty("status").GetProperty("option").GetString());   // instant buyout: real asks
         Assert.Equal("Leather Belt", q.GetProperty("type").GetString());
         Assert.Equal("Headhunter", q.GetProperty("name").GetString());
 

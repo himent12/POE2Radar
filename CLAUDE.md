@@ -55,6 +55,10 @@ the bot was removed on purpose. Keep automation minimal and clearly gated.
   the game's English stat lines (e.g. `IncreasedLife5 [67]` → "+67 to maximum Life"). Two embedded RePoE
   PoE2 tables (`poe2_mod_stats.json` mod→stat-ids, `poe2_stat_descriptions.json` GGG stat descriptions),
   regenerated per patch via `resources/poe2-data/regenerate.py`. Validate with `--inventory --itemmods`.
+- `Game/ItemAffixData.cs` — affix tiers + equipment base stats (embedded `poe2_item_data.json`, from the RePoE PoE2
+  `mods.json`/`base_items.json`; regenerate per patch with `resources/poe2-data/generate_item_data.py`). Places a
+  read mod in its family on the item's base (tier = rank among the mods that base can roll; ordered spawn tags,
+  "!tag" = excluded), best roll per stat per base, base damage/attack time/crit/armour/evasion/ES by metadata path.
 - `Pathfinding/MapProjection.cs` + `GridConstants.cs` — isometric grid→screen projection and the
   grid↔world scale (250/23 ≈ 10.87).
 
@@ -105,6 +109,17 @@ the bot was removed on purpose. Keep automation minimal and clearly gated.
   `PriceCheckView`), `Pricing/PriceCheck.cs` (pure: query per item kind, poe.ninja reference, verdict, tier),
   `OverlayRenderer.PriceCheck.cs` ("the appraisal" panel: rune circle, stamp, spread histogram). One trade request
   at a time, rate-limit headers honoured.
+- Rare/magic appraisal: `Pricing/ItemAppraisal.cs` (pure) judges an item on what its slot is bought for — a
+  per-slot stat role table (Premium: boots' movement speed, spirit, +skill levels, % life, max res; Key: life, all
+  res, the slot's damage/defence scalers; Useful: resistances…; Filler: thorns, stun threshold, light radius…),
+  each stat's roll against the best that stat reaches on the base, weapon DPS vs a top-tier roll of the same base,
+  local defences, must-have caps (boots < 30% MS, weak weapon DPS) → grade (Vendor/Low/Decent/Good/Top) and ordered
+  price drivers. `PriceCheck.DriverLadder` searches those drivers as "at least about this good" (min = 90% of the
+  item's value, no max; pseudo totals for life incl. 2×Str, resistances, MS; `equipment_filters` pdps/edps/dps at
+  the site's Q20 figure and es/ar/ev; valuable affixes matched to their trade stat, "(Local)" variants for local
+  mods) by category, `status: securable`, collapsed by account; loosening to the top ~60%, then the top two at 80%;
+  the last "every item of this base" step is marked not comparable. The rare's worth is the cheapest genuine
+  comparable (`PriceCheck.RobustLow`). Hover: rares graded Low/Vendor are called out without a trade request.
 - UI kit: `OverlayRenderer.Ui.cs` — the black-and-white "grimoire" look (palette, frame with corner brackets, cards,
   diamond switches, keycaps, chips, sigils, backdrop motes) shared by the Insert menu, trade panel and price check.
   Big panels are authored at a fixed design size and scaled to the window (`BeginScaled`/`EndScaled` map their

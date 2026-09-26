@@ -22,6 +22,7 @@
     <EmbeddedResource Include="Game\zone_notes.json" />
     <EmbeddedResource Include="Game\poe2_mod_stats.json" />
     <EmbeddedResource Include="Game\poe2_stat_descriptions.json" />
+    <EmbeddedResource Include="Game\poe2_item_data.json" />
     <EmbeddedResource Include="Game\expedition2_recipes.json" />
     <EmbeddedResource Include="Game\atlas_maps.json" />
     <EmbeddedResource Include="Game\atlas_content.json" />

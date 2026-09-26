@@ -34,12 +34,16 @@ It does **not** bot. Nothing moves your character, targets monsters or runs skil
 - **Price check (Ctrl+D)**: hover any item (inventory, stash, vendor, ground) and press **Ctrl+D**. A panel
   opens with the poe.ninja estimate next to the cheapest live trade listings (price, seller, how long ago),
   where the prices spread, and a suggested list price to sell fast.
-  - Rares and magics are compared on their actual affixes; uniques by name; currency and other items by base
-    type.
+  - Rares and magics are appraised first: every affix gets its tier on that base and a grade from Vendor to
+    Top tier, based on what the slot is bought for (movement speed on boots, DPS on weapons, +levels and spirit,
+    life and resistance totals). Filler like thorns or stun threshold is dimmed. The trade search then looks
+    for items at least about as good on those stats and prices yours at the cheapest genuine match.
+  - Uniques are searched by name; currency and other items by base type. Only instant-buyout listings count.
   - **Open on trade site** opens the exact search; **Refresh** re-checks. Esc or the × closes it.
   - The hotkey is configurable (dashboard → Item Value).
-- **Price on hover**: a quick poe.ninja estimate under the item tooltip. Rare/magic gear is compared
-  automatically after a short hover.
+- **Price on hover**: a quick poe.ninja estimate under the item tooltip. Rare/magic gear shows its grade
+  and selling points after a short hover. Gear worth something is then compared with live listings; vendor
+  trash is flagged without a trade lookup.
 - **Loot values**: prices drops on the ground and on their loot tags, and reveals which unique an
   unidentified unique is.
 - **Trade panel**: reads the game's `Client.txt`, so incoming buy whispers and your own purchase whispers
