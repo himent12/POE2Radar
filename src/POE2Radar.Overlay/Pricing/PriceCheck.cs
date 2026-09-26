@@ -230,8 +230,8 @@ public static class PriceCheck
         (string Folder, string Class)[] folders =
         [
             ("/Rings/", "Ring"), ("/Amulets/", "Amulet"), ("/Belts/", "Belt"), ("/Helmets/", "Helmet"), ("/BodyArmours/", "Body Armour"),
-            ("/Gloves/", "Gloves"), ("/Boots/", "Boots"), ("/Quivers/", "Quiver"), ("/Bucklers/", "Buckler"), ("/Shields/", "Shield"),
-            ("/Focii/", "Focus"), ("/Jewels/", "Jewel"), ("/Crossbows/", "Crossbow"), ("/Bows/", "Bow"), ("/Wands/", "Wand"),
+            ("/Gloves/", "Gloves"), ("/Boots/", "Boots"), ("/Quivers/", "Quiver"), ("/Bucklers/", "Buckler"), ("/FourShieldDex", "Buckler"),
+            ("/Shields/", "Shield"), ("/Focii/", "Focus"), ("/Focus", "Focus"), ("/Jewels/", "Jewel"), ("/Crossbows/", "Crossbow"), ("/Bows/", "Bow"), ("/Wands/", "Wand"),
             ("/Sceptres/", "Sceptre"), ("Quarterstaff", "Warstaff"), ("/Staves/", "Staff"), ("Spears/", "Spear"), ("/Flails/", "Flail"),
             ("/Claws/", "Claw"), ("/Daggers/", "Dagger"), ("/Talismans/", "Talisman"), ("/TwoHandSwords/", "Two Hand Sword"),
             ("/OneHandSwords/", "One Hand Sword"), ("/TwoHandAxes/", "Two Hand Axe"), ("/OneHandAxes/", "One Hand Axe"),

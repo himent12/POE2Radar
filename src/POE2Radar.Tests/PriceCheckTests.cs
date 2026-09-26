@@ -78,6 +78,8 @@ public sealed class PriceCheckTests
     [InlineData("Metadata/Items/Weapons/TwoHandWeapons/Staves/FourStaff9", "weapon.staff")]
     [InlineData("Metadata/Items/Armours/Shields/FourShieldDex10", "armour.buckler")]                     // not a shield
     [InlineData("Metadata/Items/Armours/Shields/FourShieldStr10", "armour.shield")]
+    [InlineData("Metadata/Items/Armours/Shields/FourShieldDex99NewPatch", "armour.buckler")]   // not in the table: path fallback
+    [InlineData("Metadata/Items/Armours/Focus/FourFocus99NewPatch", "armour.focus")]
     [InlineData("Metadata/Items/Something/New", null)]
     public void Maps_item_metadata_to_the_trade_category(string metadata, string? expected)
         => Assert.Equal(expected, PriceCheck.Category(metadata)?.Id);
