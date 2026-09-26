@@ -77,7 +77,7 @@ public sealed class ComparableSearchTests
         Assert.True(needsStats);
         var steps = Steps(plan(Stats));
         Assert.Equal(4, steps.Count);   // all criteria → top 60% → top two at 80% → every item of the base
-        Assert.Contains("any boots with at least your 35% move speed, 125% res, +142 life", steps[0].Note);
+        Assert.Contains("any boots with at least your 125% res, 35% move speed, +142 life", steps[0].Note);
         Assert.True(steps[0].Comparable);
         Assert.False(steps[^1].Comparable);
 
@@ -99,7 +99,7 @@ public sealed class ComparableSearchTests
         // The looser rung keeps only the two most important stats, at 80%.
         var core = Query(steps[2]).GetProperty("stats")[0].GetProperty("filters");
         Assert.Equal(2, core.GetArrayLength());
-        Assert.Equal(28, core[0].GetProperty("value").GetProperty("min").GetDouble());
+        Assert.Equal(100, core[0].GetProperty("value").GetProperty("min").GetDouble());   // 125% res × 0.8
     }
 
     [Fact]

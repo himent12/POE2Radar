@@ -11,6 +11,7 @@ public sealed class ItemAppraisalTests
     internal const string Amulet = "Metadata/Items/Amulets/FourAmulet9";
     internal const string ColdWand = "Metadata/Items/Weapons/OneHandWeapons/Wands/FourWand9";       // Frigid Wand: no fire/lightning spell mods
     internal const string EsBody = "Metadata/Items/Armours/BodyArmours/FourBodyInt10Endgame";      // Feathered Raiment: 153 ES
+    internal const string EsBoots = "Metadata/Items/Armours/Boots/FourBootsInt6Endgame";           // Sekhema Sandals: 83 ES
 
     internal static ItemAffix A(string id, params int[] values) => A("explicit", id, values);
 
@@ -59,12 +60,12 @@ public sealed class ItemAppraisalTests
     }
 
     [Fact]
-    public void Great_boots_are_top_tier_and_driven_by_movement_speed_resistance_and_life()
+    public void Great_boots_are_top_tier_and_driven_by_resistance_movement_speed_and_life()
     {
         var a = Appraise(EsEvBoots, TopBoots);
         Assert.Equal(AppraisalGrade.Top, a.Grade);
-        Assert.Equal(["ms", "ele_res", "life"], a.Drivers.Take(3).Select(d => d.Key));
-        Assert.Equal(["35% move speed", "125% res", "+142 life"], a.Highlights);
+        Assert.Equal(["ele_res", "ms", "life"], a.Drivers.Take(3).Select(d => d.Key));
+        Assert.Equal(["125% res", "35% move speed", "+142 life"], a.Highlights);
         Assert.Equal(125, a.TotalElementalResistance);
         Assert.Equal(0, a.OpenPrefixes + a.OpenSuffixes);
         var hybrid = a.Affixes.Single(x => x.ModId == "LocalIncreasedEvasionAndEnergyShield7");
@@ -79,21 +80,24 @@ public sealed class ItemAppraisalTests
     public void Boots_without_real_movement_speed_are_held_back_however_good_the_rest()
     {
         var noSpeed = Appraise(EsEvBoots, Rare(A("IncreasedLife9", 145), A("FireResist8", 44), A("ColdResist8", 43), A("LightningResist8", 45)));
-        Assert.True(noSpeed.Score >= 4.5);   // would be Good on stats alone
+        Assert.True(noSpeed.Score >= 2.6);   // would be Decent on stats alone
         Assert.Equal(AppraisalGrade.Low, noSpeed.Grade);
         Assert.Equal("no movement speed", noSpeed.Cap);
 
-        var slow = Appraise(EsEvBoots, Rare(A("MovementVelocity4", 25), A("IncreasedLife9", 145), A("LocalIncreasedEvasionAndEnergyShield7", 100),
+        // What sells in 0.5.5: a pure-ES boot with top % and flat ES and three resistances — held to Good at 25% speed.
+        var slow = Appraise(EsBoots, Rare(A("MovementVelocity4", 25), A("LocalIncreasedEnergyShieldPercent7_", 98), A("LocalIncreasedEnergyShield7", 58),
             A("FireResist8", 44), A("ColdResist8", 43), A("LightningResist8", 45)));
         Assert.True(slow.Score >= 6.5);   // Top on stats alone
         Assert.Equal(AppraisalGrade.Good, slow.Grade);
         Assert.Equal("only 25% movement speed", slow.Cap);
+        Assert.Equal(AppraisalGrade.Top, Appraise(EsBoots, Rare(A("MovementVelocity6", 35), A("LocalIncreasedEnergyShieldPercent7_", 98),
+            A("LocalIncreasedEnergyShield7", 58), A("FireResist8", 44), A("ColdResist8", 43), A("LightningResist8", 45))).Grade);
     }
 
     [Theory]
-    [InlineData(30, 110, 37, 33, AppraisalGrade.Good)]
-    [InlineData(30, 65, 22, 0, AppraisalGrade.Decent)]
-    [InlineData(20, 35, 0, 0, AppraisalGrade.Low)]
+    [InlineData(30, 110, 37, 33, AppraisalGrade.Decent)]   // life + resistance boots list cheap in 0.5.5
+    [InlineData(30, 65, 22, 0, AppraisalGrade.Low)]
+    [InlineData(20, 35, 0, 0, AppraisalGrade.Vendor)]
     public void Boots_grade_with_their_rolls(int speed, int life, int fire, int cold, AppraisalGrade expected)
     {
         var affixes = new List<ItemAffix>
@@ -113,9 +117,10 @@ public sealed class ItemAppraisalTests
         var body = Appraise(EsBody, Rare(A("IncreasedLife7", 90), A("LocalIncreasedEnergyShield8", 60), A("StunThreshold8", 180),
             A("AttackerTakesDamage5", 60, 90), A("ReducedBleedDuration3", -48)));
         Assert.Equal(AppraisalGrade.Vendor, body.Grade);
-        Assert.All(body.Affixes.Where(x => x.Text.Contains("Stun") || x.Text.Contains("Thorns") || x.Text.Contains("Bleeding")),
-            x => Assert.Equal(AffixRole.Filler, x.Role));
-        Assert.Empty(body.Highlights);
+        var filler = body.Affixes.Where(x => x.Text.Contains("Stun") || x.Text.Contains("Thorns") || x.Text.Contains("Bleeding")).ToList();
+        Assert.Equal(3, filler.Count);
+        Assert.All(filler, x => { Assert.Equal(AffixRole.Filler, x.Role); Assert.Equal(0, x.Score); });
+        Assert.DoesNotContain(body.Drivers, d => d.Affix is { } a && filler.Contains(a));
     }
 
     [Fact]
@@ -139,10 +144,12 @@ public sealed class ItemAppraisalTests
         Assert.Equal(AppraisalGrade.Low, weak.Grade);
         Assert.Equal("low damage for its base", weak.Cap);
 
-        // +4 projectile levels sells a bow on its own, whatever the damage.
+        // Plain +4 projectile levels don't sell a bow without damage in 0.5.5 (24 listed at 1–30 ex)...
         var levels = Appraise(Bow, Rare(A("GlobalProjectileSkillGemLevelWeapon5", 4), A("LocalIncreasedAccuracy8", 400)));
-        Assert.Equal(AppraisalGrade.Decent, levels.Grade);
-        Assert.Null(levels.Cap);
+        Assert.Equal(AppraisalGrade.Low, levels.Grade);
+        // ...an essence +attack skill levels mod does (spears with +2 asked 4–45 div).
+        var essence = Appraise(Bow, Rare(A("EssenceAttackSkillLevel1H1", 2), A("LocalIncreasedAccuracy8", 400)));
+        Assert.Null(essence.Cap);
     }
 
     [Fact]
@@ -194,7 +201,7 @@ public sealed class ItemAppraisalTests
             A("IncreasedLife9", 140)));
         Assert.Equal(35, runeforged.MovementSpeed);
         Assert.Equal("35% move speed", runeforged.Drivers[0].Label);
-        Assert.True(runeforged.Score > plain.Score + 1);
+        Assert.True(runeforged.Score > plain.Score + 0.5);
         Assert.Null(runeforged.Cap);
     }
 

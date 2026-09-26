@@ -110,8 +110,9 @@ the bot was removed on purpose. Keep automation minimal and clearly gated.
   `OverlayRenderer.PriceCheck.cs` ("the appraisal" panel: rune circle, stamp, spread histogram). One trade request
   at a time, rate-limit headers honoured.
 - Rare/magic appraisal: `Pricing/ItemAppraisal.cs` (pure) judges an item on what its slot is bought for — a
-  per-slot stat role table (Premium: boots' movement speed, spirit, +skill levels, % life, max res; Key: life, all
-  res, the slot's damage/defence scalers; Useful: resistances…; Filler: thorns, stun threshold, light radius…),
+  per-slot stat role table tuned to the 0.5.5 market (Premium: scarce mods — +all skills, essence +attack levels,
+  % life, max res, pure-ES bases' defences; Key: life, all res, spirit, plain +levels on weapons, movement speed on
+  boots, the slot's damage scalers; Useful: resistances…; Filler: thorns, stun threshold, light radius…),
   each stat's roll against the best that stat reaches on the base, weapon DPS vs a top-tier roll of the same base,
   local defences, must-have caps (boots < 30% MS, weak weapon DPS) → grade (Vendor/Low/Decent/Good/Top) and ordered
   price drivers. `PriceCheck.DriverLadder` searches those drivers as "at least about this good" (min = 90% of the

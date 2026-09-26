@@ -397,12 +397,14 @@ public static class ItemAppraiser
         return new Defences((int)Math.Round(ar), (int)Math.Round(ev), (int)Math.Round(es), Math.Round(Math.Min(parts.Average(), 1.2), 3));
     }
 
-    /// <summary>Body armours, shields and foci are bought for their defences, and ES builds stack local ES on every
-    /// piece; elsewhere defences are a bonus.</summary>
+    /// <summary>Energy shield is the meta's defence (0.5.5: a quarter of characters run Chaos Inoculation, median ES
+    /// ~4k), and the pieces that sell are pure ES bases with high % and flat ES; hybrid ES pieces, body armours, shields
+    /// and foci are still bought for defences; elsewhere they're a bonus.</summary>
     private static AffixRole DefenceRole(ItemSlot slot, ItemAffixData.ItemBase b) => slot switch
     {
-        ItemSlot.BodyArmour or ItemSlot.Shield or ItemSlot.Focus => AffixRole.Key,
+        _ when b.EnergyShield > 0 && b.Armour == 0 && b.Evasion == 0 => AffixRole.Premium,
         _ when b.EnergyShield > 0 => AffixRole.Key,
+        ItemSlot.BodyArmour or ItemSlot.Shield or ItemSlot.Focus => AffixRole.Key,
         _ => AffixRole.Useful,
     };
 
@@ -422,9 +424,12 @@ public static class ItemAppraiser
     private static string SlotName(string itemClass) => itemClass == "Warstaff" ? "quarterstaff" : itemClass.ToLowerInvariant();
 
     /// <summary>
-    /// What a stat is worth on a slot. Premium: the stat the slot is bought for (boots' movement speed, spirit,
-    /// +levels to skills, % life, maximum resistances). Key: the main damage/defence scalers of the slot. Useful:
-    /// resistances and secondary stats most builds want. Minor: nice-to-haves. Filler: stats no buyer filters on.
+    /// What a stat is worth on a slot, tuned to the 0.5.5 market (Forbidden Rites, sampled 2026-09-26): a single strong
+    /// affix sells at the floor — 35% movement speed boots, +4 wands, +5 staves, T1 spirit amulets all list at ~1 ex —
+    /// so only scarce mods are Premium: +levels to all skills (desecrated), essence +attack skill levels, % life, maximum
+    /// resistances. Key: the stats a slot is priced on together (life, all-res, plain +levels on weapons, spirit, the
+    /// slot's damage scalers; movement speed, which boots can't sell without — see the cap). Useful: resistances and
+    /// secondary stats. Minor: nice-to-haves (rarity showed no premium). Filler: stats no buyer filters on.
     /// </summary>
     public static AffixRole RoleOf(string stat, ItemSlot slot)
     {
@@ -432,17 +437,19 @@ public static class ItemAppraiser
         var caster = slot is ItemSlot.CasterWeapon or ItemSlot.Focus;
         switch (stat)
         {
-            case "base_movement_velocity_+%": return slot == ItemSlot.Boots ? AffixRole.Premium : AffixRole.Useful;
-            case "base_spirit_from_equipment" or "maximum_life_+%" or "all_skill_gem_level_+"
+            case "base_movement_velocity_+%": return slot == ItemSlot.Boots ? AffixRole.Key : AffixRole.Useful;
+            case "maximum_life_+%" or "all_skill_gem_level_+" or "attack_skill_gem_level_+"
                 or "additional_maximum_all_elemental_resistances_%" or "additional_maximum_all_resistances_%":
                 return AffixRole.Premium;
-            case "base_maximum_life" or "base_resist_all_elements_%": return AffixRole.Key;
+            case "base_maximum_life" or "base_resist_all_elements_%" or "base_spirit_from_equipment": return AffixRole.Key;
             case "base_fire_damage_resistance_%" or "base_cold_damage_resistance_%" or "base_lightning_damage_resistance_%"
                 or "base_chaos_damage_resistance_%" or "fire_and_chaos_damage_resistance_%" or "cold_and_chaos_damage_resistance_%"
                 or "lightning_and_chaos_damage_resistance_%":
                 return AffixRole.Useful;
-            case "local_spirit_+%" or "skill_speed_+%" or "base_spirit_reservation_efficiency_+%" or "aura_effect_+%":
+            case "skill_speed_+%" or "base_spirit_reservation_efficiency_+%" or "aura_effect_+%" or "local_critical_strike_chance":
                 return AffixRole.Key;
+            case "local_spirit_+%" or "maximum_mana_+%": return AffixRole.Useful;   // sceptre spirit isn't scarce; % mana for MoM/EB builds
+            case "base_item_found_rarity_+%": return AffixRole.Minor;
             case "spell_damage_+%": return caster || slot is ItemSlot.Amulet ? AffixRole.Key : AffixRole.Useful;
             case "fire_damage_+%" or "cold_damage_+%" or "lightning_damage_+%" or "chaos_damage_+%" or "spell_physical_damage_+%"
                 or "elemental_damage_+%":
@@ -459,8 +466,7 @@ public static class ItemAppraiser
             case "base_maximum_fire_damage_resistance_%" or "base_maximum_cold_damage_resistance_%"
                 or "base_maximum_lightning_damage_resistance_%" or "base_maximum_chaos_damage_resistance_%":
                 return AffixRole.Key;
-            case "base_item_found_rarity_+%" or "additional_all_attributes" or "local_critical_strike_chance"
-                or "local_critical_strike_multiplier_+" or "damage_+%_with_bow_skills" or "elemental_damage_with_attack_skills_+%"
+            case "additional_all_attributes" or "local_critical_strike_multiplier_+" or "damage_+%_with_bow_skills" or "elemental_damage_with_attack_skills_+%"
                 or "evasion_rating_+%" or "physical_damage_reduction_rating_+%" or "global_armour_evasion_energy_shield_+%"
                 or "base_maximum_energy_shield" or "local_block_chance_+%" or "base_cooldown_speed_+%"
                 or "armour_%_applies_to_fire_cold_lightning_damage" or "base_deflection_rating_%_of_evasion_rating"
@@ -468,8 +474,11 @@ public static class ItemAppraiser
                 or "minion_damage_+%" or "minion_maximum_life_+%" or "minion_attack_and_cast_speed_+%":
                 return AffixRole.Useful;
         }
+        // Plain +levels are common now (T1 on the weapon, quiver +1 and gloves +2 all list at the floor): they sell with
+        // the rest of a caster weapon's stats, not on their own.
         if (stat.EndsWith("_skill_gem_level_+", StringComparison.Ordinal))
-            return stat is "trap_skill_gem_level_+" or "mark_skill_gem_level_+" ? AffixRole.Useful : AffixRole.Premium;
+            return stat is "trap_skill_gem_level_+" or "mark_skill_gem_level_+" || slot is ItemSlot.Gloves or ItemSlot.Quiver
+                ? AffixRole.Useful : AffixRole.Key;
         if (stat.StartsWith("non_skill_base_all_damage_%_to_gain_as_", StringComparison.Ordinal)) return AffixRole.Key;
         if (stat.StartsWith("attack_minimum_added_", StringComparison.Ordinal) || stat.StartsWith("attack_maximum_added_", StringComparison.Ordinal))
             return AffixRole.Useful;
